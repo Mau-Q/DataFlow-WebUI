@@ -171,7 +171,6 @@
 import { mapState } from 'pinia'
 import { useAppConfig } from '@/stores/appConfig'
 import { useTheme } from '@/stores/theme'
-import axios from 'axios'
 import {
     Chart,
     BarController,
@@ -471,7 +470,6 @@ export default {
         },
         getColumnStats(col) {
             const type = this.getColumnType(col)
-            const missing = this.countMissingValues(col)
             
             if (type === 'number') {
                 const values = this.previewData
@@ -552,10 +550,17 @@ export default {
 
 <style lang="scss" scoped>
 .df-dataviz-container {
-    @include app;
+    position: relative;
+    width: auto;
+    height: 100%;
+    min-width: 0;
+    min-height: 0;
+    flex: 1 1 0;
+    box-sizing: border-box;
     background: rgba(250, 250, 250, 1);
     display: flex;
     flex-direction: column;
+    overflow: hidden;
 
     &.dark {
         background: rgba(36, 36, 36, 1);

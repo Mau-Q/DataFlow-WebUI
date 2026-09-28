@@ -321,8 +321,6 @@ export default {
             return Math.round((nonFailed / this.stats.total) * 100)
         },
         avgPipelineDuration() {
-            const avg = parseInt(this.avgExecutionTime)
-            if (this.avgExecutionTime.includes('ms')) return this.avgExecutionTime
             return this.avgExecutionTime
         }
     },
@@ -608,9 +606,16 @@ export default {
 
 <style lang="scss" scoped>
 .df-analysis-container {
-    @include app;
+    position: relative;
+    width: auto;
+    height: 100%;
+    min-width: 0;
+    min-height: 0;
+    flex: 1 1 0;
+    box-sizing: border-box;
     background: rgba(250, 250, 250, 1);
-    overflow: overlay;
+    overflow-x: hidden;
+    overflow-y: auto;
 
     &.dark {
         background: rgba(36, 36, 36, 1);
