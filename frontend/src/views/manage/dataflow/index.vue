@@ -30,6 +30,11 @@
                                 borderColor="rgba(235, 235, 235, 1)" ring-background="rgba(180, 180, 180, 1)"
                                 :switch-on-background="gradient" :title="local('Whether Auto Connect Run Edges')">
                             </fv-toggle-switch>
+                            <fv-button :theme="theme" border-radius="30" :title="local('Auto Layout')"
+                                style="width: 96px; height: 30px" @click="autoLayoutPipeline">
+                                <i class="ms-Icon ms-Icon--GridViewMedium" style="margin-right: 5px"></i>
+                                <p>{{ local('Auto Layout') }}</p>
+                            </fv-button>
                             <fv-button :theme="currentServing ? 'dark' : theme" :background="currentServing
                                 ? 'linear-gradient(135deg, rgba(69, 98, 213, 1), #ff0080, #ff8c00)'
                                 : ''
@@ -140,6 +145,7 @@ import { useDataflow } from '@/stores/dataflow'
 import { useVueFlow } from '@vue-flow/core'
 import { useEdgeSync } from '@/hooks/dataflow/useEdgeSync'
 import { usePipelineOperation } from '@/hooks/dataflow/usePipelineOperation'
+import { buildSnakeLayout } from '@/hooks/dataflow/useAutoLayout'
 
 import mainFlow from '@/components/manage/mainFlow/index.vue'
 import pipeline from '@/components/manage/mainFlow/pipeline/index.vue'
@@ -426,6 +432,23 @@ export default {
                 y: 0,
                 zoom: 1
             })
+        },
+        async autoLayoutPipeline() {
+            const flow = useVueFlow(this.flowId)
+            const { positions, hasCycle } = buildSnakeLayout(flow.nodes.value, flow.edges.value)
+            if (hasCycle) {
+                this.$barWarning(this.local('Pipeline is not a legal DAG'), {
+                    status: 'warning'
+                })
+                return
+            }
+            if (!positions.size) return
+
+            positions.forEach((position, nodeId) => {
+                flow.updateNode(nodeId, { position })
+            })
+            await this.$nextTick()
+            flow.fitView({ padding: 0.15, duration: 300 })
         },
         updateDatabaseNode() {
             if (!this.sourceDatabase) return

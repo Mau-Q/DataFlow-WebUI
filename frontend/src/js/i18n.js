@@ -1147,6 +1147,10 @@ export default {
         "en": "Whether Auto Connect Run Edges",
         "cn": "是否自动连接运行边"
     },
+    "Auto Layout": {
+        "en": "Auto Layout",
+        "cn": "自动排版"
+    },
     "Run": {
         "en": "Run",
         "cn": "运行"
