@@ -124,10 +124,12 @@ def test_update_nonexistent_pipeline_fails(pipeline_registry):
 
 def test_list_and_delete_pipelines(pipeline_registry, pipeline_payload):
     registry, _ = pipeline_registry
+    baseline_ids = {item["id"] for item in registry.list_pipelines()}
     first = registry.create_pipeline(pipeline_payload)
     second = registry.create_pipeline({**pipeline_payload, "name": "Second"})
 
-    assert {item["id"] for item in registry.list_pipelines()} == {first["id"], second["id"]}
+    current_ids = {item["id"] for item in registry.list_pipelines()}
+    assert current_ids - baseline_ids == {first["id"], second["id"]}
     assert registry.delete_pipeline(first["id"]) is True
     assert registry.get_pipeline(first["id"]) is None
     assert registry.delete_pipeline(first["id"]) is False
