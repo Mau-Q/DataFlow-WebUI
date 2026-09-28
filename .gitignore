@@ -29,6 +29,8 @@ backend/data/dataflow_core/
 .claude/skills/
 .cursor/skills/
 .codex/skills/
+.codex/config.toml
+.agents/skills
 AGENTS.md
 .cursor/rules/generating-dataflow-pipeline.mdc
 .cursor/rules/dataflow-dev.mdc

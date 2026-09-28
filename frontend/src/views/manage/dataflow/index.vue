@@ -327,6 +327,11 @@ export default {
                     confirmDatasetCall,
                     this.$Guid
                 )
+                // Backend-created pipelines are saved records, just like a
+                // sidebar selection. Keep Save/Run and history bound to its ID.
+                this.currentPipeline = pipeline
+                await this.$nextTick()
+                useVueFlow(this.flowId).fitView({ padding: 0.12 })
             }
 
             // 依赖项可能还没加载（尤其是首次打开 + Agent 立刻创建）。

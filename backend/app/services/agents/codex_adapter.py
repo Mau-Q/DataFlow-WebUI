@@ -77,7 +77,10 @@ class CodexAdapter(AgentAdapter):
             self.cli_path, "exec",
             "--json",
             "--sandbox", "workspace-write",
-            "--cwd", str(self.webui_root),
+            "--cd", str(self.webui_root),
+            "-c", "mcp_servers.dataflow.url=" + json.dumps(
+                os.environ.get("DATAFLOW_MCP_URL", "http://127.0.0.1:8000/mcp")
+            ),
             _format_user_message(self.system_prompt, message),
         ]
 
@@ -113,7 +116,8 @@ class CodexAdapter(AgentAdapter):
                 # `session_started` event.
                 if not emitted_session:
                     sid = (
-                        chunk.get("session_id")
+                        chunk.get("thread_id")
+                        or chunk.get("session_id")
                         or (chunk.get("msg") or {}).get("session_id")
                     )
                     if sid:
@@ -143,6 +147,34 @@ class CodexAdapter(AgentAdapter):
         # Codex events are typed via msg.type per the docs.
         msg = chunk.get("msg") if isinstance(chunk.get("msg"), dict) else chunk
         mtype = msg.get("type", "")
+
+        # Current `codex exec --json` uses thread/turn/item events.
+        if mtype in ("item.started", "item.completed"):
+            item = msg.get("item") or {}
+            kind = item.get("type", "")
+            if kind == "agent_message" and mtype == "item.completed":
+                if item.get("text"):
+                    yield {"type": "text_chunk", "content": item["text"]}
+            elif kind in ("mcp_tool_call", "command_execution"):
+                if mtype == "item.started":
+                    yield {
+                        "type": "tool_call_start",
+                        "tool_use_id": item.get("id", ""),
+                        "name": item.get("tool") or kind,
+                        "input_preview": truncate_preview(item.get("arguments") or item.get("command") or {}),
+                    }
+                else:
+                    yield {
+                        "type": "tool_call_end",
+                        "tool_use_id": item.get("id", ""),
+                        "is_error": bool(item.get("error") or item.get("status") == "failed" or item.get("exit_code", 0)),
+                        "output_preview": truncate_preview(item.get("result") or item.get("aggregated_output") or item.get("error") or ""),
+                    }
+            return
+
+        if mtype == "turn.failed":
+            yield {"type": "error", "message": str(msg.get("error") or msg)}
+            return
 
         if mtype == "text":
             content = msg.get("content", "")
