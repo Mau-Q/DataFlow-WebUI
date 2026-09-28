@@ -1,68 +1,39 @@
 <template>
-    <base-node v-bind="props" :data="thisData" :theme="theme">
+    <base-node v-bind="props" :data="displayData" :theme="theme">
         <div class="fv-loading-block">
             <fv-progress-ring v-if="loading" :loading="true" :r="18" :border-width="3" background="white"
                 :color="thisData.borderColor"></fv-progress-ring>
         </div>
-        <div class="node-row-item">
-            <span class="info-title" style="font-size: 13px; color: rgba(52, 199, 89, 1)">{{
-                appConfig.local('Init. Parameters')
-                }}</span>
-        </div>
-        <hr />
-        <div v-if="allowedPrompts.length > 0 && isPromptTemplate" class="node-row-item col" @mousedown.stop @click.stop>
-            <span class="info-title">{{ appConfig.local('Prompt Template') }}</span>
-            <fv-combobox :theme="theme" v-model="promptTemplateModel" :placeholder="appConfig.local('Select Prompt')"
-                :options="allowedPrompts" :choosen-slider-background="thisData.borderColor"
-                :reveal-background-color="[thisData.shadowColor, 'rgba(255, 255, 255, 1)']"
-                :reveal-border-color="thisData.borderColor" border-radius="8" style="width: 100%"></fv-combobox>
-            <span v-if="promptParamModel.length > 0" class="info-title">{{ appConfig.local('Prompt Parameters')
-                }}</span>
-            <kv-input v-if="promptParamModel.length > 0" v-model="promptParamModel" :readonly="true"></kv-input>
-        </div>
-        <div v-if="thisData.operatorParams" v-show="item.show" v-for="(item, index) in thisData.operatorParams.init"
-            :key="`init_${index}`" class="node-row-item col">
-            <span class="info-title">{{ item.name }}</span>
-            <value-input :theme="theme" v-model="item.value" :item-obj="item" :this-data="thisData" @mousedown.stop
-                @click.stop></value-input>
-        </div>
-        <div class="node-row-item">
-            <span class="info-title" style="font-size: 13px; color: rgba(0, 122, 255, 1)">{{
-                appConfig.local('Run Parameters')
-                }}</span>
-        </div>
-        <hr />
-        <div v-if="thisData.operatorParams" v-show="hiddenParam(item)"
-            v-for="(item, index) in thisData.operatorParams.run" :key="`run_${index}`" class="node-row-item col">
-            <span class="info-title">{{ item.name }}</span>
-            <Handle :id="`${item.name}::target::run_key`" type="target" class="handle-item" :position="Position.Left" />
-            <Handle :id="`${item.name}::source::run_key`" type="source" class="handle-item"
-                :position="Position.Right" />
-            <value-input :theme="theme" v-model="item.value" :item-obj="item" :this-data="thisData"
-                @update:modelValue="emitUpdateRunValue(item)" @mousedown.stop @click.stop></value-input>
-        </div>
-        <div v-if="currentLog" class="node-group-item"
-            :style="{ background: theme === 'dark' ? 'rgba(0, 0, 0, 1)' : '' }">
-            <p class="info-title">Execution Logs</p>
-            <fv-progress-bar v-show="currentProgress > -1 && currentProgress < 100" :model-value="currentProgress"
-                :foreground="thisData.borderColor" style="width: 100%; margin: 5px 0px;"></fv-progress-bar>
-            <div class="log-list" @wheel.stop>
-                <p v-for="(text, index) in currentLog" :key="index">{{ text }}</p>
+        <div v-if="!showPorts" class="operator-compact-summary" @mousedown.stop>
+            <div class="operator-summary-row">
+                <span class="step-pill">{{ stepLabel }}</span>
+                <span class="parameter-count">{{ initParamCount }} init · {{ runParamCount }} run</span>
             </div>
-            <div class="node-row-item" style="gap: 5px">
-                <fv-button v-show="isOverStep" theme="dark" icon="Diagnostic" :background="thisData.borderColor"
-                    border-radius="8" font-size="10" :is-box-shadow="true" style="width: 100%; margin-top: 5px"
-                    @mousedown.stop @click.stop @click="showDetails">{{ appConfig.local('Show Details') }}</fv-button>
-                <fv-button v-show="isOverStep" theme="dark" icon="Download" :background="thisData.borderColor"
-                    border-radius="8" font-size="10" :is-box-shadow="true" style="width: 100%; margin-top: 5px"
-                    @mousedown.stop @click.stop @click="downloadData">{{ appConfig.local('Download Data') }}</fv-button>
+            <button class="ports-toggle nodrag" type="button" @click.stop="showPorts = true">
+                <i class="ms-Icon ms-Icon--Plug"></i>
+                {{ appConfig.local('Show ports') }}
+            </button>
+        </div>
+        <div v-else class="operator-ports nodrag" @mousedown.stop @click.stop @wheel.stop>
+            <div class="ports-header">
+                <span>{{ appConfig.local('Run Parameters') }}</span>
+                <button type="button" :title="appConfig.local('Hide ports')" @click.stop="showPorts = false">
+                    <i class="ms-Icon ms-Icon--ChevronUp"></i>
+                </button>
+            </div>
+            <div v-for="(item, index) in visibleRunParams" :key="`port_${index}`" class="port-row">
+                <Handle :id="`${item.name}::target::run_key`" type="target" class="handle-item compact-port"
+                    :position="Position.Left" />
+                <span :title="item.name">{{ item.name }}</span>
+                <Handle :id="`${item.name}::source::run_key`" type="source" class="handle-item compact-port"
+                    :position="Position.Right" />
             </div>
         </div>
     </base-node>
 </template>
 
 <script setup>
-import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useGlobal } from '@/hooks/general/useGlobal'
 import { useAppConfig } from '@/stores/appConfig'
 import { useDataflow } from '@/stores/dataflow'
@@ -70,12 +41,10 @@ import { useTheme } from '@/stores/theme'
 import { Position, Handle } from '@vue-flow/core'
 
 import baseNode from '@/components/manage/mainFlow/nodes/baseNode.vue'
-import valueInput from './valueInput/index.vue'
-import kvInput from './valueInput/kvInput.vue'
 
 const { $api } = useGlobal()
 
-const emits = defineEmits(['update-node-data', 'update-run-value', 'show-details'])
+const emits = defineEmits(['update-node-data'])
 
 const props = defineProps({
     id: {
@@ -124,93 +93,41 @@ const thisData = computed(() => {
         shadowColor: props.data.nodeShadowColor ? props.data.nodeShadowColor : 'rgba(0, 0, 0, 0.05)'
     }
 })
-const allowedPrompts = computed(() => {
-    let allowed_prompts = thisData.value.allowed_prompts || []
-    let results = []
-    allowed_prompts.forEach((item, index) => {
-        results.push({
-            key: item,
-            text: item
-        })
-    })
-    return results
-})
-const isPromptTemplate = computed(() => {
-    try {
-        return thisData.value.operatorParams.init.some((item) => item.name === 'prompt_template')
-    } catch (error) {
-        return false
-    }
-})
-const promptTemplateModel = computed({
-    get() {
-        try {
-            let prompt_template = thisData.value.operatorParams.init.find(
-                (item) => item.name === 'prompt_template'
-            )
-            if (!prompt_template.value) return {}
-            if (typeof (prompt_template.value) === 'object')
-                return {
-                    key: prompt_template.value.cls_name,
-                    text: prompt_template.value.cls_name
-                }
-            return {
-                key: prompt_template.value,
-                text: prompt_template.value
-            }
-        } catch (error) {
-            return {}
-        }
-    },
-    set(val) {
-        if (!val.key) return
-        if (val.key === promptTemplateModel.value.key) return
-        if (thisData.value.operatorParams.init) {
-            let prompt_template = thisData.value.operatorParams.init.find(
-                (item) => item.name === 'prompt_template'
-            )
-            let promptInfo = dataflow.promptInfo[val.key]
-            let promptParams = []
-            if (promptInfo && promptInfo.parameter.init)
-                promptParams = promptInfo.parameter.init
-            promptParams.forEach((param) => {
-                param.value = param.default_value || ''
-            })
-            prompt_template.value = {
-                cls_name: val.key,
-                params: promptParams
-            }
-        }
-    }
-})
-const promptParamModel = computed({
-    get() {
-        try {
-            let prompt_template = thisData.value.operatorParams.init.find(
-                (item) => item.name === 'prompt_template'
-            )
-            if (!prompt_template.value) return {}
-            if (typeof (prompt_template.value) === 'object')
-                return prompt_template.value.params
-            return []
-        } catch (error) {
-            return []
-        }
-    },
-    set(val) {
-        if (thisData.value.operatorParams.init) {
-            let prompt_template = thisData.value.operatorParams.init.find(
-                (item) => item.name === 'prompt_template'
-            )
-            prompt_template.value.params = val
-        }
-    }
-})
 const hiddenParam = (item) => {
     let filter_keys = ['storage'];
     if (filter_keys.includes(item.name)) return false
     return true
 }
+
+const showPorts = ref(false)
+const compactDescription = computed(() => {
+    let text = String(thisData.value.nodeInfo || thisData.value.description || '')
+        .replace(/\s+/g, ' ')
+        .replace(/^[\s('"“]+/, '')
+        .trim()
+    if (!text) return ''
+
+    const sectionMarkers = ['输入参数', '主要功能', '处理流程包括', '输出格式如下']
+    const sectionIndex = sectionMarkers
+        .map((marker) => text.indexOf(marker))
+        .filter((index) => index > 0)
+        .sort((a, b) => a - b)[0]
+    if (sectionIndex) text = text.slice(0, sectionIndex).trim()
+
+    const sentenceEnd = text.search(/[。！？]/)
+    if (sentenceEnd >= 0) text = text.slice(0, sentenceEnd + 1)
+    text = text.replace(/[\s,'"”]+$/, '')
+    return /[。！？.!?]$/.test(text) ? text : `${text}。`
+})
+const displayData = computed(() => ({
+    ...thisData.value,
+    nodeInfo: compactDescription.value,
+    compact: !showPorts.value
+}))
+const visibleRunParams = computed(() => thisData.value.operatorParams?.run?.filter(hiddenParam) || [])
+const initParamCount = computed(() => thisData.value.operatorParams?.init?.filter((item) => item.show).length || 0)
+const runParamCount = computed(() => visibleRunParams.value.length)
+const stepLabel = computed(() => thisData.value.pipeline_idx ? `Step ${thisData.value.pipeline_idx}` : 'Operator')
 
 const loading = ref(false) // for data loading display
 const paramsWrapper = (objs) => {
@@ -279,68 +196,33 @@ const getNodeDetail = async () => {
 
 watch(
     () => props.id,
-    (newVal, oldVal) => {
+    () => {
         getNodeDetail()
     }
 )
 
 watch(
     () => dataflow.executionStep,
-    (newVal, oldVal) => {
+    () => {
         syncLoading()
     }
 )
 
 watch(
     () => dataflow.execution.status,
-    (newVal, oldVal) => {
+    () => {
         syncLoading()
     }
 )
-
-const currentLog = computed(() => {
-    if (!dataflow.execution) return null
-    if (!dataflow.execution.task_id) return null
-    let currentKey = `${thisData.value.label}_${thisData.value.pipeline_idx - 1}`
-    let currentOutput = dataflow.execution.operator_logs[currentKey]
-    if (!currentOutput) return null
-    return currentOutput || []
-})
-const currentProgress = computed(() => {
-    if (!dataflow.execution) return null
-    if (!dataflow.execution.task_id) return null
-    let currentKey = `${thisData.value.label}_${thisData.value.pipeline_idx - 1}`
-    let currentDetail = dataflow.execution.operators_detail[currentKey]
-    if (!currentDetail) return null
-    if (!currentDetail.progress_percentage) return -1
-    return currentDetail.progress_percentage
-})
-const isOverStep = computed(() => {
-    if (!dataflow.execution) return null
-    if (!dataflow.execution.task_id) return null
-    let pipeline_idx = thisData.value.pipeline_idx - 1
-    return dataflow.executionStep > pipeline_idx || dataflow.execution.status === 'completed'
-})
 const syncLoading = () => {
     if (!dataflow.execution) return null
     if (!dataflow.execution.task_id) return null
     let pipeline_idx = thisData.value.pipeline_idx - 1
     let current_step = dataflow.executionStep
-    if (current_step === pipeline_idx && dataflow.execution.status !== 'completed') {
-        props.data.loading = true // for execution loading display
-    } else {
-        props.data.loading = false
-    }
-}
-
-const showDetails = () => {
-    emits('show-details', {
-        pipeline_idx: thisData.value.pipeline_idx
-    })
-}
-const downloadData = () => {
-    emits('download-data', {
-        pipeline_idx: thisData.value.pipeline_idx
+    const loading = current_step === pipeline_idx && dataflow.execution.status !== 'completed'
+    emits('update-node-data', {
+        id: props.id,
+        data: { ...props.data, loading }
     })
 }
 
@@ -349,12 +231,6 @@ onMounted(async () => {
     syncLoading()
 })
 
-const emitUpdateRunValue = (item) => {
-    emits('update-run-value', {
-        nodeId: props.id,
-        ...item
-    })
-}
 </script>
 
 <style lang="scss">
@@ -374,6 +250,115 @@ const emitUpdateRunValue = (item) => {
         color: rgba(193, 252, 167, 1);
         border-radius: 3px;
         overflow: overlay;
+    }
+
+    .operator-compact-summary {
+        width: calc(100% - 20px);
+        height: 100%;
+        margin: 0px 10px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+
+        .operator-summary-row {
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .step-pill {
+            width: fit-content;
+            padding: 2px 7px;
+            color: var(--node-border-color);
+            background: color-mix(in srgb, var(--node-border-color) 12%, transparent);
+            border-radius: 999px;
+            font-size: 10px;
+            font-weight: 700;
+        }
+
+        .parameter-count {
+            color: var(--node-status-color);
+            font-size: 10px;
+            white-space: nowrap;
+        }
+
+        .ports-toggle {
+            height: 28px;
+            padding: 0px 9px;
+            flex-shrink: 0;
+            color: var(--node-title-color);
+            background: var(--node-group-background);
+            border: 1px solid rgba(120, 120, 120, 0.14);
+            border-radius: 7px;
+            font-size: 10px;
+            cursor: pointer;
+
+            i {
+                margin-right: 3px;
+            }
+
+            &:hover {
+                border-color: var(--node-border-color);
+            }
+        }
+    }
+
+    .operator-ports {
+        width: 100%;
+        max-height: 280px;
+        padding-bottom: 5px;
+        overflow-y: auto;
+
+        .ports-header,
+        .port-row {
+            position: relative;
+            min-height: 30px;
+            padding: 0px 15px;
+            display: flex;
+            align-items: center;
+        }
+
+        .ports-header {
+            justify-content: space-between;
+            color: var(--node-status-color);
+            font-size: 10px;
+            font-weight: 700;
+
+            button {
+                width: 26px;
+                height: 26px;
+                color: var(--node-title-color);
+                background: transparent;
+                border: 0;
+                border-radius: 6px;
+                cursor: pointer;
+
+                &:hover {
+                    background: var(--node-group-background);
+                }
+            }
+        }
+
+        .port-row {
+            margin: 0px 10px 5px;
+            padding: 0px 10px;
+            background: var(--node-group-background);
+            border-radius: 6px;
+            color: var(--node-title-color);
+            font-size: 10px;
+
+            span {
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+
+            .compact-port {
+                top: 50%;
+            }
+        }
     }
 }
 </style>

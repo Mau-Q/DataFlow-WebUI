@@ -2,7 +2,8 @@
     <div class="df-main-flow-container">
         <VueFlow class="main-flow" :id="id" v-model:nodes="thisNodes" v-model:edges="thisEdges" @dragover="dragOver"
             @drop="drop" @dragleave="dragLeave" @connect="$emit('connect', $event)"
-            @connect-end="$emit('connect-end', $event)" @connect-start="$emit('connect-start', $event)">
+            @connect-end="$emit('connect-end', $event)" @connect-start="$emit('connect-start', $event)"
+            @node-click="selectOperator">
             <Background variant="dots" gap="20" size="3" :color="'rgba(200, 200, 200, 0.3)'" :style="{
                 backgroundColor: isDragOver ? 'rgba(87, 99, 206, 0.05)' : 'transparent',
                 transition: 'background-color 0.2s ease'
@@ -26,6 +27,9 @@
                 <baseEdge v-bind="edgeProps" />
             </template>
         </VueFlow>
+        <operator-detail-panel v-if="selectedOperator" v-model="showInspector"
+            :node-id="selectedOperator.id" :data="selectedOperator.data" :theme="theme"
+            @update-run-value="updateRunValue" @show-details="showDetails" @download-data="downloadData" />
     </div>
 </template>
 
@@ -40,6 +44,7 @@ import baseNode from './nodes/baseNode.vue'
 import baseEdge from './edges/baseEdge.vue'
 import databaseNode from './nodes/databaseNode.vue'
 import operatorNode from './nodes/operatorNode/index.vue'
+import operatorDetailPanel from './panels/operatorDetailPanel.vue'
 import baseConnectionLine from './edges/baseConnectionLine.vue'
 
 const { $Guid, $infoBox } = useGlobal()
@@ -54,7 +59,8 @@ const emits = defineEmits([
     'connect-end',
     'connect-start',
     'update-run-value',
-    'show-details'
+    'show-details',
+    'download-data'
 ])
 
 const props = defineProps({
@@ -74,6 +80,8 @@ const props = defineProps({
 
 const thisNodes = ref(props.nodes)
 const thisEdges = ref(props.edges)
+const selectedOperator = ref(null)
+const showInspector = ref(false)
 watch(
     () => props.nodes,
     (newNodes) => {
@@ -113,6 +121,19 @@ const updateNodeData = (nodeInfo) => {
 
 const updateRunValue = (runValue) => {
     emits('update-run-value', runValue)
+}
+
+const selectOperator = ({ node }) => {
+    if (!node || node.type !== 'operator-node') {
+        closeInspector()
+        return
+    }
+    selectedOperator.value = node
+    showInspector.value = true
+}
+
+const closeInspector = () => {
+    showInspector.value = false
 }
 
 const isDragOver = ref(false)
@@ -159,6 +180,10 @@ const deleteNode = (nodeInfo) => {
         confirm: () => {
             const flow = useVueFlow(props.id)
             flow.removeNodes(nodeInfo.id)
+            if (selectedOperator.value?.id === nodeInfo.id) {
+                selectedOperator.value = null
+                showInspector.value = false
+            }
         }
     })
 }
