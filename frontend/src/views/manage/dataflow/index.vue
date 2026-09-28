@@ -544,7 +544,8 @@ export default {
                 nodeOperators.push({
                     name: oriNode.data.name,
                     params: oriNode.data.operatorParams,
-                    location: [oriNode.position.x, oriNode.position.y]
+                    location: [oriNode.position.x, oriNode.position.y],
+                    pipeline_role: oriNode.data.pipelineRole || null
                 })
             })
             return nodeOperators
@@ -601,7 +602,8 @@ export default {
                         file_path: this.currentPipeline.config.file_path,
                         input_dataset: {
                             id: this.sourceDatabase.id,
-                            location: [dbNode.position.x, dbNode.position.y]
+                            location: [dbNode.position.x, dbNode.position.y],
+                            pipeline_role: dbNode.data.pipelineRole || null
                         },
                         operators: nodeOperators
                     }
@@ -644,7 +646,8 @@ export default {
                         file_path: '',
                         input_dataset: {
                             id: this.sourceDatabase.id,
-                            location: [dbNode.position.x, dbNode.position.y]
+                            location: [dbNode.position.x, dbNode.position.y],
+                            pipeline_role: dbNode.data.pipelineRole || null
                         },
                         operators: nodeOperators
                     }

@@ -1197,7 +1197,7 @@ class PipelineRegistry:
     def _update_pipeline_op_info(self, new_op_info: Dict[str, Any], old_op_info: Dict[str, Any]) -> Dict[str, Any]:
         """
         new_op_info: 新的算子信息（字典格式）
-        new_op_info 中包含 name, params, location 三个字段
+        new_op_info 中包含 name, params, location, pipeline_role 字段
             - single_param_format: {'name': xxx, 'value': yyy}
         old_op_info: 旧的算子信息（字典格式），我们假设其中的所有参数是全的。
         return: 更新后的算子信息（字典格式）
@@ -1211,6 +1211,11 @@ class PipelineRegistry:
         # Update the locations
         if "location" in new_op_info:
             old_op_info["location"] = new_op_info.get("location")
+
+        # Keep the human-authored explanation tied to this concrete pipeline.
+        # It must not be replaced by the operator registry's generic description.
+        if "pipeline_role" in new_op_info:
+            old_op_info["pipeline_role"] = new_op_info.get("pipeline_role")
         
         # Parse new params
         new_params = new_op_info.get("params", {})
@@ -1275,7 +1280,8 @@ class PipelineRegistry:
                         old_op_info = {
                             "name": op.get("name"),
                             "params": op_details.get("parameter", {"init": [], "run": []}) if op_details else {"init": [], "run": []},
-                            "location": op.get("location", (0, 0))
+                            "location": op.get("location", (0, 0)),
+                            "pipeline_role": op.get("pipeline_role")
                         }
                     
                     # 更新 operator 信息

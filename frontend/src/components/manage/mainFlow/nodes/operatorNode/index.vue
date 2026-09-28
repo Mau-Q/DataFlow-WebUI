@@ -101,7 +101,9 @@ const hiddenParam = (item) => {
 
 const showPorts = ref(false)
 const compactDescription = computed(() => {
-    let text = String(thisData.value.nodeInfo || thisData.value.description || '')
+    let text = String(
+        thisData.value.pipelineRole || thisData.value.nodeInfo || thisData.value.description || ''
+    )
         .replace(/\s+/g, ' ')
         .replace(/^[\s('"“]+/, '')
         .trim()
@@ -288,9 +290,9 @@ onMounted(async () => {
             height: 28px;
             padding: 0px 9px;
             flex-shrink: 0;
-            color: var(--node-title-color);
-            background: var(--node-group-background);
-            border: 1px solid rgba(120, 120, 120, 0.14);
+            color: #fff;
+            background: var(--node-border-color);
+            border: 1px solid var(--node-border-color);
             border-radius: 7px;
             font-size: 10px;
             cursor: pointer;
@@ -300,7 +302,7 @@ onMounted(async () => {
             }
 
             &:hover {
-                border-color: var(--node-border-color);
+                filter: brightness(1.12);
             }
         }
     }

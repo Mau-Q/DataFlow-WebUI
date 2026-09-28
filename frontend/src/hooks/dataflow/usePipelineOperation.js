@@ -90,6 +90,7 @@ export function usePipelineOperation() {
             // 复制数据集对象并更新位置信息
             dataset = Object.assign({}, dataset)
             dataset.location = input_dataset.location
+            dataset.pipelineRole = input_dataset.pipeline_role || ''
             // 发射数据集确认事件
             $emit('confirm-dataset', dataset)
         }
@@ -121,6 +122,10 @@ export function usePipelineOperation() {
                         }
                         operator._cache_parameter.init = item.params.init
                         operator._cache_parameter.run = item.params.run
+                        // Pipeline role describes why this operator exists in this
+                        // concrete flow. It is intentionally separate from the
+                        // registry's generic operator description.
+                        operator.pipelineRole = item.pipeline_role || ''
                         // 设置操作符在管道中的索引
                         operator.pipeline_idx = idx + 1
                         // 添加到格式化操作符列表

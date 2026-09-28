@@ -97,6 +97,27 @@ def test_update_preserves_identity_and_updates_the_requested_fields(pipeline_reg
     assert updated["status"] == "queued"
 
 
+def test_operator_update_preserves_pipeline_specific_role(pipeline_registry):
+    registry, _ = pipeline_registry
+    old_operator = {
+        "name": "ExampleOperator",
+        "params": {"init": [], "run": []},
+        "location": [0, 0],
+    }
+
+    updated = registry._update_pipeline_op_info(
+        {
+            "name": "ExampleOperator",
+            "params": {"init": [], "run": []},
+            "location": [320, 160],
+            "pipeline_role": "Prepare evidence for the next step.",
+        },
+        old_operator,
+    )
+
+    assert updated["pipeline_role"] == "Prepare evidence for the next step."
+
+
 def test_update_normalizes_and_persists_pipeline_name(pipeline_registry, pipeline_payload):
     registry, _ = pipeline_registry
     created = registry.create_pipeline(pipeline_payload)
