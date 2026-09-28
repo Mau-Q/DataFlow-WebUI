@@ -21,6 +21,10 @@ from contextlib import redirect_stdout, redirect_stderr
 
 from app.services.param_coercion import coerce_param_value
 from app.services.pipeline_compile_check import compile_check
+from app.services.dataflow_engine import (
+    _compile_dynamic_code_callable,
+    _normalize_dynamic_code_param_value,
+)
 
 logger = get_logger(__name__)
 
@@ -213,7 +217,12 @@ def dataflow_pipeline_execute(pipeline_config: Dict[str, Any], dataflow_runtime:
         if op_name != "__pipeline__":
             operator_logs.setdefault(op_name, []).append(ts_msg)
     
-    logger.success(f"Input dataflow runtime: {dataflow_runtime}")
+    logger.success(
+        "Input dataflow runtime: storage={} serving_ids={} embedding_serving_ids={}",
+        dataflow_runtime.get("storage"),
+        list(dataflow_runtime.get("serving_map", {})),
+        list(dataflow_runtime.get("embedding_serving_map", {})),
+    )
     
     
     add_log("global", f"[{started_at}] Starting pipeline execution: {task_id}")
@@ -340,9 +349,10 @@ def dataflow_pipeline_execute(pipeline_config: Dict[str, Any], dataflow_runtime:
                                         if params['name'] != 'api_key':
                                             params_dict[params['name']] = params.get('value') if params.get('value') is not None else params.get('default_value')
                                     
-                                    logger.info(f"Initializing serving with params: {params_dict}")
+                                    from app.services.serving_params import expand_serving_configs
+                                    params_dict = expand_serving_configs(params_dict)
+                                    logger.info(f"Initializing serving: {actual_serving_id}")
                                     os.environ[key_name_var] = api_key_val
-                                    logger.info(f"Environment variable {key_name_var} set to {api_key_val}")
                                     serving_instance = APILLMServing_request(**params_dict)
                                 else:
                                     raise DataFlowEngineError(f"Unsupported serving class: {serving_info['cls_name']}")
@@ -379,9 +389,10 @@ def dataflow_pipeline_execute(pipeline_config: Dict[str, Any], dataflow_runtime:
                                         if params['name'] != 'api_key':
                                             params_dict[params['name']] = params.get('value') if params.get('value') is not None else params.get('default_value')
                                     
-                                    logger.info(f"Initializing serving with params: {params_dict}")
+                                    from app.services.serving_params import expand_serving_configs
+                                    params_dict = expand_serving_configs(params_dict)
+                                    logger.info(f"Initializing serving: {actual_serving_id}")
                                     os.environ[key_name_var] = api_key_val
-                                    logger.info(f"Environment variable {key_name_var} set to {api_key_val}")
                                     serving_instance = APILLMServing_request(**params_dict)
                                 else:
                                     raise DataFlowEngineError(f"Unsupported serving class: {serving_info['cls_name']}")
@@ -452,17 +463,15 @@ def dataflow_pipeline_execute(pipeline_config: Dict[str, Any], dataflow_runtime:
                                     param_dict = {k: v for k, v in param_value.items() if k != "cls_name"}
                                 param_value = prompt_cls(**param_dict)
                         elif param_name in ("process_fn", "filter_rules"):
-                            if isinstance(param_value, list):
-                                compiled = []
-                                for item in param_value:
-                                    if isinstance(item, str) and ("lambda " in item or "def " in item):
-                                        compiled.append(eval(item))  # noqa: S307
-                                    elif callable(item):
-                                        compiled.append(item)
-                                    else:
-                                        compiled.append(item)
-                                param_value = compiled
-                                add_log("init", f"[{datetime.now().isoformat()}]   - Compiled {len(compiled)} code-string(s) for {param_name}", op_key)
+                            normalized_items = _normalize_dynamic_code_param_value(
+                                param_value, param_name=param_name,
+                            )
+                            compiled = [
+                                _compile_dynamic_code_callable(item, param_name=param_name)
+                                for item in normalized_items
+                            ]
+                            param_value = compiled
+                            add_log("init", f"[{datetime.now().isoformat()}]   - Compiled {len(compiled)} code-string(s) for {param_name}", op_key)
                         else:
                             ann = init_sig.parameters.get(param_name).annotation if param_name in init_sig.parameters else inspect.Parameter.empty
                             param_value = coerce_param_value(param_value, annotation=ann, default_value=default_value)
@@ -658,7 +667,7 @@ def dataflow_pipeline_execute(pipeline_config: Dict[str, Any], dataflow_runtime:
                      if f_path and os.path.exists(f_path):
                          try:
                              with open(f_path, 'r', encoding='utf-8') as f:
-                                 sample_count = sum(1 for _ in f)
+                                 sample_count = sum(1 for line in f if line.strip())
                          except Exception as e:
                              logger.warning(f"Failed to count lines in {f_path}: {e}")
                              add_log("run", f"WARN: Failed to read output file: {e}", op_key)

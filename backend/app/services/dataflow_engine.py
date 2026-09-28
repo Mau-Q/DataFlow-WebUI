@@ -5,6 +5,7 @@ from dataflow.pipeline import PipelineABC
 from dataflow.utils.registry import PROMPT_REGISTRY, OPERATOR_REGISTRY
 from dataclasses import dataclass
 from app.services.serving_registry import SERVING_CLS_REGISTRY
+from app.services.serving_params import expand_serving_configs
 from app.core.config import settings
 from app.core.container import container
 from app.core.logger_setup import get_logger
@@ -229,9 +230,9 @@ class DataFlowEngine:
                     if params['name'] != 'api_key':
                         params_dict[params['name']] = params.get('value') if params.get('value') is not None else params.get('default_value')
                 
-                logger.info(f"Initializing serving with params: {params_dict}")
+                params_dict = expand_serving_configs(params_dict)
+                logger.info(f"Initializing serving: {actual_serving_id}")
                 os.environ[key_name_var] = api_key_val
-                logger.info(f"Environment variable {key_name_var} set to {api_key_val}")
                 serving_instance = SERVING_CLS_REGISTRY[serving_info['cls_name']](**params_dict)
                 
             return serving_instance
@@ -243,8 +244,7 @@ class DataFlowEngine:
                 f"Failed to initialize Serving instance",
                 context={
                     "serving_id": serving_id,
-                    "serving_info": serving_info if 'serving_info' in locals() else None,
-                    "params_dict": params_dict if 'params_dict' in locals() else None
+                    "serving_class": serving_info.get('cls_name') if 'serving_info' in locals() and serving_info else None
                 },
                 original_error=e
             )
@@ -985,4 +985,3 @@ class DataFlowEngine:
             }
             
 dataflow_engine = DataFlowEngine()
-
