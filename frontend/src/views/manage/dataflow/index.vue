@@ -860,7 +860,7 @@ export default {
                     }
                 })
                 .catch((err) => {
-                    this.$barWarning(this.local('Pipeline execution failed'), {
+                    this.$barWarning(err?.response?.data?.message || err?.message || this.local('Pipeline execution failed'), {
                         status: 'error'
                     })
                     this.lock.running = true

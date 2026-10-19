@@ -258,7 +258,7 @@ def get_operator_detail_by_name(op_name: str, lang: str = "zh"):
     try:
         # Managed slots evolve with installed constructors; never hide them behind old ops.json.
         from app.services.prompt_contracts import CONTRACTS
-        if op_name in CONTRACTS and callable(getattr(container.operator_registry, 'get_op_details', None)):
+        if (op_name in CONTRACTS or op_name == 'TrainingPairFormatter') and callable(getattr(container.operator_registry, 'get_op_details', None)):
             current = container.operator_registry.get_op_details(op_name, lang=lang)
             if current:
                 tips, field_hint, context_hint = _build_operator_agent_tips(current)

@@ -68,6 +68,13 @@ def persist(config, result):
         files.append({'path': name, 'kind': kind, 'sha256': _hash(content), 'size_bytes': len(content)})
         return str(target.resolve())
     try:
+        snapshot = config.get('execution_options', {}).get('input_snapshot', {})
+        for material in snapshot.get('materials', []):
+            if material.get('media_ref'):
+                content = Path(material['path']).read_bytes()
+                if _hash(content) != material['sha256']:
+                    raise LibraryError('固定图片内容已变化')
+                write(material['media_ref'], content, 'image')
         steps = output.get('execution_results', [])
         for step in steps:
             source = Path(step.get('file_path') or Path(settings.CACHE_DIR) / f'{result["task_id"]}_output' / f'dataflow_cache_step_step{step["index"]+1}.jsonl')

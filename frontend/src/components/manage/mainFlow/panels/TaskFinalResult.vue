@@ -25,7 +25,7 @@
                 <div class="form-field" v-else>目标数据集<fv-combobox v-model="draftModel" :theme="theme" :options="draftOptions" :disabled="busy" placeholder="请选择同模态、同训练类型的数据集" aria-label="目标数据集" style="width:100%" /></div>
                 <p v-if="mode === 'append' && !compatibleDrafts.length" class="help">暂无匹配的数据集，可切换为新建。</p>
                 <template v-if="result.media_refs?.length">
-                    <p class="help">绑定样本中的图片引用。追加时可沿用目标数据集已有绑定。</p>
+                    <p class="help">已从本次输入固定的图片会自动绑定；其他引用请手动选择。追加时可沿用目标已有绑定。</p>
                     <div class="form-field" v-for="ref in result.media_refs" :key="ref">{{ ref }}<fv-combobox :model-value="imageOptions.find(m => m.key === bindings[ref]) || {key:'', text:''}" :theme="theme" :options="imageOptions" :disabled="busy" :placeholder="targetBindings[ref] ? '沿用目标已有图片' : '请选择本地图片材料'" :aria-label="ref" style="width:100%" @update:modelValue="setBinding(ref, $event)" /></div>
                 </template>
                 <fv-button :theme="theme" :border-radius="6" :disabled="!canCollect" @click="collect">{{ busy ? '正在收录…' : '确认收录' }}</fv-button>
@@ -76,6 +76,7 @@ export default {
                 ])
                 if (requestId !== this.requestId) return
                 this.result = result; this.drafts = drafts; this.images = materials.filter(m => m.kind === 'image')
+                this.bindings = {...(result.artifact?.media_bindings || {})}
                 this.name = `${result.name || 'Pipeline'} · ${result.task_id}`.slice(0, 240)
             } catch (e) { if (requestId === this.requestId) this.error = e.response?.data?.message || e.message }
             finally { if (requestId === this.requestId) this.loading = false }

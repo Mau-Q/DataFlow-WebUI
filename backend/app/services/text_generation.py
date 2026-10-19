@@ -66,20 +66,36 @@ class TextGeneration:
 
     def preflight(self, config):
         errors = []
+        simple = config.get('execution_options', {}).get('simple_training')
         retries = config.get('execution_options', {}).get('additional_retries', 0)
         if type(retries) is not int or not 0 <= retries <= 5:
             errors.append('额外重试次数必须为 0–5 的整数')
         serving_snapshots = {}
-        expected = [op['name'] for op in template()['config']['operators']]
+        expected = ([('FormatStrPromptedGenerator' if simple.get('modality') == 'text' else 'APIImagePairGenerator'), 'TrainingPairFormatter']
+                    if simple else [op['name'] for op in template()['config']['operators']])
         if [op['name'] for op in config.get('operators', [])] != expected:
-            errors.append('文本入口需要完整的既有 13 步顺序；请在画布检查配置')
+            errors.append('最简入口需要生成、训练整理两步顺序' if simple else '文本入口需要完整的既有 13 步顺序；请在画布检查配置')
+        if simple:
+            if simple.get('modality') not in {'text', 'image_text'} or simple.get('training_type') not in {'sft', 'dpo'}:
+                errors.append('最简 pipeline 模态或训练类型无效')
+            formatter = next((op for op in config.get('operators', []) if op['name'] == 'TrainingPairFormatter'), None)
+            if formatter:
+                values = {p['name']: p.get('value', p.get('default_value')) for p in formatter['params']['init']}
+                if any(values.get(k) != simple.get(k) for k in ('modality', 'training_type')):
+                    errors.append('训练整理参数必须与 pipeline 的模态和训练类型一致')
+            if not config.get('execution_options', {}).get('input_snapshot'):
+                from app.services.simple_training import read_inputs
+                try:
+                    read_inputs(self.c, config)
+                except (LibraryError, ValueError, OSError):
+                    errors.append('输入不可用：文本需要非空 text 的 JSONL；图片需要已导入且可读取的图片材料')
         dataset_id = config.get('input_dataset')
         dataset_id = dataset_id.get('id') if isinstance(dataset_id, dict) else dataset_id
         dataset = self.c.dataset_registry.get(dataset_id)
         frozen_input = config.get('execution_options', {}).get('input_snapshot')
         if not frozen_input and (not dataset or not Path(dataset['root']).is_file()):
             errors.append('输入数据集不存在或文件已缺失')
-        serving_operators = {'KBCTextCleaner', 'Text2MultiHopQAGenerator', 'Text2QASampleEvaluator', 'AlpagasusSampleEvaluator'}
+        serving_operators = {'KBCTextCleaner', 'Text2MultiHopQAGenerator', 'Text2QASampleEvaluator', 'AlpagasusSampleEvaluator', 'FormatStrPromptedGenerator', 'APIImagePairGenerator'}
         for op in config.get('operators', []):
             init_params = op.get('params', {}).get('init', [])
             if op['name'] in serving_operators and not any(p.get('name') == 'llm_serving' for p in init_params):
@@ -119,6 +135,9 @@ class TextGeneration:
                 if not path.is_file() or _hash(path.read_bytes()) != item['sha256']:
                     raise LibraryError('固定的输入文件已缺失或变化，不能重跑', 409)
             return frozen
+        if config.get('execution_options', {}).get('simple_training'):
+            from app.services.simple_training import freeze_inputs
+            return freeze_inputs(self.c, config)
         dsid = config['input_dataset']
         dsid = dsid['id'] if isinstance(dsid, dict) else dsid
         record = self.c.dataset_registry.get(dsid)

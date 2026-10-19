@@ -111,6 +111,9 @@ def _gather_single_operator(
     # [0]=dataflow prefix, [1]=operators, [2]=level_1 category, [3]=level_2 type, [4]=concrete name
     type1 = op_type_category[2] if len(op_type_category) > 2 else "Unknown"
     type2 = op_type_category[3] if len(op_type_category) > 3 else "Unknown"
+    if hasattr(cls, 'WEBUI_CATEGORY'):
+        type1, type2 = cls.WEBUI_CATEGORY
+        category = type1
 
     allowed_prompt_templates = getattr(cls, "ALLOWED_PROMPTS", [])
     allowed_prompt_templates = [prompt_name.__name__ for prompt_name in allowed_prompt_templates]
@@ -181,6 +184,8 @@ class OperatorRegistry:
             # Format: ['dataflow', 'operators', 'core_text', 'generate', 'text2qa_generator']
             type1 = op_type_category[2] if len(op_type_category) > 2 else "Unknown"
             type2 = op_type_category[3] if len(op_type_category) > 3 else "Unknown"
+            if hasattr(op_cls, 'WEBUI_CATEGORY'):
+                type1, type2 = op_cls.WEBUI_CATEGORY
 
             # Description
             if hasattr(op_cls, "get_desc") and callable(op_cls.get_desc):

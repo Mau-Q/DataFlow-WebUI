@@ -118,7 +118,7 @@ class TaskResults:
         if item['sha256'] != expected_sha256:
             raise LibraryError('最终结果已变化，请刷新后重新确认', 409)
         contract = self._contract(rows)
-        bindings = media_bindings or {}
+        bindings = {**item.get('media_bindings', {}), **(media_bindings or {})}
         item.update(kind='training', **{k: contract[k] for k in ('training_type', 'modality')},
                     media_bindings={ref: bindings[ref] for ref in contract['media_refs'] if ref in bindings})
         if not draft_id and not (name and name.strip()):

@@ -62,14 +62,17 @@ def finalize_artifacts(config, result, cache_root=None):
         last = steps[-1]
         path = Path(last.get('file_path') or directory / f'dataflow_cache_step_step{last["index"]+1}.jsonl')
         training = []
+        simple = config.get('execution_options', {}).get('simple_training')
         for line in path.read_text('utf-8').splitlines():
             if line.strip():
                 row = json.loads(line)
-                sample = {k: row.get(k, '') for k in ('instruction', 'input', 'output')}
+                sample = row.get('training_sample') if simple else {k: row.get(k, '') for k in ('instruction', 'input', 'output')}
                 # Validation has no filesystem dependency for text rows.
-                DataLibrary._validate_row(None, sample, 'text')
+                DataLibrary._validate_row(None, sample, simple['modality'] if simple else 'text', simple['training_type'] if simple else 'sft')
                 training.append(sample)
         add(path, 'training', last['index'], b''.join(_json_bytes(row)+b'\n' for row in training))
+        if simple:
+            artifacts[-1].update(**simple, media_bindings=config['execution_options'].get('input_snapshot', {}).get('media_bindings', {}))
     result.setdefault('output', {})['artifacts'] = artifacts
     result['output']['progress_unit'] = 'batch'
     result['output']['completed_units'] = int(result['status'] == 'completed')

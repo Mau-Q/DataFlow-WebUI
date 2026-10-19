@@ -8,6 +8,7 @@ RUBRICS = {
     'downstream_value_prompt_template': ('下游价值评分', 'Text2QADownstreamValuePrompt'),
 }
 CONTRACTS = {
+    'APIImagePairGenerator': {'prompt_template': dict(label='图片训练样例提示词', required=[], variables=[], protocol='图片由程序附加。只编辑生成要求；输出 JSON 由下一步 Schema 和训练契约校验。', builtin='')},
     'FormatStrPromptedGenerator': {'prompt_template': dict(label='通用生成模板', required=[], variables=None, protocol='由字段绑定填充模板；保留输出列。', builtin='FormatStrPrompt')},
     'KBCTextCleaner': {'prompt_template': dict(label='文本清洗模板', required=['text'], variables=['text'], protocol='必须保留 {text}；程序追加 cleaned_start / cleaned_end 输出标记要求。', builtin='KnowledgeCleanerPrompt')},
     'Text2MultiHopQAGenerator': {'prompt_template': dict(label='多跳 QA 模板', required=['text'], variables=['text'], protocol='必须保留 {text}；固定系统提示和 JSON 问答结构，保留 question、answer、reasoning_steps、supporting_facts。', builtin='Text2MultiHopQAGeneratorPrompt')},
