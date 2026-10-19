@@ -7,6 +7,7 @@ from app.schemas.pipelines import (
 )
 from app.services.dataflow_engine import dataflow_engine
 from app.core.container import container
+from app.core.config import settings
 from app.api.v1.envelope import ApiResponse
 from app.api.v1.resp import ok
 from app.api.v1.errors import *
@@ -214,11 +215,36 @@ async def execute_pipeline(request: Request, pipeline_id):
         if not pipeline_config:
             raise HTTPException(404, f"Pipeline {pipeline_id} not found")
 
-        # 调用服务层开始执行
-        task_id, frozen_config, initial_result = container.task_registry.start_execution(
-            pipeline_id=pipeline_id, 
-            config=pipeline_config
-        )
+        config = pipeline_config.get('config', {})
+        if config.get('execution_options', {}).get('capture_responses'):
+            from app.services.text_generation import TextGeneration
+            from app.services.data_library import LibraryError
+            import copy
+            config = copy.deepcopy(config)
+            platform = TextGeneration()
+            check = platform.preflight(config)
+            if not check['ready']:
+                raise HTTPException(422, '；'.join(check['errors']))
+            try:
+                config['execution_options']['input_snapshot'] = platform._freeze_input(config)
+            except LibraryError as exc:
+                raise HTTPException(exc.status, str(exc)) from exc
+            config['execution_options']['serving_snapshots'] = check['serving_snapshots']
+            config['execution_options']['max_attempts'] = config['execution_options'].get('additional_retries', 0)+1
+            task_id, frozen_config, initial_result = container.task_registry.start_execution(config=config)
+            for op in frozen_config['operators']:
+                if op['name'] == 'MinerU4PDFParser':
+                    for param in op['params']['init']:
+                        if param['name'] == 'output_dir':
+                            param['value'] = os.path.join(settings.CACHE_DIR, f'{task_id}_output', 'parsing')
+            initial_result.update(pipeline_id=pipeline_id, name=pipeline_config.get('name'), pipeline_source_config=pipeline_config['config'])
+            container.task_registry.update(task_id, initial_result)
+        else:
+            # 调用服务层开始执行
+            task_id, frozen_config, initial_result = container.task_registry.start_execution(
+                pipeline_id=pipeline_id,
+                config=pipeline_config
+            )
         logger.info(f"Execution ID: {task_id}")
         
         # 执行 pipeline (run 方法内部已经处理所有异常，总是返回结果)
@@ -227,10 +253,8 @@ async def execute_pipeline(request: Request, pipeline_id):
         result = {**initial_result, **result}
 
         # 更新执行记录到 registry
-        data = container.task_registry._read()
-        if task_id in data.get("tasks", {}):
-            data["tasks"][task_id].update(result)
-            container.task_registry._write(data)
+        from app.services.task_store import patch_task
+        patch_task(container.task_registry.path, task_id, result)
         
         return ok(result, message=f"Pipeline execution {result['status']}")
         
@@ -298,6 +322,14 @@ async def execute_pipeline_async(request: Request, pipeline_id: str):
         pipeline_config = container.pipeline_registry.get_pipeline(pipeline_id)
         if not pipeline_config:
             raise HTTPException(404, f"Pipeline {pipeline_id} not found")
+
+        if pipeline_config.get('config', {}).get('execution_options', {}).get('capture_responses'):
+            from app.services.text_generation import TextGeneration
+            from app.services.data_library import LibraryError
+            try:
+                return ok(await TextGeneration().submit(pipeline_id=pipeline_id))
+            except LibraryError as exc:
+                raise HTTPException(exc.status, str(exc)) from exc
 
         # 调用服务层开始异步执行
         result = await container.task_registry.start_execution_async(

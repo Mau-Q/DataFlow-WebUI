@@ -212,8 +212,8 @@ class DataLibrary:
         return [self._summary(r) for r in self._list(self.drafts)]
 
     def get_draft(self, record_id, offset=0, limit=20):
-        rec = self._get('drafts', record_id)
-        return dict(self._summary(rec), rows=rec['rows'][offset:offset + limit], offset=offset, limit=limit)
+        from app.services.training_lifecycle import TrainingLifecycle
+        return TrainingLifecycle(self).view(record_id, offset, limit)
 
     def _validate_row(self, row, modality):
         if not isinstance(row, dict):
@@ -328,7 +328,11 @@ class DataLibrary:
                     unique.append(row)
             if not unique:
                 raise LibraryError('所有样本均已存在，未重复写入', 409)
+            from app.services.training_lifecycle import TrainingLifecycle
+            lifecycle = TrainingLifecycle(self)
+            lifecycle._members(rec)
             rec['rows'].extend(unique)
+            lifecycle._members(rec)
             rec['media_bindings'] = bindings
             rec['imports'].append({'filename': Path(filename).name, 'sha256': fingerprint,
                                    'file_sha256': _hash(content), 'added': len(unique),

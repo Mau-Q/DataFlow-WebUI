@@ -1,4 +1,5 @@
 <template>
+    <router-link v-if="currentPipeline?.tags?.includes('platform-text')" :to="{path:'/m/generation',query:{pipeline:currentPipeline.id}}" class="wizard-return">返回文本生成向导</router-link>
     <div class="df-default-container" :class="[{ dark: theme === 'dark', 'show-pipeline': show.pipeline, 'show-chat': show.chat }]">
         <pipeline v-model="show.pipeline" v-model:loading="lock.loading" v-model:pipeline="currentPipeline"
             :flow-id="flowId" class="df-pipeline-container" @confirm-dataset="confirmDataset($event, true)"
@@ -286,6 +287,9 @@ export default {
         }
     },
     watch: {
+        $route(to, from) {
+            if (to.path.replace(/\/$/, '') === '/m' && to.query.pipeline && (from.path !== to.path || from.query.pipeline !== to.query.pipeline)) this.loadLinkedPipeline(to.query.pipeline)
+        },
         sourceDatabase: {
             handler(newVal, oldVal) {
                 if (newVal !== oldVal) {
@@ -405,6 +409,7 @@ export default {
         this.setViewport()
         this.getServing()
         this.getPromptInfo()
+        if (this.$route.query.pipeline) this.loadLinkedPipeline(this.$route.query.pipeline)
     },
     beforeUnmount() {
         // 兜底清理拖拽监听，避免组件销毁后仍挂在 window 上
@@ -412,6 +417,17 @@ export default {
         window.removeEventListener('mouseup', this.stopChatResize)
     },
     methods: {
+        async loadLinkedPipeline(id) {
+            if (this.loadingLinkedPipeline) return
+            this.loadingLinkedPipeline = true
+            try {
+                await Promise.all([this.getDatasets(), this.getOperators('zh'), this.getPipelines()])
+                const response = await this.$api.pipelines.get_pipeline(id)
+                if (!response.success) throw new Error(response.message)
+                this.currentPipeline = response.data
+                await this.recoverPipeline()
+            } catch (error) { this.$barWarning(error.message, {status: 'error'}) } finally { this.loadingLinkedPipeline = false }
+        },
         ...mapActions(useDataflow, [
             'switchAutoConnection',
             'getServingList',
@@ -623,6 +639,7 @@ export default {
                     name: this.currentPipeline.name,
                     config: {
                         file_path: this.currentPipeline.config.file_path,
+                        execution_options: this.currentPipeline.config.execution_options || {},
                         input_dataset: {
                             id: this.sourceDatabase.id,
                             location: [dbNode.position.x, dbNode.position.y],
@@ -1210,3 +1227,5 @@ export default {
     }
 }
 </style>
+
+<style scoped>.wizard-return{position:absolute;top:12px;right:24px;z-index:20;background:white;padding:8px 16px;border-radius:8px;color:#4e5bd5}</style>

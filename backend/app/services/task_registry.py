@@ -4,6 +4,8 @@ import hashlib
 import pandas
 import datetime
 from typing import Dict, List, Optional, Any, Tuple
+from app.services.task_store import patch_task
+from app.services.resource_store import ResourceStore
 from app.core.container import container
 from app.core.config import settings
 from app.services.dataflow_engine import DataFlowEngine
@@ -21,24 +23,13 @@ class TaskRegistry:
     def _ensure(self):
         # 只在文件不存在时初始化
         if not os.path.exists(self.path):
-            initial_data = {"tasks": {}}
-            self._write(initial_data)
+            with ResourceStore(self.path).writing() as data:
+                data.setdefault('tasks', {})
             return
 
-        # 文件存在但为空/损坏时兜底（可选）
-        try:
-            with open(self.path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if not isinstance(data, dict) or "tasks" not in data:
-                self._write({"tasks": {}})
-        except Exception:
-            # 读取失败：备份旧文件再重建（推荐）
-            broken = self.path + f".broken.{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
-            try:
-                os.replace(self.path, broken)
-            except Exception:
-                pass
-            self._write({"tasks": {}})
+        data = ResourceStore(self.path).read()
+        if not isinstance(data.get('tasks'), dict):
+            raise ValueError('任务注册表损坏，原文件已保留')
 
 
     def _read(self) -> Dict:
@@ -48,8 +39,9 @@ class TaskRegistry:
 
     def _write(self, data: Dict):
         """写入注册表"""
-        with open(self.path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
+        with ResourceStore(self.path).writing() as current:
+            current.clear()
+            current.update(data)
 
     def _generate_task_id(self) -> str:
         """生成唯一的任务ID"""
@@ -88,8 +80,6 @@ class TaskRegistry:
         Returns:
             创建的任务（包含生成的ID和时间戳）
         """
-        data = self._read()
-        
         # 生成任务ID
         task_id = self._generate_task_id()
         task["id"] = task_id
@@ -101,10 +91,7 @@ class TaskRegistry:
         task["error_message"] = None
         
         # 保存任务
-        tasks = data.get("tasks", {})
-        tasks[task_id] = task
-        data["tasks"] = tasks
-        self._write(data)
+        patch_task(self.path, task_id, task, create=True)
         
         return task
     
@@ -123,33 +110,13 @@ class TaskRegistry:
         Returns:
             更新后的任务，如果任务不存在返回None
         """
-        data = self._read()
-        tasks = data.get("tasks", {})
-        
-        if task_id not in tasks:
-            return None
-        
-        task = tasks[task_id]
-        
-        # 更新字段
-        for key, value in updates.items():
-            if value is not None:  # 只更新非None的值
-                task[key] = value
-        
-        # 自动设置时间戳
-        if "status" in updates:
-            if updates["status"] == "running" and not task.get("started_at"):
-                task["started_at"] = pandas.Timestamp.now().isoformat()
-            elif updates["status"] in ["success", "failed", "cancelled"]:
-                if not task.get("finished_at"):
-                    task["finished_at"] = pandas.Timestamp.now().isoformat()
-        
-        tasks[task_id] = task
-        data["tasks"] = tasks
-        self._write(data)
-        
-        return task
-    
+        updates = {key: value for key, value in updates.items() if value is not None}
+        if updates.get('status') == 'running':
+            updates.setdefault('started_at', pandas.Timestamp.now().isoformat())
+        elif updates.get('status') in {'success', 'completed', 'failed', 'cancelled'}:
+            updates.setdefault('finished_at', pandas.Timestamp.now().isoformat())
+        return patch_task(self.path, task_id, updates)
+
     def delete(self, task_id: str) -> bool:
         """
         删除任务
@@ -160,17 +127,9 @@ class TaskRegistry:
         Returns:
             是否成功删除
         """
-        data = self._read()
-        tasks = data.get("tasks", {})
-        
-        if task_id in tasks:
-            del tasks[task_id]
-            data["tasks"] = tasks
-            self._write(data)
-            return True
-        
-        return False
-    
+        with ResourceStore(self.path).writing() as data:
+            return data.setdefault('tasks', {}).pop(task_id, None) is not None
+
     def get_statistics(self) -> Dict:
         """
         获取任务统计信息
@@ -243,9 +202,8 @@ class TaskRegistry:
         }
                 
         # 直接保存到文件
-        data = self._read()
-        data["tasks"][task_id] = initial_result
-        self._write(data)
+        initial_result['created_at'] = self.get_current_time()
+        patch_task(self.path, task_id, initial_result, create=True)
         
         return task_id, pipeline_config, initial_result
     
@@ -376,18 +334,12 @@ class TaskRegistry:
                     step = 0
         
         # 读取缓存文件（使用绝对路径）
-        cache_path = settings.CACHE_DIR
-        cache_file_prefix = "dataflow_cache_step"
-        cache_file = os.path.join(cache_path, f"{cache_file_prefix}_step{step}.jsonl")
-        
+        cache_path = os.path.join(settings.CACHE_DIR, f"{task_id}_output")
+        cache_file = os.path.join(cache_path, f"dataflow_cache_step_step{step+1}.jsonl")
         sample_data = []
         total_count = 0
         file_exists = False
-        
-        # 如果当前 step 的文件不存在，尝试读取上一步的文件
-        if not os.path.exists(cache_file) and step > 0:
-            cache_file = os.path.join(cache_path, f"{cache_file_prefix}_step{step-1}.jsonl")
-        
+
         if os.path.exists(cache_file):
             file_exists = True
             try:
@@ -468,9 +420,7 @@ class TaskRegistry:
         
         task_id, pipeline_config, initial_result = self.start_execution(config=pipeline_config)
         if pipeline_id:
-            data = self._read()
-            data['tasks'][task_id]['pipeline_id'] = pipeline_id
-            self._write(data)
+            patch_task(self.path, task_id, {'pipeline_id': pipeline_id})
         dataflow_runtime = DataFlowEngine.decode_hashed_arguments(pipeline_config, task_id)
         
         # 提交到 Ray 异步执行
@@ -511,7 +461,7 @@ class TaskRegistry:
         
         # 检查任务状态
         status = task_record.get("status", "pending")
-        if status in ["success", "failed", "cancelled"]:
+        if status in ["success", "completed", "failed", "cancelled"]:
             logger.warning(f"Task {task_id} is already {status}, cannot kill")
             return False
         
@@ -535,8 +485,7 @@ class TaskRegistry:
                         op_info["completed_at"] = now
             
             # 4. 强制写回磁盘（覆盖式更新）
-            data["tasks"][task_id] = task_record
-            self._write(data)
+            patch_task(self.path, task_id, task_record)
             
             logger.info(f"Task {task_id} killed. Ray_success: {killed_via_ray}")
             return True
@@ -560,8 +509,7 @@ class TaskRegistry:
                             op_info["status"] = "cancelled"
                             op_info["completed_at"] = now
                 
-                data["tasks"][task_id] = task_record
-                self._write(data)
+                patch_task(self.path, task_id, task_record)
                 logger.info(f"Task {task_id} status updated to cancelled despite error")
                 return True
             except Exception as update_error:

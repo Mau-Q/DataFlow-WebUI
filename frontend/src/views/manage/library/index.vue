@@ -55,6 +55,7 @@
                     </form>
                 </details>
                 <details class="advanced"><summary>数据集详情</summary><dl><dt>ID</dt><dd>{{ selected.id }}</dd><dt>字段</dt><dd>{{ (selected.fields || Object.keys(sourceRows[0] || {})).join(' · ') }}</dd><template v-if="selected.root"><dt>位置</dt><dd>{{ selected.root }}</dd></template><template v-if="selected.hash"><dt>哈希</dt><dd>{{ selected.hash }}</dd></template></dl><p v-if="selected.description">{{ selected.description }}</p><ul v-if="!isSources"><li v-for="(record, i) in selected.imports" :key="i">{{ record.filename }}：新增 {{ record.added }} 条，跳过 {{ record.duplicates_skipped }} 条</li></ul></details>
+                <dataset-lifecycle v-if="!isSources" :key="selected.id" :draft="selected" @updated="reload" @forked="draftForked" />
             </section>
             <section v-else class="empty"><h2>选择一个数据集</h2><p>在左侧选择，查看文件或样本内容。</p></section>
         </div>
@@ -87,9 +88,10 @@
 import axios from 'axios'
 import { mapState } from 'pinia'
 import { useTheme } from '@/stores/theme'
+import DatasetLifecycle from '@/components/manage/library/DatasetLifecycle.vue'
 import SourceDatasetImport from '@/components/manage/library/SourceDatasetImport.vue'
 export default {
-    components: { SourceDatasetImport },
+    components: { SourceDatasetImport, DatasetLifecycle },
     props: { mode: { type: String, required: true } },
     data: () => ({ records: [], materials: [], selected: null, sourceRows: [], sourceIndex: 0, offset: 0, search: '', busy: false, loading: false, error: '', notice: '', dialogError: '', showCreate: false, showImport: false, mediaBindings: '{}', mediaRefs: [], mediaChoices: {}, draftForm: { name: '', modality: 'text', training_type: 'sft', description: '' }, loadVersion: 0, pendingReload: false, fileMetadata: null }),
     computed: {
@@ -108,6 +110,7 @@ export default {
     mounted() { this.reload() },
     activated() { if (!this.loading && !this.busy) this.reload() },
     methods: {
+        async draftForked(draft) { this.offset = 0; await this.action(async () => { await this.loadLists(); await this.loadSelected(draft.id) }) },
         modalityLabel(value) { return value === 'image_text' ? '图文' : '文本' },
         roleLabel(role) { return { user: '用户', assistant: '回答', system: '系统', tool: '工具' }[role] || role },
         messageText(content) { return typeof content === 'string' ? content : (content || []).filter(b => b.type === 'text').map(b => b.text).join('\n') },

@@ -1,3 +1,4 @@
+from app.services.task_artifacts import with_task_artifacts, capture_responses
 from dataflow.serving import APILLMServing_request
 from dataflow.utils.text2sql.database_manager import DatabaseManager
 from dataflow.utils.storage import FileStorage
@@ -180,7 +181,7 @@ class DataFlowEngine:
     def __init__(self):
         self.execution_map : Dict[str, ExecutionStatus] = {}
         
-    def init_serving_instance(self, serving_id: Any, is_embedding: bool = False) -> APILLMServing_request:
+    def init_serving_instance(self, serving_id: Any, is_embedding: bool = False, max_retries: int | None = None, snapshot: dict | None = None) -> APILLMServing_request:
         """初始化 Serving 实例"""
         try:
             params_dict = {}
@@ -231,9 +232,16 @@ class DataFlowEngine:
                     if params['name'] != 'api_key':
                         params_dict[params['name']] = params.get('value') if params.get('value') is not None else params.get('default_value')
                 
+                if snapshot:
+                    key_name = params_dict.get('key_name_of_api_key')
+                    params_dict = dict(snapshot['parameters'])
+                    if key_name:
+                        params_dict['key_name_of_api_key'] = key_name
                 params_dict = expand_serving_configs(params_dict)
+                if max_retries is not None:
+                    params_dict["max_retries"] = max_retries
                 logger.info(f"Initializing serving: {actual_serving_id}")
-                os.environ[key_name_var] = api_key_val
+                os.environ[key_name_var] = api_key_val or os.environ.get(key_name_var, "")
                 serving_instance = SERVING_CLS_REGISTRY[serving_info['cls_name']](**params_dict)
                 
             return serving_instance
@@ -296,6 +304,8 @@ class DataFlowEngine:
                 )
             
             dataset = container.dataset_registry.get(input_dataset_id)
+            if not dataset and pipeline_config.get('execution_options', {}).get('input_snapshot'):
+                dataset = {'root': pipeline_config['execution_options']['input_snapshot']['path']}
             if not dataset:
                 raise DataFlowEngineError(
                     f"Dataset not found",
@@ -312,8 +322,8 @@ class DataFlowEngine:
             
             dataflow_runtime["storage"] = {
                 "type": "file",
-                "first_entry_file_name": os.path.abspath(dataset['root']),
-                "cache_path": os.path.join(settings.BASE_DIR, "cache_local", f"{task_id}_output"),
+                "first_entry_file_name": os.path.abspath(pipeline_config.get("execution_options", {}).get("input_snapshot", {}).get("path") or dataset['root']),
+                "cache_path": os.path.join(settings.CACHE_DIR, f"{task_id}_output"),
                 "file_name_prefix": "dataflow_cache_step",
                 "cache_type": "jsonl",
             }
@@ -423,6 +433,7 @@ class DataFlowEngine:
         return dataflow_runtime
                             
     
+    @with_task_artifacts
     def run(self, pipeline_config: Dict[str, Any], task_id: str, execution_path: Optional[str] = None) -> Dict[str, Any]:
         """
         执行 Pipeline
@@ -458,20 +469,8 @@ class DataFlowEngine:
             if not execution_path:
                 return
             try:
-                import json
-                with open(execution_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                if task_id in data.get("tasks", {}):
-                    if status:
-                        data["tasks"][task_id]["status"] = status
-                    if partial_output:
-                        if "output" not in data["tasks"][task_id]:
-                             data["tasks"][task_id]["output"] = {}
-                        # 更新 output 中的内容
-                        data["tasks"][task_id]["output"].update(partial_output)
-                        
-                    with open(execution_path, "w", encoding="utf-8") as f:
-                        json.dump(data, f, indent=2)
+                from app.services.task_store import patch_task
+                patch_task(execution_path, task_id, {**({"status": status} if status else {}), "logs": list(logs), "started_at": started_at}, {"operator_logs": operator_logs, **(partial_output or {})})
             except Exception as e:
                 logger.error(f"Failed to update execution status: {e}")
 
@@ -509,6 +508,8 @@ class DataFlowEngine:
                     )
                 
                 dataset = container.dataset_registry.get(input_dataset_id)
+                if not dataset and pipeline_config.get('execution_options', {}).get('input_snapshot'):
+                    dataset = {'root': pipeline_config['execution_options']['input_snapshot']['path']}
                 if not dataset:
                     raise DataFlowEngineError(
                         f"数据集未找到",
@@ -524,7 +525,7 @@ class DataFlowEngine:
                 logger.info(f"Cache directory: {cache_path_output}, exists: {os.path.exists(cache_path_output)}")
                 
                 storage = FileStorage(
-                    first_entry_file_name=os.path.abspath(dataset['root']),
+                    first_entry_file_name=os.path.abspath(pipeline_config.get("execution_options", {}).get("input_snapshot", {}).get("path") or dataset['root']),
                     cache_path=cache_path_output,
                     file_name_prefix="dataflow_cache_step",
                     cache_type="jsonl",
@@ -605,7 +606,7 @@ class DataFlowEngine:
                                 logger.info(f"Operator {op_name}: initializing serving {serving_id}")
                                 add_log("init", f"[{datetime.now().isoformat()}]   - Initializing LLM serving: {serving_id}", op_key)
                                 if serving_id not in serving_instance_map:
-                                    serving_instance_map[serving_id] = self.init_serving_instance(serving_id)
+                                    serving_instance_map[serving_id] = capture_responses(self.init_serving_instance(serving_id, max_retries=pipeline_config.get("execution_options", {}).get("max_attempts"), snapshot=pipeline_config.get("execution_options", {}).get("serving_snapshots", {}).get(serving_id)), pipeline_config, task_id)
                                 param_value = serving_instance_map[serving_id]
 
                             elif param_name == "embedding_serving":
@@ -754,6 +755,7 @@ class DataFlowEngine:
             logger.info(f"Executing {len(run_op)} operators...")
             
             execution_results = []
+            output["execution_results"] = execution_results
             for op_idx, (operator, run_params, op_name, op_key) in enumerate(run_op):
                 try:
                     run_params["storage"] = storage.step()
@@ -849,6 +851,7 @@ class DataFlowEngine:
                     
                     
                     execution_results.append({
+                        "file_path": f_path,
                         "operator": op_name,
                         "status": "completed",
                         "index": op_idx

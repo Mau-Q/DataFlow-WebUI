@@ -1,3 +1,4 @@
+from app.services.task_artifacts import with_task_artifacts, capture_responses
 from app.core.logger_setup import get_logger
 from dataflow.serving import APILLMServing_request
 from dataflow.utils.text2sql.database_manager import DatabaseManager
@@ -164,6 +165,7 @@ def parse_and_clean_logs(log_content: str) -> tuple[List[str], Optional[str], Op
     return cleaned_lines, last_progress, last_percentage
 
 
+@with_task_artifacts
 def dataflow_pipeline_execute(pipeline_config: Dict[str, Any], dataflow_runtime: Dict[str, Any], task_id: str, execution_path: str):
     """
     Execute a DataFlow pipeline
@@ -192,20 +194,8 @@ def dataflow_pipeline_execute(pipeline_config: Dict[str, Any], dataflow_runtime:
         if not execution_path:
             return
         try:
-            import json
-            with open(execution_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if task_id in data.get("tasks", {}):
-                if status:
-                    data["tasks"][task_id]["status"] = status
-                if partial_output:
-                    if "output" not in data["tasks"][task_id]:
-                             data["tasks"][task_id]["output"] = {}
-                    # 更新 output 中的内容
-                    data["tasks"][task_id]["output"].update(partial_output)
-                    
-                with open(execution_path, "w", encoding="utf-8") as f:
-                    json.dump(data, f, indent=2)
+            from app.services.task_store import patch_task
+            patch_task(execution_path, task_id, {**({"status": status} if status else {}), "logs": list(logs), "started_at": started_at}, {"operator_logs": operator_logs, **(partial_output or {})})
         except Exception as e:
             logger.error(f"Failed to update execution status: {e}")
 
@@ -353,12 +343,14 @@ def dataflow_pipeline_execute(pipeline_config: Dict[str, Any], dataflow_runtime:
                                     
                                     from app.services.serving_params import expand_serving_configs
                                     params_dict = expand_serving_configs(params_dict)
+                                    if "max_attempts" in pipeline_config.get("execution_options", {}):
+                                        params_dict["max_retries"] = pipeline_config["execution_options"]["max_attempts"]
                                     logger.info(f"Initializing serving: {actual_serving_id}")
-                                    os.environ[key_name_var] = api_key_val
+                                    os.environ[key_name_var] = api_key_val or os.environ.get(key_name_var, "")
                                     serving_instance = APILLMServing_request(**params_dict)
                                 else:
                                     raise DataFlowEngineError(f"Unsupported serving class: {serving_info['cls_name']}")
-                                serving_instance_map[serving_id] = serving_instance
+                                serving_instance_map[serving_id] = capture_responses(serving_instance, pipeline_config, task_id)
                             param_value = serving_instance_map[serving_id]
 
                         elif param_name == "embedding_serving":
@@ -394,7 +386,7 @@ def dataflow_pipeline_execute(pipeline_config: Dict[str, Any], dataflow_runtime:
                                     from app.services.serving_params import expand_serving_configs
                                     params_dict = expand_serving_configs(params_dict)
                                     logger.info(f"Initializing serving: {actual_serving_id}")
-                                    os.environ[key_name_var] = api_key_val
+                                    os.environ[key_name_var] = api_key_val or os.environ.get(key_name_var, "")
                                     serving_instance = APILLMServing_request(**params_dict)
                                 else:
                                     raise DataFlowEngineError(f"Unsupported serving class: {serving_info['cls_name']}")
@@ -564,6 +556,7 @@ def dataflow_pipeline_execute(pipeline_config: Dict[str, Any], dataflow_runtime:
         logger.info(f"Executing {len(run_op)} operators...")
         
         execution_results = []
+        output["execution_results"] = execution_results
         for op_idx, (operator, run_params, op_name, op_key) in enumerate(run_op):
             try:
                 run_params["storage"] = storage.step()
@@ -675,6 +668,7 @@ def dataflow_pipeline_execute(pipeline_config: Dict[str, Any], dataflow_runtime:
                 })
                 
                 execution_results.append({
+                    "file_path": f_path,
                     "operator": op_name,
                     "status": "completed",
                     "index": op_idx
@@ -906,13 +900,8 @@ class RayPipelineExecutor:
             
             # 更新状态为 running
             try:
-                with open(pipeline_execution_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                if task_id in data.get("tasks", {}):
-                    data["tasks"][task_id]["status"] = "running"
-                    data["tasks"][task_id]["started_at"] = datetime.now().isoformat()
-                    with open(pipeline_execution_path, "w", encoding="utf-8") as f:
-                        json.dump(data, f, indent=2)
+                from app.services.task_store import patch_task
+                patch_task(pipeline_execution_path, task_id, {"status": "running", "started_at": datetime.now().isoformat()})
             except Exception as e:
                 logger.error(f"[Ray Worker] Failed to update execution status to running: {e}")
                         
@@ -921,12 +910,7 @@ class RayPipelineExecutor:
             
             # 更新执行记录
             try:
-                with open(pipeline_execution_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                if task_id in data.get("tasks", {}):
-                    data["tasks"][task_id].update(result)
-                    with open(pipeline_execution_path, "w", encoding="utf-8") as f:
-                        json.dump(data, f, indent=2)
+                patch_task(pipeline_execution_path, task_id, result)
             except Exception as e:
                 logger.error(f"[Ray Worker] Failed to update execution result: {e}")
             
@@ -939,7 +923,7 @@ class RayPipelineExecutor:
             logger.error(traceback.format_exc())
             
             # 返回失败结果
-            return {
+            result = {
                 "task_id": task_id,
                 "status": "failed",
                 "output": {
@@ -951,6 +935,10 @@ class RayPipelineExecutor:
                 "completed_at": datetime.now().isoformat()
             }
     
+            from app.services.task_store import patch_task
+            patch_task(pipeline_execution_path, task_id, result)
+            return result
+
     async def submit_execution(
         self,
         pipeline_config: Dict[str, Any],

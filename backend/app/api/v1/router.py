@@ -29,3 +29,6 @@ api_router.include_router(json_schemas.router, prefix="/json_schemas")
 
 from .endpoints import data_library
 api_router.include_router(data_library.router, prefix="/library")
+
+from .endpoints import generation
+api_router.include_router(generation.router, prefix='/generation')

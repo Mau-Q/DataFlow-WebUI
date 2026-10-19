@@ -56,6 +56,7 @@ class PipelineInputDataset(BaseModel):
 
 class PipelineConfig(BaseModel):
     """Pipeline配置模型"""
+    execution_options: Dict[str, Any] = Field(default_factory=dict)
     file_path: str = Field(..., description="Pipeline文件路径")
     input_dataset: Union[str, PipelineInputDataset] = Field(..., description="输入数据集ID或配置")
     # 用 list 的顺序代表算子执行顺序
