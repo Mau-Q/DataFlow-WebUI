@@ -294,6 +294,7 @@ export const useDataflow = defineStore('useDataflow', () => {
     }
 
     return {
+        operatorStyleDict,
         operators,
         groupOperators,
         getOperators,

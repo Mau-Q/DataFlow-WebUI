@@ -143,6 +143,7 @@ const displayData = computed(() => ({
     compact: !showFields.value
 }))
 const getNodeDetail = async () => {
+    if (props.data.externalTemplate) return
     if (!props.data || !props.data.name) return
     loading.value = true
     const res = await $api.datasets.get_dataset_columns(props.data.id).catch(() => {

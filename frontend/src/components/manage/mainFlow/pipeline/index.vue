@@ -108,7 +108,7 @@ import pipelinePanel from '@/components/manage/mainFlow/panels/piplinePanel.vue'
 import execLabel from '@/components/manage/mainFlow/pipeline/execLabel.vue'
 
 import pipelineIcon from '@/assets/flow/pipeline.svg'
-import { PLATFORM_PIPELINES } from '@/hooks/dataflow/platformGraph'
+import { PLATFORM_PIPELINES } from '@/hooks/dataflow/platformEntries'
 
 export default {
     name: 'pipeline',

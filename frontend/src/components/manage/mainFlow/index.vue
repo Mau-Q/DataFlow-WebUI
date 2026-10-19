@@ -3,7 +3,7 @@
         <VueFlow class="main-flow" :id="id" v-model:nodes="thisNodes" v-model:edges="thisEdges" @dragover="dragOver"
             @drop="drop" @dragleave="dragLeave" @connect="$emit('connect', $event)"
             @connect-end="$emit('connect-end', $event)" @connect-start="$emit('connect-start', $event)"
-            @node-click="selectOperator">
+            @node-click="selectOperator" @nodes-initialized="$emit('nodes-ready')">
             <Background variant="dots" gap="20" size="3" :color="'rgba(200, 200, 200, 0.3)'" :style="{
                 backgroundColor: isDragOver ? 'rgba(87, 99, 206, 0.05)' : 'transparent',
                 transition: 'background-color 0.2s ease'
@@ -53,6 +53,7 @@ const _theme = useTheme()
 const theme = computed(() => _theme.theme)
 const emits = defineEmits([
     'switch-database',
+    'nodes-ready',
     'update:nodes',
     'update:edges',
     'connect',
@@ -86,6 +87,7 @@ watch(
     () => props.nodes,
     (newNodes) => {
         thisNodes.value = newNodes
+        if (selectedOperator.value && !newNodes.some(n => n.id === selectedOperator.value.id)) closeInspector()
     }
 )
 watch(

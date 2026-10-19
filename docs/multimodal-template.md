@@ -1,6 +1,6 @@
 # 图片 VQA 模板
 
-入口：画布顶部「Pipeline → 自定义 Pipeline → 图片 VQA」，或 `/#/m?workflow=multimodal`。点击节点查看参数，通过「配置与任务」编辑，保存后自动更新画布。原 `/#/m/multimodal` 独立配置页继续兼容。
+入口：画布顶部「Pipeline → 自定义 Pipeline → 图片 VQA」，或 `/#/m?workflow=multimodal`。点击节点使用原生参数面板编辑，原生「保存」固定参数与节点位置；图片、视觉服务与输出草稿从顶部设置链接或图片节点 Switch 配置。原 `/#/m/multimodal` 独立配置页继续兼容。
 
 这是 M5 的配置功能。当前没有经过验证的视觉服务，也没有启用 MM 执行桥接；任何提交都会返回 409，不创建排队任务，不调用模型。填写视觉服务引用不会解除拦截。
 
@@ -16,7 +16,7 @@
 
 四步顺序固定为生成问题、生成答案、结构检查、训练格式整理。可以修改中间输出字段，但必须同步更新下游输入及 Prompt 变量绑定；训练输出固定为 `messages`。输出契约为 `messages+media_bindings`，媒体通过材料 ID 显式关联，共用图文草稿与发布打包边界。此处保存的是未来产物契约，没有生成实际样本。
 
-模板参考独立 DataFlow-MM 的 `image_vqa.py` 和 `PromptedVQAGenerator`，并改为两份明确提示词。MM 步骤是外部模板元数据，未注册到核心算子表，也不导入 MM 包。页面流程展示和编辑共用同一份 `config.steps`；这是模板专用布局，不进入核心 Pipeline 画布。
+模板参考独立 DataFlow-MM 的 `image_vqa.py` 和 `PromptedVQAGenerator`，并改为两份明确提示词。MM 步骤是外部模板元数据，未注册到核心算子表，也不导入 MM 包。页面流程展示和编辑共用同一份 `config.steps`；模板通过薄适配复用原生 mainFlow、operatorNode 和参数面板；不会写入核心 PipelineRegistry，也不会查询或注册外部类到核心算子表。
 
 ## 存储与备份
 

@@ -168,6 +168,7 @@ const paramsWrapper = (objs) => {
     return objs
 }
 const getNodeDetail = async () => {
+    if (props.data.externalTemplate) return // Already adapted; no core lookup or parameter coercion.
     if (!props.data || !props.data.name || !props.data.flowId) return
     if (!thisData.value._cache_parameter) {
         loading.value = true

@@ -1,16 +1,16 @@
 <template>
-    <router-link v-if="!$route.query.workflow && currentPipeline?.tags?.includes('platform-text')" :to="{path:'/m/generation',query:{pipeline:currentPipeline.id}}" class="wizard-return">返回文本生成向导</router-link>
+    <router-link v-if="currentPipeline?.tags?.includes('platform-text')" :to="{path:'/m/generation',query:{pipeline:currentPipeline.id}}" class="wizard-return">返回文本生成向导</router-link>
+    <router-link v-if="isMM" :to="{path:'/m/multimodal',query:{config:mmRecord?.id}}" class="wizard-return">图片、服务与输出设置 · MM 未启用运行</router-link>
     <div class="df-default-container" :class="[{ dark: theme === 'dark', 'show-pipeline': show.pipeline, 'show-chat': show.chat }]">
         <pipeline v-model="show.pipeline" v-model:loading="lock.loading" v-model:pipeline="currentPipeline"
             :flow-id="flowId" class="df-pipeline-container" @confirm-dataset="confirmDataset($event, true)"
             @select-pipeline="selectPipelineCallback"></pipeline>
         <div class="df-flow-container">
-            <PlatformPipelineCanvas v-if="$route.query.workflow" :key="$route.query.workflow" :workflow="$route.query.workflow" @open-pipelines="show.pipeline = !show.pipeline" />
-            <mainFlow v-show="!$route.query.workflow" :id="flowId" v-model:nodes="nodes" v-model:edges="edges" @switch-database="show.dataset = true"
+            <mainFlow :id="flowId" v-model:nodes="nodes" v-model:edges="edges" @switch-database="openInputSettings"
                 @connect="onConnect" @connect-start="onConnectStart" @connect-end="onConnectEnd"
                 @update-run-value="useEdgeSync.syncRunValue($event, flowId)" @show-details="showExecDetails"
-                @download-data="downloadData" @click="show.pipeline = false"></mainFlow>
-            <div v-if="!$route.query.workflow" class="control-menu-block">
+                @download-data="downloadData" @nodes-ready="fitPlatformWhenReady" @click="show.pipeline = false"></mainFlow>
+            <div class="control-menu-block">
                 <fv-command-bar :theme="theme" v-model="value" :options="options" :item-border-radius="30"
                     :background="theme === 'dark' ? '' : 'rgba(250, 250, 250, 0.8)'" class="command-bar">
                     <template v-slot:optionItem="x">
@@ -26,7 +26,7 @@
                     </template>
                     <template v-slot:right-space>
                         <div class="command-bar-right-space">
-                            <fv-toggle-switch :theme="theme" v-model="isAutoConnectionModel" :width="75"
+                            <fv-toggle-switch v-if="!isMM" :theme="theme" v-model="isAutoConnectionModel" :width="75"
                                 :on="local('Auto')" :off="local('Manual')" :insideContent="true" :height="30"
                                 :off-foreground="theme === 'dark' ? 'rgba(255, 255, 255, 1)' : ''"
                                 borderColor="rgba(235, 235, 235, 1)" ring-background="rgba(180, 180, 180, 1)"
@@ -37,7 +37,7 @@
                                 <i class="ms-Icon ms-Icon--GridViewMedium" style="margin-right: 5px"></i>
                                 <p>{{ local('Auto Layout') }}</p>
                             </fv-button>
-                            <fv-button :theme="currentServing ? 'dark' : theme" :background="currentServing
+                            <fv-button v-if="!isMM" :theme="currentServing ? 'dark' : theme" :background="currentServing
                                 ? 'linear-gradient(135deg, rgba(69, 98, 213, 1), #ff0080, #ff8c00)'
                                 : ''
                                 " border-radius="30" :disabled="!lock.serving" style="width: 30px; height: 30px"
@@ -147,10 +147,10 @@ import { useDataflow } from '@/stores/dataflow'
 import { useVueFlow } from '@vue-flow/core'
 import { useEdgeSync } from '@/hooks/dataflow/useEdgeSync'
 import { usePipelineOperation } from '@/hooks/dataflow/usePipelineOperation'
+import { nativeMMGraph, readNativeMM } from '@/hooks/dataflow/nativeMM'
 import { buildSnakeLayout } from '@/hooks/dataflow/useAutoLayout'
 
 import mainFlow from '@/components/manage/mainFlow/index.vue'
-import PlatformPipelineCanvas from '@/components/manage/platform/PlatformPipelineCanvas.vue'
 import pipeline from '@/components/manage/mainFlow/pipeline/index.vue'
 import pipelinePanel from '@/components/manage/mainFlow/panels/piplinePanel.vue'
 import datasetPanel from '@/components/manage/mainFlow/panels/datasetPanel/index.vue'
@@ -168,6 +168,7 @@ import taskIcon from '@/assets/flow/task.svg'
 import saveIcon from '@/assets/flow/save.svg'
 
 import axios from '@/axios/config'
+import http from 'axios'
 
 // 聊天面板宽度持久化（跨刷新记住用户拖拽后的宽度）
 const CHAT_WIDTH_KEY = 'df_chat_width'
@@ -186,7 +187,6 @@ export default {
     name: "dataflowPage",
     components: {
         mainFlow,
-        PlatformPipelineCanvas,
         pipeline,
         pipelinePanel,
         datasetPanel,
@@ -200,6 +200,8 @@ export default {
     data() {
         return {
             flowId: 'df-main-flow',
+            mmRecord: null,
+            platformFitKey: '',
             value: null,
             options: [
                 {
@@ -207,7 +209,7 @@ export default {
                     icon: 'Play',
                     img: databaseIcon,
                     func: () => {
-                        this.show.dataset = true
+                        this.openInputSettings()
                     }
                 },
                 {
@@ -220,8 +222,9 @@ export default {
                 {
                     name: () => this.local('Operator'),
                     img: operatorIcon,
+                    show: () => !this.isMM,
                     func: () => {
-                        this.show.operator = true
+                        if (!this.isMM) this.show.operator = true
                     }
                 },
                 {
@@ -291,7 +294,9 @@ export default {
     },
     watch: {
         $route(to, from) {
-            if (!to.query.workflow && to.path.replace(/\/$/, '') === '/m' && to.query.pipeline && (from.path !== to.path || from.query.pipeline !== to.query.pipeline)) this.loadLinkedPipeline(to.query.pipeline)
+            if (to.path.replace(/\/$/, '') !== '/m') return
+            if (to.query.workflow && to.fullPath !== from.fullPath) this.loadPlatformWorkflow()
+            else if (!to.query.workflow && to.query.pipeline && (from.path !== to.path || from.query.pipeline !== to.query.pipeline)) this.loadLinkedPipeline(to.query.pipeline)
         },
         sourceDatabase: {
             handler(newVal, oldVal) {
@@ -361,6 +366,7 @@ export default {
         }
     },
     computed: {
+        isMM() { return this.$route.query.workflow === 'multimodal' },
         ...mapState(useAppConfig, ['local']),
         ...mapState(useTheme, ['theme', 'color', 'gradient']),
         ...mapState(useDataflow, [
@@ -371,7 +377,9 @@ export default {
             'groupOperators',
             'tasks',
             'execution',
-            'agentSyncPayload'
+            'agentSyncPayload',
+            'pipelines',
+            'operatorStyleDict'
         ]),
         flatFormatedOperators() {
             let operators = []
@@ -412,7 +420,8 @@ export default {
         this.setViewport()
         this.getServing()
         this.getPromptInfo()
-        if (!this.$route.query.workflow && this.$route.query.pipeline) this.loadLinkedPipeline(this.$route.query.pipeline)
+        if (this.$route.query.workflow) this.loadPlatformWorkflow()
+        else if (this.$route.query.pipeline) this.loadLinkedPipeline(this.$route.query.pipeline)
     },
     beforeUnmount() {
         // 兜底清理拖拽监听，避免组件销毁后仍挂在 window 上
@@ -420,6 +429,87 @@ export default {
         window.removeEventListener('mouseup', this.stopChatResize)
     },
     methods: {
+        async fitPlatformWhenReady() {
+            if (!this.$route.query.workflow) return
+            const flow = useVueFlow(this.flowId)
+            const count = this.isMM ? this.mmRecord?.config.steps.length : this.currentPipeline?.config?.operators.length
+            if (flow.nodes.value.length !== count + 1) return
+            const key = this.$route.fullPath + flow.nodes.value.map(n => n.id).join(',')
+            if (key === this.platformFitKey) return
+            this.platformFitKey = key
+            await this.$nextTick()
+            flow.fitView({padding:0.15,duration:0})
+        },
+        async platformRequest(method, path, data) {
+            const r = await http({method, url:'/api/v1'+path, data})
+            if (!r.data.success) throw new Error(r.data.message || r.data.detail)
+            return r.data.data
+        },
+        async loadPlatformWorkflow() {
+            if (this.loadingPlatform) return
+            this.loadingPlatform = true
+            this.platformFitKey = ''
+            const targetRoute = this.$route.fullPath
+            const workflow = this.$route.query.workflow
+            const id = this.$route.query.config
+            try {
+                this.clearExecution()
+                this.sourceDatabase = null
+                if (workflow === 'text') {
+                    await Promise.all([this.getDatasets(), this.getOperators('zh'), this.getPipelines()])
+                    if (this.$route.fullPath !== targetRoute) return
+                    const saved = this.pipelines.find(p => p.tags?.includes('platform-text'))
+                    if (id || saved) await this.loadLinkedPipeline(id || saved.id)
+                    else {
+                        const t = await this.platformRequest('get', '/generation/template')
+                        this.currentPipeline = {...t,id:null,name:'文本生成',tags:['platform-text']}
+                        await this.recoverPipeline()
+                    }
+                } else if (workflow === 'multimodal') {
+                    const records = await this.platformRequest('get', '/multimodal/configs')
+                    const key = id || records[0]?.id
+                    const record = await this.platformRequest('get', key ? '/multimodal/configs/'+key : '/multimodal/template')
+                    if (this.$route.fullPath !== targetRoute) return
+                    this.mmRecord = record
+                    this.currentPipeline = {id:record.id,name:record.name,tags:['platform-mm']}
+                    const flow = useVueFlow(this.flowId)
+                    flow.$reset()
+                    await this.$nextTick()
+                    const graph = nativeMMGraph(record.config, this.flowId, this.operatorStyleDict)
+                    flow.addNodes(graph.nodes)
+                    flow.addEdges(graph.edges)
+                }
+                await this.$nextTick()
+                if (workflow === 'multimodal') useVueFlow(this.flowId).fitView({padding:0.15,duration:300})
+                else await this.autoLayoutPipeline()
+            } catch (e) { this.$barWarning(e.message, {status:'error'}) }
+            finally {
+                this.loadingPlatform = false
+                if (this.$route.path.replace(/\/$/, '') === '/m' && this.$route.query.workflow && this.$route.fullPath !== targetRoute) this.loadPlatformWorkflow()
+            }
+        },
+        openInputSettings() {
+            if (this.isMM) this.$router.push({path:'/m/multimodal',query:{config:this.mmRecord?.id}})
+            else this.show.dataset = true
+        },
+        async saveMM() {
+            try {
+                const flow = useVueFlow(this.flowId)
+                const expected = this.mmRecord.config.steps.map((s,i) => `${i ? 'mm-'+this.mmRecord.config.steps[i-1].id : 'db-node'}:mm-${s.id}`)
+                if (flow.edges.value.length !== expected.length || !expected.every(key => flow.edges.value.some(e => `${e.source}:${e.target}` === key))) throw new Error('MM 模板执行顺序固定，请重新打开配置')
+                const config = readNativeMM(this.mmRecord.config, flow.nodes.value)
+                this.mmRecord = await this.platformRequest('post','/multimodal/configs',{
+                    name:this.mmRecord.name,config,config_id:this.mmRecord.id || null
+                })
+                for (const s of this.mmRecord.config.steps) {
+                    const node = flow.findNode('mm-'+s.id)
+                    flow.updateNodeData(node.id, {...node.data,pipelineRole:`${node.data.status}：${Object.values(s.inputs).join(' + ')} → ${s.output}。`})
+                }
+                this.$barWarning('MM 配置已保存；未做真实运行验证', {status:'correct'})
+                return true
+            } catch (e) { this.$barWarning(e.message, {status:'warning'}); return false }
+        },
+
         async loadLinkedPipeline(id) {
             if (this.loadingLinkedPipeline) return
             this.loadingLinkedPipeline = true
@@ -593,6 +683,7 @@ export default {
             return nodeOperators
         },
         async handleSaveClick() {
+            if (this.isMM) return await this.saveMM()
             if (!this.currentPipeline || !this.currentPipeline.id) {
                 this.show.pipelinePanel = true
                 return false
@@ -606,6 +697,7 @@ export default {
             return await this.savePipeline()
         },
         async savePipeline() {
+            if (this.nodes.some(n => n.data?.externalTemplate)) { this.$barWarning('外部 MM 配置不能写入核心 Pipeline', {status:'warning'}); return false }
             if (!this.sourceDatabase) {
                 this.$barWarning(this.local('Please select a dataset'), {
                     status: 'warning'
@@ -666,7 +758,7 @@ export default {
                 })
             return true
         },
-        addPipeline(name) {
+        async addPipeline(name) {
             if (!this.sourceDatabase) {
                 this.$barWarning(this.local('Please select a dataset'), {
                     status: 'warning'
@@ -682,11 +774,26 @@ export default {
                 })
                 return
             }
+            if (this.currentPipeline?.tags?.includes('platform-text')) {
+                try {
+                    this.currentPipeline = await this.platformRequest('post','/generation/configs', {
+                        name, config:{...this.currentPipeline.config,
+                            input_dataset:{id:this.sourceDatabase.id,location:[dbNode.position.x,dbNode.position.y]},
+                            operators:nodeOperators}
+                    })
+                    this.show.pipelinePanel = false
+                    await this.getPipelines()
+                    this.$barWarning(this.local('Pipeline has been created'), {status:'correct'})
+                } catch (e) { this.$barWarning(e.message, {status:'warning'}) }
+                return
+            }
             this.$api.pipelines
                 .create_pipeline({
                     name: name,
+                    tags: this.currentPipeline?.tags?.includes('platform-text') ? ['platform-text','sft'] : [],
                     config: {
                         file_path: '',
+                        execution_options: this.currentPipeline?.config?.execution_options || {},
                         input_dataset: {
                             id: this.sourceDatabase.id,
                             location: [dbNode.position.x, dbNode.position.y],
@@ -709,6 +816,12 @@ export default {
                 })
         },
         async executePipeline() {
+            if (this.isMM) {
+                try { await this.platformRequest('post', `/multimodal/configs/${this.mmRecord.id}/submit`) }
+                catch (e) { this.$barWarning(e.message, {status:'warning'}); this.lock.running = true }
+                return
+            }
+            if (this.nodes.some(n => n.data?.externalTemplate)) { this.$barWarning('外部 MM 步骤不能提交到核心执行器', {status:'warning'}); this.lock.running = true; return }
             if (!this.currentPipeline || !this.currentPipeline.id) {
                 this.$barWarning(this.local('Please select a pipeline'), {
                     status: 'warning'
@@ -880,6 +993,7 @@ export default {
             })
         },
         onConnect(connection) {
+            if (this.isMM) { this.$barWarning('MM 模板步骤顺序固定，请在参数面板修改字段绑定', {status:'warning'}); return }
             const { source, sourceHandle, target, targetHandle } = connection
             let sourceHandleObj = this.useEdgeSync.decHandle(sourceHandle)
             let targetHandleObj = this.useEdgeSync.decHandle(targetHandle)
