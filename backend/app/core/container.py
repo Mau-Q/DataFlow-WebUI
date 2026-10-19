@@ -57,7 +57,7 @@ class AppContainer:
         from app.services.data_library import DataLibrary
         self.data_library = DataLibrary()
         if not is_ray_worker:
-            from app.services.simple_training import install_templates
+            from app.services.representative_training import install_templates
             install_templates(self)
 
 

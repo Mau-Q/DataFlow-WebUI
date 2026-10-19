@@ -87,11 +87,17 @@ def resolve_pipeline_resources(config):
         # Native text controls serialize untouched optional fields as empty strings.
         # Normalize only verified SFT optional slots; required field names stay strict.
         raw = op.get('params') or {}
-        if op['name'] in CONTRACTS and isinstance(raw, dict) and ('init' in raw or 'run' in raw):
+        if (op['name'] in CONTRACTS or op['name'] in {'TrainingReviewParser', 'HashDeduplicateFilter', 'TrainingPairFormatter'}) and isinstance(raw, dict) and ('init' in raw or 'run' in raw):
             normalized = {part:_items(raw.get(part)) for part in ('init','run')}
-            optional = {'init': {'llm_serving', *CONTRACTS[op['name']]}, 'run': set()}
+            optional = {'init': {'llm_serving', *CONTRACTS.get(op['name'], {}), *SCHEMA_PARAMS}, 'run': set()}
             if op['name'] == 'Text2QASampleEvaluator':
                 optional['run'] = {'input_context_key', 'input_supporting_facts_key'}
+            if op['name'] == 'APIImagePairGenerator':
+                optional['run'] = {'input_context_key'}
+            if op['name'] == 'TrainingReviewParser':
+                optional['run'] = {'input_question_key'}
+            if op['name'] == 'HashDeduplicateFilter':
+                optional['run'] = {'input_key', 'input_keys'}
             changed = False
             for part, names in optional.items():
                 for param in normalized[part]:

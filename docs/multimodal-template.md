@@ -1,8 +1,8 @@
 # 图片 VQA 模板
 
-如需实际调用 API 验收图片 SFT/DPO，使用「Pipeline → 模板」中的「最简图片 SFT」和「最简图片 DPO」。
+如需实际调用 API 验收图片 SFT/DPO，使用「Pipeline → 模板」中的「代表性图片 SFT」和「代表性图片 DPO」。
 这两条走原生任务执行器，支持输出目录、运行记录和手动收录，无需本地模型；操作见
-[四个最简 API 流程验收](../examples/simple-training/README.md)。下文描述的是仍保留的 M5 配置草稿入口。
+[四个代表性 API 流程验收](../examples/representative-training/README.md)。下文描述的是仍保留的 M5 配置草稿入口。
 
 入口：画布顶部「Pipeline → 自定义 Pipeline → 图片 VQA」，或 `/#/m?workflow=multimodal`。点击节点使用原生参数面板编辑，原生「保存」固定参数与节点位置；图片、视觉服务与输出草稿从顶部设置链接或图片节点 Switch 配置。原 `/#/m/multimodal` 独立配置页继续兼容。
 

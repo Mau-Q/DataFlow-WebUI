@@ -240,6 +240,7 @@ class DataFlowEngine:
                 params_dict = expand_serving_configs(params_dict)
                 if max_retries is not None:
                     params_dict["max_retries"] = max_retries
+                params_dict['key_name_of_api_key'] = key_name_var
                 logger.info(f"Initializing serving: {actual_serving_id}")
                 os.environ[key_name_var] = api_key_val or os.environ.get(key_name_var, "")
                 serving_instance = SERVING_CLS_REGISTRY[serving_info['cls_name']](**params_dict)
@@ -524,7 +525,11 @@ class DataFlowEngine:
                 os.makedirs(cache_path_output, exist_ok=True)
                 logger.info(f"Cache directory: {cache_path_output}, exists: {os.path.exists(cache_path_output)}")
                 
-                storage = FileStorage(
+                storage_class = FileStorage
+                if pipeline_config.get('execution_options', {}).get('representative_training'):
+                    from app.services.training_storage import TrainingFileStorage
+                    storage_class = TrainingFileStorage
+                storage = storage_class(
                     first_entry_file_name=os.path.abspath(pipeline_config.get("execution_options", {}).get("input_snapshot", {}).get("path") or dataset['root']),
                     cache_path=cache_path_output,
                     file_name_prefix="dataflow_cache_step",

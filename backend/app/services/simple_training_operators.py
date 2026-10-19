@@ -41,7 +41,7 @@ class APIImagePairGenerator(OperatorABC):
     def get_desc(lang='zh'):
         return '通过 OpenAI 兼容视觉 API 从图片生成训练候选 JSON；无需本地模型。' if lang == 'zh' else 'Generate training candidate JSON using an image API.'
 
-    def run(self, storage: DataFlowStorage, input_image_key='source', output_key='candidate'):
+    def run(self, storage: DataFlowStorage, input_image_key='source', output_key='candidate', input_context_key: str = None):
         frame = storage.read('dataframe')
         if input_image_key not in frame:
             raise ValueError(f'Missing {input_image_key}; available columns: {list(frame.columns)}')
@@ -49,11 +49,28 @@ class APIImagePairGenerator(OperatorABC):
             raise ValueError('请选择图片生成 Prompt')
         if output_key in frame:
             raise ValueError('候选输出不能覆盖已有字段')
+        if input_context_key and input_context_key not in frame:
+            raise ValueError(f'Missing {input_context_key}; available columns: {list(frame.columns)}')
         prompt = self.prompt_template.build_prompt()
-        conversations = [[{'role': 'user', 'content': [
-            {'type': 'text', 'text': prompt},
-            {'type': 'image_url', 'image_url': {'url': image_data(path)}},
-        ]}] for path in frame[input_image_key]]
+        conversations = []
+        for _, row in frame.iterrows():
+            context = row[input_context_key] if input_context_key else None
+            if input_context_key:
+                try:
+                    context = parse_candidate(context)
+                except (ValueError, TypeError):
+                    raise ValueError('上游问题或候选不是有效 JSON 对象；未调用下一步视觉 API') from None
+                if not isinstance(context.get('question'), str) or not context['question'].strip():
+                    raise ValueError('上游问题或候选缺少 question；未调用下一步视觉 API')
+            extra = '' if context is None else '\n待处理输入：\n' + (context if isinstance(context,str) else json.dumps(context,ensure_ascii=False,allow_nan=False))
+            conversations.append([{'role': 'user', 'content': [
+                {'type': 'text', 'text': prompt + extra},
+                {'type': 'image_url', 'image_url': {'url': image_data(row[input_image_key])}},
+            ]}])
+        if not conversations:
+            frame[output_key] = []
+            storage.write(frame)
+            return [output_key]
         responses = self.llm_serving.generate_from_conversations(conversations)
         if len(responses) != len(frame):
             raise ValueError('视觉 API 返回条数与输入不一致')
@@ -84,13 +101,14 @@ def parse_candidate(value):
 @OPERATOR_REGISTRY.register()
 class TrainingPairFormatter(OperatorABC):
     WEBUI_CATEGORY = ('core_text', 'refine')
-    def __init__(self, training_type='sft', modality='text', json_schema=None):
+    def __init__(self, training_type='sft', modality='text', json_schema=None, allow_empty: bool = False):
         super().__init__()
         if training_type not in {'sft', 'dpo'} or modality not in {'text', 'image_text'}:
             raise ValueError('训练类型或模态无效')
         if json_schema is None:
             raise ValueError('请选择候选 JSON Schema')
         self.training_type, self.modality = training_type, modality
+        self.allow_empty = allow_empty
         cls = validators.validator_for(json_schema)
         cls.check_schema(json_schema)
         self.validator = cls(json_schema)
@@ -135,7 +153,7 @@ class TrainingPairFormatter(OperatorABC):
             except Exception as exc:
                 # Avoid echoing API bodies, model reasoning, or any credentials.
                 raise ValueError(f'第 {len(rows)+1} 条候选不符合训练契约（{type(exc).__name__}）；请检查上一步候选和 Schema') from None
-        if not rows:
+        if not rows and not self.allow_empty:
             raise ValueError('输入为空，不能生成空训练数据集')
         # Preserve intermediate columns for field-flow inspection; finalization
         # extracts the explicit training_sample rather than guessing columns.

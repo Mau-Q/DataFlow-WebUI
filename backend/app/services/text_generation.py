@@ -71,10 +71,15 @@ class TextGeneration:
         if type(retries) is not int or not 0 <= retries <= 5:
             errors.append('额外重试次数必须为 0–5 的整数')
         serving_snapshots = {}
+        representative = config.get('execution_options', {}).get('representative_training')
         expected = ([('FormatStrPromptedGenerator' if simple.get('modality') == 'text' else 'APIImagePairGenerator'), 'TrainingPairFormatter']
                     if simple else [op['name'] for op in template()['config']['operators']])
+        if representative and simple:
+            from app.services.representative_training import definitions
+            definition = next((d for d in definitions() if d['config']['execution_options']['simple_training'] == simple), None)
+            expected = [op['name'] for op in definition['config']['operators']] if definition else []
         if [op['name'] for op in config.get('operators', [])] != expected:
-            errors.append('最简入口需要生成、训练整理两步顺序' if simple else '文本入口需要完整的既有 13 步顺序；请在画布检查配置')
+            errors.append('代表性流程步骤顺序不完整，请从对应模板重新检查' if representative else '最简入口需要生成、训练整理两步顺序' if simple else '文本入口需要完整的既有 13 步顺序；请在画布检查配置')
         if simple:
             if simple.get('modality') not in {'text', 'image_text'} or simple.get('training_type') not in {'sft', 'dpo'}:
                 errors.append('最简 pipeline 模态或训练类型无效')

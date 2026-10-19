@@ -226,7 +226,11 @@ def dataflow_pipeline_execute(pipeline_config: Dict[str, Any], dataflow_runtime:
         logs.append(f"[{datetime.now().isoformat()}] Step 1: Initializing storage...")
         logger.info(f"Step 1: Initializing storage...")
         try:    
-            storage = FileStorage(
+            storage_class = FileStorage
+            if pipeline_config.get('execution_options', {}).get('representative_training'):
+                from app.services.training_storage import TrainingFileStorage
+                storage_class = TrainingFileStorage
+            storage = storage_class(
                 first_entry_file_name=dataflow_runtime['storage']['first_entry_file_name'],
                 cache_path=dataflow_runtime['storage']['cache_path'],
                 file_name_prefix=dataflow_runtime['storage']['file_name_prefix'],
@@ -345,6 +349,7 @@ def dataflow_pipeline_execute(pipeline_config: Dict[str, Any], dataflow_runtime:
                                     params_dict = expand_serving_configs(params_dict)
                                     if "max_attempts" in pipeline_config.get("execution_options", {}):
                                         params_dict["max_retries"] = pipeline_config["execution_options"]["max_attempts"]
+                                    params_dict['key_name_of_api_key'] = key_name_var
                                     logger.info(f"Initializing serving: {actual_serving_id}")
                                     os.environ[key_name_var] = api_key_val or os.environ.get(key_name_var, "")
                                     serving_instance = APILLMServing_request(**params_dict)
@@ -679,9 +684,8 @@ def dataflow_pipeline_execute(pipeline_config: Dict[str, Any], dataflow_runtime:
                 operators_detail[op_key]["error"] = str(e)
                 # 记录真实异常的完整 traceback，否则只剩笼统的
                 # "执行Operator失败: X"，无法定位根因（见 bug 诊断）。
-                logger.error(
-                    f"Operator {op_name} run failed with underlying error: {e!r}",
-                    exc_info=True,
+                logger.opt(exception=True).error(
+                    "Operator {} run failed with underlying error: {!r}", op_name, e
                 )
                 update_execution_status("failed", {
                     "operators_detail": operators_detail,

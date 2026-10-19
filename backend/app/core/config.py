@@ -54,6 +54,7 @@ class Settings(BaseSettings):
     _DATAFLOW_EXTENSIONS = [
         "paper_dataflow",
         "app.services.simple_training_operators",
+        "app.services.representative_training_operators",
     ]
 
 settings = Settings()

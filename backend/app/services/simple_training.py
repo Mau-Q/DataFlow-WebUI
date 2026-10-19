@@ -1,89 +1,10 @@
-"""Four small native pipeline templates; installation never imports sample data."""
-import copy
+"""Input validation and owned snapshots shared by API training workflows."""
 import json
 import shutil
 import uuid
 from pathlib import Path
-
-from app.services.data_library import LibraryError, _hash, _json_bytes, _now
+from app.services.data_library import LibraryError, _hash, _json_bytes
 from app.services.simple_training_operators import image_data
-
-
-def candidate_schema(training_type):
-    fields = ['question', 'answer'] if training_type == 'sft' else ['question', 'chosen', 'rejected']
-    return {'type': 'object', 'additionalProperties': False, 'required': fields,
-            'properties': {k: {'type': 'string', 'minLength': 1, 'pattern': r'\S'} for k in fields}}
-
-
-def definitions():
-    result = []
-    for modality, label in [('text', '文本'), ('image_text', '图片')]:
-        for training_type in ('sft', 'dpo'):
-            key = f'simple-{modality}-{training_type}-v1'
-            source = '以下材料：\n{text}' if modality == 'text' else '所附图片'
-            task = ('生成一个能依据材料回答的问题和正确答案。仅返回 JSON 对象，字段 question、answer。'
-                    if training_type == 'sft' else
-                    '生成一个能依据材料回答的问题、正确答案 chosen，以及仅包含一个明显事实错误的较差答案 rejected。'
-                    '不要交换优劣，不要生成危险内容。仅返回 JSON 对象，字段 question、chosen、rejected。')
-            prompt = f'请依据{source}，用中文{task}不得借助材料以外的信息，不要输出解释或 Markdown。'
-            generator = 'FormatStrPromptedGenerator' if modality == 'text' else 'APIImagePairGenerator'
-            init = {'llm_serving': None, 'prompt_template': f'user_prompt:{key}'}
-            run = {'output_key': 'candidate'}
-            if modality == 'text':
-                init['system_prompt'] = '依据材料生成训练样例。严格遵守用户要求的 JSON 字段。'
-                run['input_keys'] = [{'name': 'text', 'value': 'text'}]
-            else:
-                run['input_image_key'] = 'source'
-            def params(values):
-                return [{'name': k, 'value': v} for k, v in values.items()]
-            config = {'file_path': '', 'input_dataset': {'id': '', 'location': [30, 150]}, 'operators': [
-                {'name': generator, 'location': [320, 150], 'params': {'init': params(init), 'run': params(run)}},
-                {'name': 'TrainingPairFormatter', 'location': [640, 150], 'params': {
-                    'init': params({'training_type': training_type, 'modality': modality, 'json_schema': f'schema_ref:{key}'}),
-                    'run': params({'input_key': 'candidate', 'output_key': 'training_sample'})}},
-            ], 'execution_options': {'simple_training': {'modality': modality, 'training_type': training_type},
-                  'capture_responses': True, 'training_output': True, 'additional_retries': 0}}
-            result.append(dict(id=key, name=f'最简{label} {training_type.upper()}', prompt=prompt,
-                               generator=generator, schema=candidate_schema(training_type), config=config,
-                               tags=['template', 'simple-training', modality, training_type]))
-    return result
-
-
-def install_templates(c):
-    """Add missing versioned defaults; preserve user edits and existing records."""
-    for definition in definitions():
-        key, now = definition['id'], _now()
-        usage = ('图文' if 'image_text' in key else '文本') + ' ' + definition['config']['execution_options']['simple_training']['training_type'].upper()
-        data = c.pipeline_registry._read()
-        if key not in data['pipelines']:
-            # Seed resources only with a new template. Subsequent restarts must
-            # respect edits/deletions made in the independent managers.
-            with c.user_prompt_registry.store.writing() as records:
-                if key not in records:
-                    records[key] = dict(id=key, name=definition['name']+' · 生成提示词', template=definition['prompt'],
-                        description='小样本流程验收；DPO 为合成偏好对，需要人工检查事实与优劣。',
-                        allowed_operators=[definition['generator']], example_variables={}, usage=usage,
-                        purpose='生成', created_at=now, updated_at=now)
-            with c.json_schema_manager.store.writing() as records:
-                if key not in records:
-                    records[key] = dict(id=key, name=definition['name']+' · 候选结构', schema=json.dumps(definition['schema'], ensure_ascii=False),
-                        description='仅检查结构；不证明答案事实正确。', example='', usage=usage, purpose='模型输出', created_at=now, updated_at=now)
-            pipeline = {k: copy.deepcopy(definition[k]) for k in ('id', 'name', 'config', 'tags')}
-            pipeline.update(created_at=now, updated_at=now, status='queued')
-            # Templates intentionally have no dataset/service. Normal save/submit
-            # still validates actual user-selected inputs and bindings.
-            for op in pipeline['config']['operators']:
-                op['params'] = c.pipeline_registry._parse_frontend_params(op['params'])
-            data['pipelines'][key] = c.pipeline_registry._enrich_pipeline_operators_internal(pipeline)
-            c.pipeline_registry._write(data)
-        elif any('kind' not in p for op in data['pipelines'][key]['config']['operators']
-                 for part in ('init', 'run') for p in op['params'][part]):
-            # Enrich missing UI metadata without replacing user parameter values.
-            record = data['pipelines'][key]
-            for op in record['config']['operators']:
-                op['params'] = c.pipeline_registry._parse_frontend_params(op['params'])
-            data['pipelines'][key] = c.pipeline_registry._enrich_pipeline_operators_internal(record)
-            c.pipeline_registry._write(data)
 
 
 def read_inputs(c, config):
@@ -94,13 +15,13 @@ def read_inputs(c, config):
         raise LibraryError('请选择已经导入的本地输入数据集', 422)
     manifest = Path(dataset['root'])
     if manifest.suffix.lower() != '.jsonl':
-        raise LibraryError('最简 pipeline 输入需要 JSONL；文本导入 text.jsonl，图片使用原始材料导入', 422)
+        raise LibraryError('API 训练流程输入需要 JSONL；文本导入 text.jsonl，图片使用原始材料导入', 422)
     try:
         rows = [json.loads(line) for line in manifest.read_text('utf-8-sig').splitlines() if line.strip()]
     except (ValueError, UnicodeError) as exc:
         raise LibraryError('输入不是有效 JSONL', 422) from exc
     if not rows or len(rows) > 100:
-        raise LibraryError('最简示例每次支持 1–100 条输入', 422)
+        raise LibraryError('API 训练流程每次支持 1–100 条输入', 422)
     modality = config['execution_options']['simple_training']['modality']
     for row in rows:
         if not isinstance(row, dict):
@@ -108,7 +29,7 @@ def read_inputs(c, config):
         if {'candidate', 'training_sample', 'media_ref'} & row.keys():
             raise LibraryError('输入不能包含候选、训练输出或固定媒体字段', 422)
         if modality == 'text':
-            if not isinstance(row.get('text'), str) or not row['text'].strip():
+            if not isinstance(row.get('text'), str) or (not config.get('execution_options', {}).get('representative_training') and not row['text'].strip()):
                 raise LibraryError('文本输入需要非空 text 字段', 422)
         else:
             if not row.get('material_id'):
