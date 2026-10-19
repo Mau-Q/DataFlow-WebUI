@@ -6,6 +6,7 @@ export default {
     path: '/m',
     component: () => AsyncLoad(() => import('@/views/manage/index.vue')),
     children: [
+        { path: 'multimodal', component: () => AsyncLoad(() => import('@/views/manage/multimodal/index.vue')), meta: { title: '图片 VQA' } },
         { path: 'generation', component: () => AsyncLoad(() => import('@/views/manage/generation/index.vue')), meta: { title: '文本生成' } },
         {
             path: 'materials',

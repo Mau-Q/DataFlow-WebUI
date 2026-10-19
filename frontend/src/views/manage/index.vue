@@ -65,6 +65,7 @@ export default {
                     type: 'header'
                 },
                 { key: 0.1, name: () => this.local('原始数据集'), icon: 'Library', img: dbManager, route: '/m/materials' },
+                { key: 0.4, name: () => this.local('图片 VQA'), icon: 'Play', img: dataviz, route: '/m/multimodal' },
                 { key: 0.3, name: () => this.local('文本生成'), icon: 'Play', img: dataviz, route: '/m/generation' },
                 { key: 0.2, name: () => this.local('生成数据集'), icon: 'BulletedList', img: dataviz, route: '/m/training-datasets' },
                 {

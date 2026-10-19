@@ -32,3 +32,6 @@ api_router.include_router(data_library.router, prefix="/library")
 
 from .endpoints import generation
 api_router.include_router(generation.router, prefix='/generation')
+
+from .endpoints import multimodal
+api_router.include_router(multimodal.router, prefix='/multimodal')
