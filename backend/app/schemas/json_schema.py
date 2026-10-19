@@ -14,6 +14,7 @@ class JsonSchemaCreate(BaseModel):
 
 
 class JsonSchemaUpdate(BaseModel):
+    expected_updated_at: Optional[str] = None
     """更新 JSON Schema 时的输入"""
     usage: Optional[Literal['通用', '文本 SFT', '图文 SFT', '文本 DPO', '图文 DPO']] = None
     purpose: Optional[Literal['通用', '模型输出', '训练样本校验']] = None

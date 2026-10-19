@@ -3,7 +3,7 @@
         <template v-slot:content>
             <div v-show="thisValue" class="panel-task-content-block">
                 <div class="task-history-toolbar"><fv-button :theme="theme" :border-radius="6" :disabled="refreshing" @click="refreshTasks">{{ refreshing ? '刷新中…' : '刷新运行记录' }}</fv-button><span v-if="!filteredTasks.length">暂无运行记录</span></div>
-                <TaskFinalResult v-if="selectedTaskId" :key="selectedTaskId" :task-id="selectedTaskId" :theme="theme" @navigate="thisValue = false" />
+                <TaskFinalResult v-if="selectedTaskId" :key="`${selectedTaskId}:${refreshRevision}`" :task-id="selectedTaskId" :theme="theme" @navigate="thisValue = false" />
                 <fv-Collapse :theme="theme" v-for="(item, index) in filteredTasks" :key="index" class="task-item"
                     :title="item.task_id" :content="formatTime(item.completed_at)"
                     :maxHeight="item.showPreview ? 690 : 380" background="rgba(251, 251, 251, 1)"
@@ -76,6 +76,7 @@ export default {
             thisValue: this.modelValue,
             selectedTaskId: this.initialTaskId,
             refreshing: false,
+            refreshRevision: 0,
             img: {
                 task: taskIcon
             }
@@ -86,7 +87,7 @@ export default {
         currentPipeline() { this.selectedTaskId = this.initialTaskId },
         modelValue(val) {
             this.thisValue = val
-            if (val) this.refreshTasks()
+            if (val) {this.refreshRevision++;this.refreshTasks()}
         },
         thisValue(val) {
             this.$emit('update:modelValue', val)

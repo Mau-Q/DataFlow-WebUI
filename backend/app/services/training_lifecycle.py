@@ -46,9 +46,11 @@ class TrainingLifecycle:
             media[ref] = (path, mat)
         return media
 
-    def edit(self, draft_id, sample_id, row=None, delete=False):
+    def edit(self, draft_id, sample_id, row=None, delete=False, expected_updated_at=None):
         with self.lib._writing():
             rec = self.lib._get('drafts', draft_id)
+            if expected_updated_at is not None and expected_updated_at != rec.get('updated_at'):
+                raise LibraryError('数据集已在其他页面更新；当前编辑已保留，请重新打开样本后再保存。', 409)
             ids = self._members(rec)
             if sample_id not in ids:
                 raise LibraryError('样本不存在', 404)

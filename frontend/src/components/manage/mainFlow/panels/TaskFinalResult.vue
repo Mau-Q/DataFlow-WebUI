@@ -36,10 +36,11 @@
 </template>
 <script>
 import axios from 'axios'
+import {publishChange,subscribeChanges} from '@/components/manage/forms/changes'
 export default {
     props: { taskId: { type: String, required: true }, theme: { type: String, default: 'light' } },
     emits: ['navigate'],
-    data: () => ({ result: null, drafts: [], images: [], loading: false, busy: false, error: '', notice: '', mode: 'new', name: '', draftId: '', bindings: {}, requestId: 0 }),
+    data: () => ({ result: null, drafts: [], images: [], loading: false, busy: false, error: '', notice: '', mode: 'new', name: '', draftId: '', bindings: {}, requestId: 0, contextVersion:0, stopChanges:null }),
     computed: {
         modeOptions() { return [{key:'new',text:'新建生成数据集'},{key:'append',text:'追加到已有数据集'}] },
         modeModel: { get() { return this.modeOptions.find(o => o.key === this.mode) }, set(o) { if(o)this.mode = o.key } },
@@ -51,14 +52,21 @@ export default {
         compatibleDrafts() { return this.drafts.filter(d => d.modality === this.result?.modality && d.training_type === this.result?.training_type) },
         targetBindings() { return this.mode === 'append' ? this.drafts.find(d => d.id === this.draftId)?.media_bindings || {} : {} }
     },
+    mounted(){this.stopChanges=subscribeChanges(change=>{if(change.topic==='datasets'&&!this.busy)this.refreshContext()})},
+    beforeUnmount(){this.stopChanges?.()},
     watch: { taskId: { immediate: true, handler() { this.load() } } },
     methods: {
+        async refreshContext(){
+            const taskId=this.taskId,version=this.requestId,contextVersion=++this.contextVersion
+            try{const [result,drafts,materials]=await Promise.all([this.request('get',`/tasks/execution/${encodeURIComponent(taskId)}/final-result`),this.request('get','/library/drafts?visible_only=true'),this.request('get','/library/materials')]);if(taskId===this.taskId&&version===this.requestId&&contextVersion===this.contextVersion&&!this.busy){this.result=result;this.drafts=drafts;this.images=materials.filter(m=>m.kind==='image');if(!drafts.some(d=>d.id===this.draftId))this.draftId=''}}catch(e){if(taskId===this.taskId&&version===this.requestId&&contextVersion===this.contextVersion)this.error=e.message}
+        },
         async request(method, path, data) {
             const r = await axios({ method, url: '/api/v1' + path, data })
             if (!r.data.success) throw new Error(r.data.message || '请求失败')
             return r.data.data
         },
         async load() {
+            this.contextVersion++
             const requestId = ++this.requestId
             this.loading = true; this.result = null; this.error = ''; this.notice = ''; this.bindings = {}; this.draftId = ''; this.mode = 'new'
             try {
@@ -76,6 +84,7 @@ export default {
         async collect() {
             if (!this.canCollect) return
             const taskId = this.taskId
+            this.contextVersion++
             this.busy = true; this.error = ''; this.notice = ''
             try {
                 const body = { expected_sha256: this.result.artifact.sha256, media_bindings: this.bindings, ...(this.mode === 'new' ? { name: this.name } : { draft_id: this.draftId }) }
@@ -85,6 +94,7 @@ export default {
                 if (taskId !== this.taskId) return
                 this.result = result
                 this.drafts = [...this.drafts.filter(d => d.id !== collected.id), collected]
+                publishChange('datasets',collected.id)
                 this.notice = collected.reused ? `此结果已收录到「${collected.name}」，未重复写入。` : `已收录到「${collected.name}」：新增 ${collected.added} 条，跳过重复 ${collected.duplicates_skipped} 条。`
             } catch (e) { if (taskId === this.taskId) this.error = e.response?.data?.message || e.message }
             finally { this.busy = false }

@@ -27,6 +27,7 @@ class SaveConfig(BaseModel):
 
 class SampleEdit(BaseModel):
     row: dict
+    expected_updated_at: str | None = None
 
 
 class FieldMap(BaseModel):
@@ -110,7 +111,7 @@ def collect(task_id: str, body: Collect):
 
 @router.put('/drafts/{draft_id}/samples/{sample_id}')
 def edit_sample(draft_id: str, sample_id: str, body: SampleEdit):
-    return ok(call(TrainingLifecycle(container.data_library).edit, draft_id, sample_id, body.row))
+    return ok(call(TrainingLifecycle(container.data_library).edit, draft_id, sample_id, body.row, expected_updated_at=body.expected_updated_at))
 
 
 @router.delete('/drafts/{draft_id}/samples/{sample_id}')

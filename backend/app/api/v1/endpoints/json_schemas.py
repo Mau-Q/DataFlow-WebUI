@@ -1,3 +1,4 @@
+from app.services.resource_store import ResourceConflictError
 from fastapi import APIRouter, HTTPException, status
 from loguru import logger as log
 from app.schemas.json_schema import JsonSchemaCreate, JsonSchemaUpdate, JsonSchemaOut
@@ -117,6 +118,8 @@ def update_schema(schema_id: str, schema_update: JsonSchemaUpdate):
         return ok(JsonSchemaOut(**schema))
     except HTTPException:
         raise
+    except ResourceConflictError as exc:
+        raise HTTPException(409, str(exc)) from exc
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:

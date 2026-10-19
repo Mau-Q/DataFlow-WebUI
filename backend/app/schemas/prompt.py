@@ -58,6 +58,7 @@ class UserPromptTemplateCreate(UserPromptTemplateBase):
 
 
 class UserPromptTemplateUpdate(BaseModel):
+    expected_updated_at: Optional[str] = None
     purpose: Optional[Literal['通用', '生成', '清洗', '评分']] = None
     usage: Optional[Literal['通用', '文本 SFT', '图文 SFT', '文本 DPO', '图文 DPO']] = None
     name: Optional[str] = None

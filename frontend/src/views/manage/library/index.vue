@@ -22,7 +22,8 @@
             <p v-if="!filtered.length" class="empty-small">{{ loading ? '正在加载…' : '没有匹配的数据集' }}</p>
         </section>
         <div v-else-if="detailId" class="dataset-detail">
-            <section class="detail" v-if="selected && !loading">
+            <section class="detail" v-if="selected" :aria-busy="loading">
+                <p v-if="loading" class="help" role="status">正在刷新数据集…</p>
                 <div class="detail-heading"><div><h2>{{ selected.name }}</h2><p>{{ isSources ? `${sourceType(selected)} · ${sourceCount(selected)}` : `${modalityLabel(selected.modality)} · ${(selected.training_type || 'sft').toUpperCase()} · ${selected.row_count} 条` }}</p></div><button v-if="!isSources" @click="openImport">导入数据</button></div>
                 <template v-if="isSources && hasSourceFiles">
                     <div class="source-layout">
@@ -96,38 +97,45 @@
                         <dt>创建时间</dt><dd>{{ formatTime(materialDetails.created_at, true) }}</dd><dt>更新时间</dt><dd>{{ formatTime(materialDetails.updated_at, true) }}</dd><dt>材料 ID</dt><dd>{{ materialDetails.id }}</dd><dt>父材料 ID</dt><dd>{{ materialDetails.parent_material_id || '无' }}</dd><dt>受管文件名</dt><dd>{{ materialDetails.blob_name }}</dd><dt>SHA-256</dt><dd>{{ materialDetails.sha256 }}</dd>
                     </dl>
                 </details>
-                <dataset-lifecycle v-if="!isSources" :key="selected.id" :draft="selected" @updated="reload" @forked="draftForked" />
+                <dataset-lifecycle v-if="!isSources" :key="selected.id" :draft="selected" @updated="reload" @forked="draftForked" @dirty-change="sampleEditingChanged" />
             </section>
             <section v-else class="empty"><h2>{{ loading ? '正在加载数据集…' : '无法打开数据集' }}</h2><p v-if="!loading">请返回列表选择数据集，或刷新重试。</p><button v-if="!loading" @click="backToList">返回列表</button></section>
         </div>
         <section v-else class="empty full-empty"><div class="empty-icon">{{ isSources ? '▤' : '◫' }}</div><h2>{{ isSources ? '添加第一份原始数据集' : '还没有生成数据集' }}</h2><p>{{ isSources ? '导入 PDF、图片或已有数据文件。' : '创建数据集后，可导入已有训练样本。' }}</p><button class="primary" @click="openCreate">{{ isSources ? '添加数据集' : '新建数据集' }}</button></section>
 
-        <div v-if="showCreate || showImport" class="dialog-backdrop" @click.self="closeDialog" @keydown.esc="closeDialog">
-            <section role="dialog" aria-modal="true" :aria-label="dialogTitle" class="dialog">
-                <div class="dialog-heading"><h2>{{ dialogTitle }}</h2><button aria-label="关闭" :disabled="busy" @click="closeDialog">×</button></div>
-                <p v-if="dialogError && showCreate && !isSources" role="alert" class="error">{{ dialogError }}</p>
-                <source-dataset-import v-if="isSources" @cancel="closeDialog" @created="sourceCreated" />
-                <form v-else-if="showCreate" @submit.prevent="createDraft" class="dialog-body">
-                    <label>名称<input v-model="draftForm.name" required maxlength="240" placeholder="数据集名称" /></label>
-                    <label>数据类型<select v-model="draftForm.modality"><option value="text">文本</option><option value="image_text">图文</option></select></label>
-                    <label>训练类型<select v-model="draftForm.training_type"><option value="sft">SFT</option><option value="dpo">DPO</option></select></label>
-                    <div class="actions"><button type="button" @click="closeDialog">取消</button><button class="primary" :disabled="busy">创建</button></div>
-                </form>
-                <form v-else @submit.prevent="importRows" class="dialog-body">
-                    <label>训练文件<input ref="trainingFile" type="file" accept=".json,.jsonl" required @change="inspectMedia" /></label><p class="help">JSON 或 JSONL，最多 20 MiB。</p>
-                    <template v-if="selected.modality === 'image_text'">
-                        <label v-for="ref in mediaRefs" :key="ref">{{ ref }}<select v-model="mediaChoices[ref]" required><option value="">选择对应图片</option><option v-for="m in imageMaterials" :key="m.id" :value="m.id">{{ m.name }}</option></select></label>
-                        <p v-if="!imageMaterials.length" class="help">请先通过「原始数据集」添加图片。</p>
-                        <details><summary>手动设置图片映射</summary><textarea v-model="mediaBindings" rows="4" placeholder='{"图片引用": "材料 ID"}' /></details>
-                    </template>
-                    <p v-if="dialogError" role="alert" class="error">{{ dialogError }}</p><div class="actions"><button type="button" :disabled="busy" @click="closeDialog">取消</button><button class="primary" :disabled="busy">{{ busy ? '导入中…' : '导入' }}</button></div>
-                </form>
-            </section>
-        </div>
+        <base-panel v-if="showCreate || showImport" v-model="dialogVisible" :title="dialogTitle" :theme="theme" width="560px" :height="isSources ? '560px' : showCreate ? '440px' : '520px'" :teleport="true" :is-footer="false" :show-title-bar="!dialogBusy">
+            <template #content>
+                <div class="native-dialog-body" :class="{dark:theme==='dark'}" @keydown.esc.stop="closeDialog">
+                    <p v-if="dialogError && showCreate && !isSources" role="alert" class="error">{{ dialogError }}</p>
+                    <source-dataset-import v-if="isSources" :theme="theme" @busy-change="sourceBusy = $event" @cancel="closeDialog" @created="sourceCreated" />
+                    <form v-else-if="showCreate" @submit.prevent="createDraft">
+                        <div class="native-field">名称<native-text v-model="draftForm.name" :theme="theme" :disabled="busy" label="数据集名称" placeholder="数据集名称" /></div>
+                        <div class="native-field">数据类型<native-select v-model="draftForm.modality" :theme="theme" :disabled="busy" label="数据类型" :options="[{value:'text',label:'文本'},{value:'image_text',label:'图文'}]" /></div>
+                        <div class="native-field">训练类型<native-select v-model="draftForm.training_type" :theme="theme" :disabled="busy" label="训练类型" :options="[{value:'sft',label:'SFT'},{value:'dpo',label:'DPO'}]" /></div>
+                        <div class="actions"><fv-button :theme="theme" :border-radius="6" :disabled="busy" @click="closeDialog">取消</fv-button><fv-button theme="dark" background="#4e5bd5" :border-radius="6" :disabled="busy || !draftForm.name.trim() || draftForm.name.length > 240" @click="createDraft">创建</fv-button></div>
+                    </form>
+                    <form v-else @submit.prevent="importRows">
+                        <div class="native-field">训练文件<input ref="trainingFile" class="hidden-file" type="file" accept=".json,.jsonl" @change="inspectMedia" /><fv-button :theme="theme" :border-radius="6" :disabled="busy || mediaLoading" @click="$refs.trainingFile.click()">选择训练文件</fv-button><p>{{ trainingName || '尚未选择文件' }}</p></div>
+                        <p class="help">JSON 或 JSONL，最多 20 MiB。</p>
+                        <template v-if="selected?.modality === 'image_text'">
+                            <div v-for="ref in mediaRefs" :key="ref" class="native-field">{{ ref }}<native-select v-model="mediaChoices[ref]" :theme="theme" :disabled="busy || mediaLoading" :label="ref" placeholder="选择对应图片" :options="imageMaterials.map(m=>({value:m.id,label:m.name}))" /></div>
+                            <p v-if="!imageMaterials.length" class="help">请先通过「原始数据集」添加图片。</p>
+                            <details><summary>手动设置图片映射</summary><native-text v-model="mediaBindings" :theme="theme" :disabled="busy" label="图片映射 JSON" multiline code :rows="4" placeholder='{"图片引用": "材料 ID"}' /></details>
+                        </template>
+                        <p v-if="dialogError" role="alert" class="error">{{ dialogError }}</p>
+                        <div class="actions"><fv-button :theme="theme" :border-radius="6" :disabled="busy" @click="closeDialog">取消</fv-button><fv-button theme="dark" background="#4e5bd5" :border-radius="6" :disabled="busy || mediaLoading || !selectedTrainingFile" @click="importRows">{{ busy ? '导入中…' : '导入' }}</fv-button></div>
+                    </form>
+                </div>
+            </template>
+        </base-panel>
     </main>
 </template>
 <script>
 import axios from 'axios'
+import BasePanel from '@/components/general/basePanel.vue'
+import NativeText from '@/components/manage/forms/NativeText.vue'
+import NativeSelect from '@/components/manage/forms/NativeSelect.vue'
+import {publishChange, subscribeChanges} from '@/components/manage/forms/changes'
 import { mapState } from 'pinia'
 import { useTheme } from '@/stores/theme'
 import DatasetLifecycle from '@/components/manage/library/DatasetLifecycle.vue'
@@ -135,10 +143,12 @@ import SourceDatasetImport from '@/components/manage/library/SourceDatasetImport
 import { sourceType, sourceCount, recordTime, recentFirst, formatTime, releaseLabel } from './catalog.js'
 export default {
     name: 'DatasetLibrary',
-    components: { SourceDatasetImport, DatasetLifecycle },
+    components: { BasePanel, NativeText, NativeSelect, SourceDatasetImport, DatasetLifecycle },
     props: { mode: { type: String, required: true } },
-    data: () => ({ records: [], materials: [], selected: null, sourceRows: [], sourceIndex: 0, offset: 0, search: '', busy: false, loading: false, error: '', notice: '', dialogError: '', showCreate: false, showImport: false, mediaBindings: '{}', mediaRefs: [], mediaChoices: {}, draftForm: { name: '', modality: 'text', training_type: 'sft', description: '' }, loadVersion: 0, pendingReload: false, fileMetadata: null, materialDetails: null, memberRows: [], memberLoading: false, memberError: '', memberVersion: 0, listPositions: {}, listSearches: {}, importAfterLoad: false }),
+    data: () => ({ sourceBusy:false, sampleDirty:false, syncPending:false, stopChanges:null, mediaVersion:0, reloadVersion:0, mediaLoading:false, selectedTrainingFile:null, trainingName:'', records: [], materials: [], selected: null, sourceRows: [], sourceIndex: 0, offset: 0, search: '', busy: false, loading: false, error: '', notice: '', dialogError: '', showCreate: false, showImport: false, mediaBindings: '{}', mediaRefs: [], mediaChoices: {}, draftForm: { name: '', modality: 'text', training_type: 'sft', description: '' }, loadVersion: 0, pendingReload: false, fileMetadata: null, materialDetails: null, memberRows: [], memberLoading: false, memberError: '', memberVersion: 0, listPositions: {}, listSearches: {}, importAfterLoad: false }),
     computed: {
+        dialogVisible: {get(){return this.showCreate || this.showImport},set(v){if(!v)this.closeDialog()}},
+        dialogBusy(){return this.busy || this.sourceBusy},
         ...mapState(useTheme, ['theme']),
         detailId() { return typeof this.$route.query.dataset === 'string' ? this.$route.query.dataset : '' },
         isSources() { return this.mode === 'materials' },
@@ -152,10 +162,13 @@ export default {
         sampleRows() { return (this.isSources ? this.sourceRows : this.selected.rows || []).map(row => row && typeof row === 'object' ? row : { value: row }) },
         dialogTitle() { return this.isSources ? '添加原始数据集' : this.showCreate ? '新建生成数据集' : '导入训练数据' }
     },
-    watch: { detailId() { this.loadVersion++; this.selected = null; this.materialDetails = null; this.sourceRows = []; this.offset = 0; this.showCreate = false; this.showImport = false; this.dialogError = ''; if (this.detailId) this.$nextTick(() => { if (this.$refs.libraryPane) this.$refs.libraryPane.scrollTop = 0 }); if (this.busy) this.pendingReload = true; else this.reload() }, sourceIndex() { this.fileMetadata = null; this.materialDetails = null; this.loadMemberPreview() }, mode(value, previous) { this.listSearches[previous] = this.search; this.loadVersion++; this.selected = null; this.materialDetails = null; this.sourceRows = []; this.search = this.listSearches[value] || ''; this.error = ''; this.notice = ''; this.showCreate = false; this.showImport = false; if (this.busy) this.pendingReload = true; else this.reload() } },
-    mounted() { this.reload() },
+    watch: { detailId() { this.loadVersion++; this.selected = null; this.materialDetails = null; this.sourceRows = []; this.offset = 0; this.showCreate = false; this.showImport = false; this.dialogError = ''; if (this.detailId) this.$nextTick(() => { if (this.$refs.libraryPane) this.$refs.libraryPane.scrollTop = 0 }); this.mediaVersion++;this.mediaLoading=false;if (this.busy) this.pendingReload = true; else this.reload() }, sourceIndex() { this.fileMetadata = null; this.materialDetails = null; this.loadMemberPreview() }, mode(value, previous) { this.listSearches[previous] = this.search; this.loadVersion++; this.selected = null; this.materialDetails = null; this.sourceRows = []; this.search = this.listSearches[value] || ''; this.error = ''; this.notice = ''; this.showCreate = false; this.showImport = false; if (this.busy) this.pendingReload = true; else this.reload() } },
+    deactivated(){this.showCreate=false;this.showImport=false;this.mediaVersion++;this.mediaLoading=false},
+    mounted() { this.stopChanges=subscribeChanges(change=>{if(change.topic==='datasets'){if(this.dialogVisible || this.busy || this.sampleDirty)this.syncPending=true;else if(this.$route.path===(this.isSources?'/m/materials':'/m/training-datasets'))this.reload()}}); this.reload() },
+    beforeUnmount(){this.stopChanges?.()},
     activated() { if (!this.loading && !this.busy) this.reload() },
     methods: {
+        sampleEditingChanged(dirty){this.sampleDirty=dirty;if(!dirty && this.syncPending && !this.busy && !this.dialogVisible){this.syncPending=false;this.reload()}},
         detailLocation(id) { return { path: this.isSources ? '/m/materials' : '/m/training-datasets', query: { dataset: id } } },
         rememberListPosition() { this.listPositions[this.mode] = this.$refs.libraryPane?.scrollTop || 0 },
         backToList() { this.$router.push({ path: this.isSources ? '/m/materials' : '/m/training-datasets' }) },
@@ -184,9 +197,9 @@ export default {
         isImage(row) { return /\.(png|jpe?g|webp|gif|bmp)$/i.test(row?.source_name || row?.source || '') },
         materialUrl(id) { return `/api/v1/library/materials/${id}/file` },
         async request(method, path, data) { const r = await axios({ method, url: `/api/v1${path}`, data }); if (!r.data.success) throw new Error(r.data.message); return r.data.data },
-        async action(fn) { if (this.busy) return; this.busy = true; this.error = ''; this.notice = ''; try { await fn() } catch (e) { if (this.showCreate || this.showImport) this.dialogError = e.response?.data?.message || e.message; else this.error = e.response?.data?.message || e.message } finally { this.busy = false; if (this.pendingReload) { this.pendingReload = false; this.reload() } } },
+        async action(fn, {keepNotice=false}={}) { if (this.busy) return; this.busy = true; this.error = ''; if(!keepNotice)this.notice = ''; try { await fn() } catch (e) { if (this.showCreate || this.showImport) this.dialogError = e.response?.data?.message || e.message; else this.error = e.response?.data?.message || e.message } finally { this.busy = false; if (this.pendingReload || (this.syncPending && !this.dialogVisible && !this.sampleDirty)) { this.pendingReload = false;this.syncPending=false; this.reload() } } },
         async loadLists() { const mode = this.mode; const records = await this.request('get', this.isSources ? '/datasets/?visible_only=true' : '/library/drafts?visible_only=true'); if (mode === this.mode) this.records = records },
-        async reload() { this.loading = true; await this.action(async () => { await this.loadLists(); const id = this.detailId; if (id) await this.loadSelected(id); else this.selected = null }); this.loading = false; if (this.importAfterLoad && this.selected) { this.importAfterLoad = false; this.openImport() } if (!this.detailId) this.$nextTick(() => { if (this.$refs.libraryPane) this.$refs.libraryPane.scrollTop = this.listPositions[this.mode] || 0 }) },
+        async reload() { if(this.busy){this.pendingReload=true;return}const reloadVersion=++this.reloadVersion;this.loading = true; await this.action(async () => { await this.loadLists(); const id = this.detailId; if (id) await this.loadSelected(id); else this.selected = null }, {keepNotice:true}); if(reloadVersion===this.reloadVersion)this.loading = false; if (this.importAfterLoad && this.selected) { this.importAfterLoad = false; this.openImport() } if (!this.detailId) this.$nextTick(() => { if (this.$refs.libraryPane) this.$refs.libraryPane.scrollTop = this.listPositions[this.mode] || 0 }) },
         async loadSelected(id) {
             const version = ++this.loadVersion
             if (this.isSources) {
@@ -224,34 +237,42 @@ export default {
             })
         },
         saveFileMetadata() { this.action(async () => { this.materialDetails = await this.request('put', `/library/materials/${this.sourceRows[this.sourceIndex].material_id}`, this.fileMetadata); this.notice = '文件信息已保存' }) },
-        openImport() { this.dialogError = ''; this.mediaRefs = []; this.mediaChoices = {}; this.mediaBindings = '{}'; this.showCreate = false; this.showImport = true },
+        openImport() { this.mediaVersion++;this.mediaLoading=false;this.selectedTrainingFile=null;this.trainingName='';this.dialogError = ''; this.mediaRefs = []; this.mediaChoices = {}; this.mediaBindings = '{}'; this.showCreate = false; this.showImport = true },
         openCreate() { this.dialogError = ''; this.showImport = false; this.showCreate = true },
-        closeDialog() { if (this.busy) return; this.showCreate = false; this.showImport = false; this.dialogError = '' },
-        async sourceCreated(record, result = {}) { this.showCreate = false; this.offset = 0; await this.action(async () => { await this.loadLists(); await this.$router.push(this.detailLocation(record.id)); this.notice = `已添加「${record.name}」${result.skipped?.length ? `，跳过 ${result.skipped.length} 个隐藏或不支持的文件` : ''}` }) },
-        createDraft() { this.action(async () => { const saved = await this.request('post', '/library/drafts', this.draftForm); this.showCreate = false; this.offset = 0; this.draftForm.name = ''; await this.loadLists(); this.importAfterLoad = true; await this.$router.push(this.detailLocation(saved.id)) }) },
+        closeDialog() { if (this.dialogBusy) return; this.mediaVersion++;this.showCreate=false;this.showImport=false;this.dialogError='';if(this.syncPending){this.syncPending=false;this.reload()} },
+        async sourceCreated(record, result = {}) {
+            const navigate=this.isSources && this.showCreate && this.$route.path==='/m/materials'
+            this.showCreate=false
+            if(navigate)await this.action(async()=>{await this.loadLists();await this.$router.push(this.detailLocation(record.id));this.notice=`已添加「${record.name}」${result.skipped?.length?`，跳过 ${result.skipped.length} 个隐藏或不支持的文件`:''}`})
+            publishChange('datasets',record.id)
+        },
+        createDraft() { this.action(async () => { const saved = await this.request('post', '/library/drafts', this.draftForm); this.showCreate = false; this.offset = 0; this.draftForm.name = ''; publishChange('datasets', saved.id);await this.loadLists(); this.importAfterLoad = true; await this.$router.push(this.detailLocation(saved.id)) }) },
         async inspectMedia(event) {
-            this.dialogError = ''; this.mediaRefs = []; this.mediaChoices = {}; this.mediaBindings = '{}'
-            if (this.selected.modality !== 'image_text') return
-            const file = event.target.files[0]; if (!file) return
-            if (file.size > 20 * 1024 * 1024) { this.dialogError = '文件不能超过 20 MiB'; return }
+            const version=++this.mediaVersion, id=this.selected?.id
+            this.dialogError='';this.mediaRefs=[];this.mediaChoices={};this.mediaBindings='{}'
+            const file=event.target.files[0];this.selectedTrainingFile=file || null;this.trainingName=file?.name || ''
+            if(!file)return
+            if(file.size>20*1024*1024){this.dialogError='文件不能超过 20 MiB';this.selectedTrainingFile=null;return}
+            if(this.selected?.modality!=='image_text')return
+            this.mediaLoading=true
             try {
-                const text = (await file.text()).replace(/^\uFEFF/, '')
-                const rows = /\.jsonl$/i.test(file.name) ? text.split(/\r?\n/).filter(l => l.trim()).map(l => JSON.parse(l)) : JSON.parse(text)
-                if (!Array.isArray(rows)) throw new Error('JSON 文件应为样本数组')
-                const refs = new Set()
-                for (const row of rows) for (const ref of this.references(row)) refs.add(ref)
-                this.mediaRefs = [...refs]
-                this.mediaChoices = Object.fromEntries(this.mediaRefs.map(ref => [ref, this.selected.media_bindings?.[ref] || '']))
-                this.materials = await this.request('get', '/library/materials')
-            } catch (e) { this.dialogError = `无法读取文件：${e.message}` }
+                const text=(await file.text()).replace(/^\uFEFF/,'')
+                const rows=/\.jsonl$/i.test(file.name)?text.split(/\r?\n/).filter(l=>l.trim()).map(l=>JSON.parse(l)):JSON.parse(text)
+                if(!Array.isArray(rows))throw new Error('JSON 文件应为样本数组')
+                const refs=new Set();for(const row of rows)for(const ref of this.references(row))refs.add(ref)
+                const materials=await this.request('get','/library/materials')
+                if(version!==this.mediaVersion || id!==this.selected?.id)return
+                this.mediaRefs=[...refs];this.mediaChoices=Object.fromEntries(this.mediaRefs.map(ref=>[ref,this.selected.media_bindings?.[ref]||'']));this.materials=materials
+            }catch(e){if(version===this.mediaVersion){this.dialogError=`无法读取文件：${e.message}`;this.selectedTrainingFile=null}}
+            finally{if(version===this.mediaVersion)this.mediaLoading=false}
         },
         importRows() { this.action(async () => {
             try {
-                const file = this.$refs.trainingFile.files[0]; if (!file) throw new Error('请选择训练文件')
+                const file = this.selectedTrainingFile; if (!file) throw new Error('请选择训练文件')
                 const bindings = { ...JSON.parse(this.mediaBindings), ...Object.fromEntries(Object.entries(this.mediaChoices).filter(([, id]) => id)) }
                 const form = new FormData(); form.append('file', file); form.append('media_bindings', JSON.stringify(bindings))
                 const result = await this.request('post', `/library/drafts/${this.selected.id}/import`, form)
-                this.showImport = false; this.offset = 0; await this.loadLists(); await this.loadSelected(this.selected.id); this.notice = `新增 ${result.added} 条${result.duplicates_skipped ? `，跳过重复 ${result.duplicates_skipped} 条` : ''}`
+                publishChange('datasets',this.selected.id);this.showImport = false; this.offset = 0; await this.loadLists(); await this.loadSelected(this.selected.id); this.notice = `新增 ${result.added} 条${result.duplicates_skipped ? `，跳过重复 ${result.duplicates_skipped} 条` : ''}`
             } catch (e) { this.dialogError = e.message }
         }) },
         references(row) { const refs = [...(row.images || []), ...(row.image ? [row.image] : [])]; for (const m of row.messages || []) if (Array.isArray(m.content)) for (const b of m.content) if (b.type === 'image_url') refs.push(typeof b.image_url === 'string' ? b.image_url : b.image_url.url); return refs },
@@ -260,6 +281,7 @@ export default {
 }
 </script>
 <style scoped>
+.native-dialog-body{padding:20px;box-sizing:border-box;height:100%;overflow:auto;color:#25334c}.native-dialog-body.dark{color:#dfe5ef}.native-field{margin-bottom:18px;line-height:2}.hidden-file{display:none}
 .library { container: library / inline-size; flex: 1; min-width: 0; height: 100%; overflow: auto; box-sizing: border-box; padding: 28px; color: #25334c; background: #f7f8fb; font-size: 14px; }
 header, .detail-heading, .toolbar, .dialog-heading, .actions, .preview-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; } header { margin-bottom: 24px; flex-wrap: wrap; } header > div:first-child { min-width: 0; } .toolbar { flex-shrink: 0; flex-wrap: wrap; } h1 { margin: 0 0 8px; font-size: 26px; } h2 { margin: 0 0 8px; font-size: 18px; } p { margin: 0; line-height: 1.7; } header p, .detail-heading p { color: #78849a; font-size: 13px; } .count { font-size: 14px; background: #e9edf6; padding: 3px 9px; border-radius: 20px; vertical-align: middle; font-weight: normal; }
 button { font: inherit; cursor: pointer; border: 1px solid #d9dfeb; border-radius: 8px; padding: 9px 16px; background: #fff; color: inherit; } button:hover { border-color: #6877dd; } button:disabled { opacity: .5; cursor: default; } button.primary { color: white; background: #4e5bd5; border-color: #4e5bd5; } input, select, textarea { display: block; box-sizing: border-box; width: 100%; font: inherit; color: inherit; background: transparent; border: 1px solid #d9dfeb; border-radius: 8px; padding: 10px 12px; } input:focus, select:focus, textarea:focus { outline: 2px solid #9aa8f6; outline-offset: 1px; }

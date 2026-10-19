@@ -233,3 +233,15 @@ def test_catalog_latest_release_tracks_versions_without_marking_draft_published(
         life.publish(did)
         assert summary(did)['latest_release_version'] == 2
         assert summary(other)['latest_release_version'] == 1
+
+
+def test_stale_sample_edit_keeps_current_dataset(setup):
+    lib, life = setup
+    did = draft(lib, [text_row()])
+    original = life.view(did)
+    sid = original['sample_ids'][0]
+    latest = life.edit(did, sid, text_row('newer'), expected_updated_at=original['updated_at'])
+    with pytest.raises(LibraryError, match='其他页面更新') as error:
+        life.edit(did, sid, text_row('stale'), expected_updated_at=original['updated_at'])
+    assert error.value.status == 409
+    assert life.view(did)['rows'] == latest['rows']

@@ -38,6 +38,7 @@
 <script>
 import { mapState, mapActions } from 'pinia'
 import axios from 'axios'
+import {publishChange,subscribeChanges} from '@/components/manage/forms/changes'
 import { useAppConfig } from '@/stores/appConfig'
 import { useTheme } from '@/stores/theme'
 
@@ -45,7 +46,7 @@ export default {
     name: 'DataflowSettings',
     data() {
         return {
-            outputRoot: '', storageError: '', storageNotice: '', savingStorage: false,
+            savedOutputRoot:'', rootVersion:0, stopChanges:null, outputRoot: '', storageError: '', storageNotice: '', savingStorage: false,
             languageList: [
                 {
                     key: 'en',
@@ -70,6 +71,7 @@ export default {
         }
     },
     computed: {
+        rootDirty(){return this.outputRoot!==this.savedOutputRoot},
         ...mapState(useAppConfig, ['local', 'language']),
         ...mapState(useTheme, ['theme', 'color', 'gradient']),
         themeModel: {
@@ -100,11 +102,15 @@ export default {
     mounted() {
         this.getConfig()
         this.loadOutputRoot()
+        this.stopChanges=subscribeChanges(change=>{if(change.topic==='result-storage'){if(this.rootDirty)this.storageNotice='默认目录已在其他页面更新，当前输入已保留。';else this.loadOutputRoot()}})
     },
+    activated(){if(!this.rootDirty)this.loadOutputRoot()},
+    beforeUnmount(){this.stopChanges?.()},
     methods: {
         async loadOutputRoot() {
-            try { const r = await axios.get('/api/v1/tasks/result-storage'); if (!r.data.success) throw new Error(r.data.message); this.outputRoot = r.data.data.output_root }
-            catch(e) { this.storageError = e.message }
+            const version=++this.rootVersion
+            try { const r = await axios.get('/api/v1/tasks/result-storage'); if (!r.data.success) throw new Error(r.data.message); if(version===this.rootVersion && !this.rootDirty){this.outputRoot = r.data.data.output_root;this.savedOutputRoot=this.outputRoot} }
+            catch(e) { if(version===this.rootVersion)this.storageError = e.message }
         },
         async chooseOutputRoot() {
             this.savingStorage=true;this.storageError='';try{const r=await axios.post('/api/v1/tasks/result-storage/choose');if(!r.data.success)throw new Error(r.data.message);if(!r.data.data.cancelled)this.outputRoot=r.data.data.output_root}catch(e){this.storageError=e.response?.data?.message||e.message}finally{this.savingStorage=false}
@@ -112,7 +118,7 @@ export default {
         async saveOutputRoot() {
             if (this.savingStorage) return
             this.savingStorage = true; this.storageError = ''; this.storageNotice = ''
-            try { const r = await axios.put('/api/v1/tasks/result-storage', {output_root:this.outputRoot}); if (!r.data.success) throw new Error(r.data.message); this.outputRoot = r.data.data.output_root; this.storageNotice = '默认结果目录已保存。' }
+            try { const r = await axios.put('/api/v1/tasks/result-storage', {output_root:this.outputRoot}); if (!r.data.success) throw new Error(r.data.message); this.outputRoot = r.data.data.output_root;this.savedOutputRoot=this.outputRoot;publishChange('result-storage'); this.storageNotice = '默认结果目录已保存。' }
             catch(e) { this.storageError = e.response?.data?.message || e.message }
             finally { this.savingStorage = false }
         },

@@ -23,7 +23,7 @@ from app.api.v1.handlers import install_exception_handlers
 from app.api.v1.resp import ok
 
 
-def create_preview(root):
+def create_preview(root, configure=None):
     root = Path(root).resolve()
     root.mkdir(parents=True, exist_ok=True)
     # Hard boundary: never point this tool at an existing data directory.
@@ -90,6 +90,9 @@ def create_preview(root):
                 await websocket.send_json({'type': 'error', 'message': '隔离验收不执行模型调用。'})
         except WebSocketDisconnect:
             pass
+
+    if configure is not None:
+        configure(app, root, lib, records)
 
     # Canvas initialization reads optional catalog resources; no production registries.
     @app.get('/api/v1/{path:path}')

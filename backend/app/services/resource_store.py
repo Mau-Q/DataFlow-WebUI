@@ -47,3 +47,7 @@ class ResourceStore:
 
     def list_all(self):
         return list(self.read().values())
+
+
+class ResourceConflictError(ValueError):
+    """An editor attempted to overwrite a newer persisted resource revision."""

@@ -46,37 +46,13 @@
                 包含我创建的资源和自定义流程实际使用的资源；同一资源只显示一次。
             </p>
             <div class="filters">
-                <input
-                    v-model="search"
-                    type="search"
-                    aria-label="搜索资源"
-                    placeholder="搜索名称、描述或算子"
-                /><select v-model="usage" aria-label="用途">
-                    <option value="">全部用途</option>
-                    <option v-for="u in usages" :key="u">{{ u }}</option></select
-                ><select v-model="purpose" aria-label="功能">
-                    <option value="">全部功能</option>
-                    <option v-for="p in purposes" :key="p">{{ p }}</option>
-                </select>
-                <select v-if="isPrompt" v-model="operator" aria-label="适用算子">
-                    <option value="">全部算子</option>
-                    <option v-for="op in operators" :key="op">{{ op }}</option>
-                </select>
-                <select v-model="pipeline" aria-label="Pipeline">
-                    <option value="">全部 Pipeline</option>
-                    <option v-for="p in availablePipelines" :key="p.id" :value="p.id">
-                        {{ p.name }}
-                    </option></select
-                ><select v-if="pipeline" v-model="relation" aria-label="流程关系">
-                    <option value="referenced">此流程使用</option>
-                    <option value="compatible">适用于此流程</option>
-                </select>
-                <button
-                    v-if="search || usage || purpose || pipeline || operator"
-                    @click="clearFilters"
-                >
-                    清除筛选
-                </button>
+                <native-text v-model="search" :theme="theme" label="搜索资源" placeholder="搜索名称、描述或算子" />
+                <native-select v-model="usage" :theme="theme" label="用途" :options="[{value:'',label:'全部用途'}, ...usages.map(u=>({value:u,label:u}))]" />
+                <native-select v-model="purpose" :theme="theme" label="功能" :options="[{value:'',label:'全部功能'}, ...purposes.map(p=>({value:p,label:p}))]" />
+                <native-select v-if="isPrompt" v-model="operator" :theme="theme" label="适用算子" :options="[{value:'',label:'全部算子'}, ...operators.map(o=>({value:o,label:o}))]" />
+                <native-select v-model="pipeline" :theme="theme" label="Pipeline" :options="[{value:'',label:'全部 Pipeline'}, ...availablePipelines.map(p=>({value:p.id,label:p.name}))]" />
+                <native-select v-if="pipeline" v-model="relation" :theme="theme" label="流程关系" :options="[{value:'referenced',label:'此流程使用'},{value:'compatible',label:'适用于此流程'}]" />
+                <fv-button v-if="search || usage || purpose || pipeline || operator" :theme="theme" :border-radius="6" @click="clearFilters">清除筛选</fv-button>
             </div>
             <p v-if="pipeline" class="scope">
                 {{
@@ -141,78 +117,35 @@
             <p class="scope">{{ filtered.length }} 项 · {{ referenceScope }}</p>
         </template>
         <section v-else class="detail">
-            <button class="link back" @click="back">
+            <fv-button :theme="theme" :border-radius="6"  class="link back" @click="back" :disabled="busy">
                 ← 返回{{ isPrompt ? '模板' : 'Schema' }}列表
-            </button>
+            </fv-button>
             <template v-if="editing">
                 <h2>{{ editing.id ? '编辑' : '新建' }}{{ isPrompt ? '模板' : ' Schema' }}</h2>
                 <form @submit.prevent="save">
                     <div class="form-grid">
-                        <label>名称<input v-model="editing.name" required maxlength="240" /></label
-                        ><label
-                            >用途<select v-model="editing.usage">
-                                <option v-for="u in usages" :key="u">{{ u }}</option>
-                            </select></label
-                        ><label
-                            >功能<select v-model="editing.purpose">
-                                <option v-for="p in purposes" :key="p">{{ p }}</option>
-                            </select></label
-                        >
+                        <div class="native-field">名称<native-text v-model="editing.name" :theme="theme" :disabled="busy" label="名称" /></div>
+                        <div class="native-field">用途<native-select v-model="editing.usage" :theme="theme" :disabled="busy" label="用途" :options="usages" /></div>
+                        <div class="native-field">功能<native-select v-model="editing.purpose" :theme="theme" :disabled="busy" label="功能" :options="purposes" /></div>
                     </div>
-                    <label>描述<textarea v-model="editing.description" rows="2" /></label>
-                    <template v-if="isPrompt"
-                        ><label
-                            >模板内容<textarea
-                                v-model="editing.template"
-                                rows="10"
-                                spellcheck="false"
-                                required
-                            />
-                        </label>
-                        <p class="help">
-                            使用 {变量名}；JSON 花括号可直接书写。文本画布支持
-                            FormatStrPromptedGenerator；图片流程支持 PromptedVQAGenerator。
-                        </p>
-                        <label
-                            >允许的算子（可留空，不额外限制）<input
-                                v-model="allowedText"
-                                placeholder="FormatStrPromptedGenerator, PromptedVQAGenerator"
-                        /></label>
-                        <p class="help">
-                            检测到变量：{{ variablesOf(editing.template).join(' · ') || '无' }}
-                        </p>
-                        <label
-                            >预览变量（JSON 对象）<textarea
-                                v-model="exampleText"
-                                rows="4"
-                                spellcheck="false"
-                            /></label
-                    ></template>
-                    <template v-else
-                        ><label
-                            >JSON Schema<textarea
-                                v-model="editing.schema"
-                                rows="15"
-                                spellcheck="false"
-                                required
-                            /></label
-                        ><label
-                            >示例数据<textarea
-                                v-model="editing.example"
-                                rows="6"
-                                spellcheck="false"
-                            />
-                        </label>
-                        <p class="help">
-                            只有被流程明确引用才会应用；保存 Schema 不会自动替换现有导入校验。
-                        </p></template
-                    >
+                    <div class="native-field">描述<native-text v-model="editing.description" :theme="theme" :disabled="busy" label="描述" multiline :rows="2" /></div>
+                    <template v-if="isPrompt">
+                        <div class="native-field">模板内容<native-text v-model="editing.template" :theme="theme" :disabled="busy" label="模板内容" multiline code :rows="10" /></div>
+                        <p class="help">使用 {变量名}；JSON 花括号可直接书写。文本画布支持 FormatStrPromptedGenerator；图片流程支持 PromptedVQAGenerator。</p>
+                        <div class="native-field">允许的算子（可留空，不额外限制）<native-text v-model="allowedText" :theme="theme" :disabled="busy" label="允许的算子" placeholder="FormatStrPromptedGenerator, PromptedVQAGenerator" /></div>
+                        <p class="help">检测到变量：{{ variablesOf(editing.template).join(' · ') || '无' }}</p>
+                        <div class="native-field">预览变量（JSON 对象）<native-text v-model="exampleText" :theme="theme" :disabled="busy" label="预览变量" multiline code :rows="4" /></div>
+                    </template>
+                    <template v-else>
+                        <div class="native-field">JSON Schema<native-text v-model="editing.schema" :theme="theme" :disabled="busy" label="JSON Schema" multiline code :rows="15" /></div>
+                        <div class="native-field">示例数据<native-text v-model="editing.example" :theme="theme" :disabled="busy" label="示例数据" multiline code :rows="6" /></div>
+                        <p class="help">只有被流程明确引用才会应用；保存 Schema 不会自动替换现有导入校验。</p>
+                    </template>
                     <div class="actions">
-                        <button type="button" :disabled="busy" @click="preview">
-                            {{ isPrompt ? '预览模板' : '校验 Schema 与示例' }}</button
-                        ><button type="button" @click="formatEditor">格式化 JSON</button
-                        ><button class="primary" :disabled="busy">保存</button
-                        ><button type="button" @click="cancelEdit">取消</button>
+                        <fv-button :theme="theme" :disabled="busy" :border-radius="6" @click="preview">{{ isPrompt ? '预览模板' : '校验 Schema 与示例' }}</fv-button>
+                        <fv-button :theme="theme" :disabled="busy" :border-radius="6" @click="formatEditor">格式化 JSON</fv-button>
+                        <fv-button theme="dark" background="#4e5bd5" :disabled="busy || !editing.name.trim() || editing.name.length > 240 || !(isPrompt ? editing.template.trim() : editing.schema.trim())" :border-radius="6" @click="save">保存</fv-button>
+                        <fv-button :theme="theme" :disabled="busy" :border-radius="6" @click="cancelEdit">取消</fv-button>
                     </div>
                 </form>
             </template>
@@ -226,12 +159,9 @@
                         </p>
                     </div>
                     <div class="actions">
-                        <button v-if="!selected.readonly" @click="edit">编辑</button
-                        ><button v-if="!selected.readonly" @click="remove" :disabled="busy">
-                            删除</button
-                        ><button v-if="selected.kind !== 'python'" @click="copyAsOwn">
-                            复制为我的{{ isPrompt ? '模板' : ' Schema' }}</button
-                        ><button @click="copyContent">复制内容</button>
+                        <fv-button :theme="theme" :border-radius="6"  v-if="!selected.readonly" @click="edit" :disabled="busy">编辑</fv-button><fv-button :theme="theme" :border-radius="6" v-if="!selected.readonly" @click="remove" :disabled="busy">
+                            删除</fv-button><fv-button :theme="theme" :border-radius="6" v-if="selected.kind !== 'python'" @click="copyAsOwn">
+                            复制为我的{{ isPrompt ? '模板' : ' Schema' }}</fv-button><fv-button :theme="theme" :border-radius="6" @click="copyContent">复制内容</fv-button>
                     </div>
                 </div>
                 <p v-if="selected.description" class="description">{{ selected.description }}</p>
@@ -270,28 +200,21 @@
                         Python
                         类可能包含条件和拼接逻辑。参数预览只生成提示词文本，不调用模型；预览结果另存后是固定文本，需要自行添加变量。
                     </p>
-                    <label>构造参数（JSON 对象）<textarea v-model="initText" rows="3" /></label
-                    ><label
-                        >build_prompt 参数（JSON 对象）<textarea v-model="exampleText" rows="4" />
-                    </label>
+                    <div class="native-field">构造参数（JSON 对象）<native-text v-model="initText" :theme="theme" label="构造参数" multiline code :rows="3" /></div><div class="native-field"
+                        >build_prompt 参数（JSON 对象）<native-text v-model="exampleText" :theme="theme" label="预览变量" multiline code :rows="4" />
+                    </div>
                     <div class="actions">
-                        <button @click="preview" :disabled="busy">参数预览</button
-                        ><button v-if="previewText" @click="copyAsOwn">从预览新建文本模板</button>
+                        <fv-button :theme="theme" :border-radius="6"  @click="preview" :disabled="busy">参数预览</fv-button><fv-button :theme="theme" :border-radius="6" v-if="previewText" @click="copyAsOwn">从预览新建文本模板</fv-button>
                     </div></template
                 >
                 <template v-else
                     ><h3>{{ isPrompt ? '模板内容' : 'JSON Schema' }}</h3>
                     <pre>{{ isPrompt ? selected.template : pretty(selected.schema) }}</pre>
-                    <label v-if="isPrompt"
-                        >预览变量（JSON 对象）<textarea v-model="exampleText" rows="4" /></label
-                    ><label v-else
-                        >示例数据（可替换为待检查的数据）<textarea
-                            v-model="testExample"
-                            rows="6"
-                        /></label
-                    ><button @click="preview" :disabled="busy">
+                    <div class="native-field" v-if="isPrompt"
+                        >预览变量（JSON 对象）<native-text v-model="exampleText" :theme="theme" label="预览变量" multiline code :rows="4" /></div><div class="native-field" v-else
+                        >示例数据（可替换为待检查的数据）<native-text v-model="testExample" :theme="theme" label="示例数据" multiline code :rows="6" /></div><fv-button :theme="theme" :border-radius="6"  @click="preview" :disabled="busy">
                         {{ isPrompt ? '预览模板' : '校验示例' }}
-                    </button></template
+                    </fv-button></template
                 >
                 <h3>使用流程、步骤与参数</h3>
                 <ul v-if="visibleReferences.length" class="references">
@@ -337,7 +260,13 @@ import {
     usageCount,
     usageKind
 } from './catalog.js'
+import {filtersFromQuery,queryForFilters} from './resourceQuery'
+import NativeSelect from '@/components/manage/forms/NativeSelect.vue'
+import NativeText from '@/components/manage/forms/NativeText.vue'
+import { publishChange, subscribeChanges } from '@/components/manage/forms/changes'
+
 export default {
+    components: { NativeSelect, NativeText },
     name: 'ManagedResourceCatalog',
     props: { kind: { type: String, required: true } },
     data: () => ({
@@ -365,9 +294,11 @@ export default {
         allowedText: '',
         testExample: '',
         requestVersion: 0,
+        applyingQuery: false, syncPending: false, stopChanges: null,
         usages
     }),
     computed: {
+        filterState() { return [this.source,this.search,this.usage,this.purpose,this.pipeline,this.operator,this.relation] },
         visibleReferences() {
             return (this.selected?.references || []).filter((ref) =>
                 this.pipeline
@@ -398,6 +329,7 @@ export default {
         }
     },
     watch: {
+        filterState: { deep:true, handler() { if (!this.applyingQuery) this.syncQuery() } },
         source() {
             this.ensurePipeline()
         },
@@ -408,18 +340,18 @@ export default {
             }
         },
         kind() {
-            this.back()
-            this.source = 'user'
-            this.clearFilters()
-            this.load()
+            this.selected=null;this.editing=null;this.previewText='';this.previewError='';this.error='';this.notice='';this.syncPending=false
+            this.applyQuery();this.load()
         }
     },
     mounted() {
+        this.stopChanges = subscribeChanges(change => { if (['resources','pipelines'].includes(change.topic)) { if(this.editing || this.busy)this.syncPending=true;else this.load() } })
         this.load()
     },
     activated() {
         this.load()
     },
+    beforeUnmount() { this.stopChanges?.() },
     methods: {
         matchesPipeline,
         matchesSource,
@@ -454,8 +386,11 @@ export default {
                 this.records = result.resources
                 this.pipelines = result.pipelines
                 this.referenceScope = result.reference_scope
-                if (this.selected)
-                    this.selected = this.records.find((r) => r.ref === this.selected.ref) || null
+                if (this.selected) {
+                    const previous=this.selected
+                    this.selected=this.records.find(r=>r.ref===previous.ref)||null
+                    if(this.selected && !this.editing && this.selected.updated_at!==previous.updated_at){this.exampleText=JSON.stringify(this.selected.example_variables||{},null,2);this.testExample=this.selected.example||'';this.previewText='';this.previewError=''}
+                }
                 this.applyQuery()
             } catch (e) {
                 if (version === this.requestVersion)
@@ -471,14 +406,18 @@ export default {
             )
             this.pipeline = selected?.id || ''
         },
+        syncQuery() {
+            if (this.$route.path !== (this.isPrompt ? '/m/prompts' : '/m/schemas')) return
+            const query = queryForFilters(this.$route.query,this)
+            if (JSON.stringify(Object.entries(query).sort()) !== JSON.stringify(Object.entries(this.$route.query).sort())) return this.$router.replace({path:this.$route.path,query})
+        },
         applyQuery() {
             if (this.$route.path !== (this.isPrompt ? '/m/prompts' : '/m/schemas')) return
             const q = this.$route.query
             if (!q.resource && this.selected && !this.editing) this.selected = null
-            if (q.pipeline) this.pipeline = String(q.pipeline)
-            if (q.operator) this.operator = String(q.operator)
-            if (q.source === 'builtin' || q.source === 'user') this.source = q.source
-            if (q.relation === 'compatible') this.relation = 'compatible'
+            this.applyingQuery = true
+            Object.assign(this,filtersFromQuery(q))
+            this.$nextTick(() => { this.applyingQuery = false })
             this.ensurePipeline()
             if (q.resource && !this.editing) {
                 const row = this.records.find((r) => r.ref === q.resource)
@@ -587,7 +526,9 @@ export default {
             this.previewError = ''
         },
         cancelEdit() {
+            if (this.busy) return
             this.editing = null
+            if(this.syncPending){this.syncPending=false;this.load()}
             this.previewText = ''
             this.previewError = ''
         },
@@ -599,8 +540,10 @@ export default {
         },
         async save() {
             await this.action(async () => {
-                const r = this.editing
+                const r = this.editing, kind = this.kind, base = this.base
+                if (!r || !r.name.trim() || r.name.length > 240) throw new Error('请填写 1–240 字名称')
                 const payload = {
+                    ...(r.id ? {expected_updated_at:r.updated_at} : {}),
                     name: r.name,
                     description: r.description,
                     usage: r.usage,
@@ -618,12 +561,17 @@ export default {
                 }
                 const saved = await this.request(
                     r.id ? 'put' : 'post',
-                    this.base +
-                        (this.isPrompt ? '/user' : '') +
+                    base +
+                        (kind === 'prompt' ? '/user' : '') +
                         (r.id ? '/' + encodeURIComponent(r.id) : ''),
                     payload
                 )
+                publishChange('resources', saved.id)
+                if(this.kind !== kind || this.editing !== r)return
                 this.editing = null
+                this.syncPending = false
+                this.source = 'user'
+                await this.syncQuery()
                 await this.load()
                 this.source = 'user'
                 const row = this.records.find(
@@ -634,18 +582,13 @@ export default {
             })
         },
         async remove() {
-            if (!window.confirm(`删除“${this.selected.name}”？已有任务快照保持原样。`)) return
-            await this.action(async () => {
-                await this.request(
-                    'delete',
-                    this.base +
-                        (this.isPrompt ? '/user' : '') +
-                        '/' +
-                        encodeURIComponent(this.selected.id)
-                )
-                this.back()
-                await this.load()
-                this.notice = '已删除'
+            const selected=this.selected, kind=this.kind, base=this.base
+            if(!selected || !window.confirm(`删除“${selected.name}”？已有任务快照保持原样。`))return
+            await this.action(async()=>{
+                await this.request('delete',base+(kind==='prompt'?'/user':'')+'/'+encodeURIComponent(selected.id))
+                publishChange('resources',selected.id)
+                if(this.kind!==kind || this.selected?.ref!==selected.ref)return
+                this.back();this.syncPending=false;await this.load();this.notice='已删除'
             })
         },
         async preview() {
@@ -653,8 +596,9 @@ export default {
             this.busy = true
             this.previewText = ''
             this.previewError = ''
+            const kind=this.kind, target=this.editing || this.selected
             try {
-                const r = this.editing || this.selected
+                const r = target
                 if (this.isPrompt) {
                     const result =
                         this.selected?.kind === 'python' && !this.editing
@@ -667,6 +611,7 @@ export default {
                                   template: r.template,
                                   variables: this.object(this.exampleText)
                               })
+                    if(this.kind!==kind || (this.editing || this.selected)!==target)return
                     this.previewText = result.rendered
                     if (result.missing?.length)
                         this.previewError = '缺少变量：' + result.missing.join('、')
@@ -676,6 +621,7 @@ export default {
                         schema: r.schema,
                         example: this.editing ? r.example : this.testExample
                     })
+                    if(this.kind!==kind || (this.editing || this.selected)!==target)return
                     this.previewText =
                         'Schema 有效' +
                         ((this.editing ? r.example : this.testExample)?.trim()
@@ -683,9 +629,10 @@ export default {
                             : '。尚未提供示例数据。')
                 }
             } catch (e) {
-                this.previewError = e.response?.data?.message || e.message
+                if(this.kind===kind && (this.editing || this.selected)===target)this.previewError = e.response?.data?.message || e.message
             } finally {
                 this.busy = false
+                if(this.syncPending && !this.editing){this.syncPending=false;this.load()}
             }
         },
         pretty(value) {
@@ -758,6 +705,7 @@ export default {
 }
 </script>
 <style scoped>
+.native-field{display:block;margin-bottom:18px;line-height:2}.filters>*{min-width:150px;flex:1}.filters>:first-child{min-width:220px}
 .resources {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     flex: 1;
@@ -927,6 +875,9 @@ small {
     overflow-wrap: anywhere;
 }
 .back {
+    width: max-content;
+    min-width: 180px;
+    white-space: nowrap;
     margin-bottom: 24px;
 }
 .empty {

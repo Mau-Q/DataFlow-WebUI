@@ -1,3 +1,4 @@
+from app.services.resource_store import ResourceConflictError
 from fastapi import APIRouter, HTTPException
 from typing import List
 from app.schemas.prompt import (
@@ -69,6 +70,8 @@ def update_user_prompt(tpl_id: str, body: UserPromptTemplateUpdate):
         updated = container.user_prompt_registry.update(
             tpl_id, **body.model_dump(exclude_unset=True)
         )
+    except ResourceConflictError as exc:
+        raise HTTPException(409, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(422, str(exc))
     if not updated:

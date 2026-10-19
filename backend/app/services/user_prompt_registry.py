@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from app.core.config import settings
-from app.services.resource_store import ResourceStore
+from app.services.resource_store import ResourceStore, ResourceConflictError
 
 BACKEND_DIR = Path(__file__).parent.parent.parent
 PROMPTS_DIR = BACKEND_DIR / settings.RESOURCE_DIR / "prompts"
@@ -70,6 +70,9 @@ class UserPromptRegistry:
             if tpl_id not in data:
                 return None
             rec = data[tpl_id]
+            expected = fields.get('expected_updated_at')
+            if expected is not None and expected != rec.get('updated_at'):
+                raise ResourceConflictError('资源已在其他页面修改；请取消编辑后重新打开，当前输入已保留。')
             for key in ('name', 'description', 'template', 'allowed_operators', 'example_variables', 'usage', 'purpose'):
                 if fields.get(key) is not None:
                     rec[key] = fields[key]

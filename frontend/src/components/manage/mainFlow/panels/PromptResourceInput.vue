@@ -4,18 +4,13 @@
         <p v-if="!supported">此步骤保留内置 Prompt；自定义字段模板支持 FormatStrPromptedGenerator。</p>
         <template v-else>
             <div class="resource-choice">
-                <select aria-label="自定义模板" :value="selectedRef" @change="selectTemplate($event.target.value)">
-                    <option value="">使用内置 Prompt</option>
-                    <option v-if="selectedRef && !templates.some(t => `user_prompt:${t.id}` === selectedRef)" :value="selectedRef">引用不存在：{{ selectedRef }}</option>
-                    <option v-for="t in templates" :key="t.id" :value="`user_prompt:${t.id}`">{{ t.name }}</option>
-                </select>
-                <button type="button" @click="load">刷新</button>
+                <native-select :model-value="selectedRef" :theme="theme" label="自定义模板" :options="templateOptions" @update:modelValue="selectTemplate" />
+                <fv-button :theme="theme" :border-radius="6" @click="load">刷新</fv-button>
             </div>
             <router-link :to="managerLocation">管理模板</router-link>
             <div v-for="variable in variables" :key="variable" class="binding-row">
                 <label :for="`binding-${variable}`">{{ variable }}</label>
-                <input :id="`binding-${variable}`" :aria-label="`变量 ${variable} 的数据列`" :value="bindings[variable] || ''"
-                    placeholder="数据列名" @input="setBinding(variable, $event.target.value)" />
+                <native-text :model-value="bindings[variable] || ''" :theme="theme" :label="`变量 ${variable} 的数据列`" placeholder="数据列名" @update:modelValue="setBinding(variable,$event)" />
             </div>
             <p v-if="selectedRef">任务启动时固定内容；修改模板后，新任务使用新内容。</p>
         </template>
@@ -23,9 +18,14 @@
     </div>
 </template>
 <script setup>
-import { computed, ref, onMounted, watch } from 'vue'
+import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
 import axios from 'axios'
 import { useRoute } from 'vue-router'
+import NativeSelect from '@/components/manage/forms/NativeSelect.vue'
+import NativeText from '@/components/manage/forms/NativeText.vue'
+import {subscribeChanges} from '@/components/manage/forms/changes'
+import {useTheme} from '@/stores/theme'
+const theme=computed(()=>useTheme().theme)
 const route = useRoute()
 const emit = defineEmits(['update-value'])
 const props = defineProps({ item: Object, data: Object })
@@ -34,16 +34,22 @@ const templates = ref([]), variables = ref([]), error = ref('')
 const supported = computed(() => (props.data.name || props.data.label) === 'FormatStrPromptedGenerator')
 const selectedRef = computed(() => typeof props.item.value === 'string' && props.item.value.startsWith('user_prompt:') ? props.item.value : props.item.value?.ref || '')
 const bindings = computed(() => props.item.value?.bindings || {})
+let loadVersion=0, variableVersion=0,stopChanges
+const templateOptions=computed(()=>[{value:'',label:'使用内置 Prompt'},...(selectedRef.value&&!templates.value.some(t=>`user_prompt:${t.id}`===selectedRef.value)?[{value:selectedRef.value,label:`引用不存在：${selectedRef.value}`}]:[]),...templates.value.map(t=>({value:`user_prompt:${t.id}`,label:t.name}))])
 async function load() {
+    if(!supported.value)return
+    const version=++loadVersion
     try {
         const res = await axios.get('/api/v1/prompts/user')
         if (!res.data?.success) throw new Error(res.data?.message || '模板读取失败')
+        if(version!==loadVersion)return
         templates.value = res.data.data.filter(t => !t.allowed_operators?.length || t.allowed_operators.includes('FormatStrPromptedGenerator'))
         error.value = ''
         await updateVariables()
-    } catch (e) { error.value = e.message }
+    } catch (e) { if(version===loadVersion)error.value = e.message }
 }
 async function updateVariables() {
+    const version=++variableVersion
     const selected = selectedRef.value
     const record = templates.value.find(t => `user_prompt:${t.id}` === selected)
     variables.value = []
@@ -51,8 +57,8 @@ async function updateVariables() {
     try {
         const res = await axios.post('/api/v1/prompts/user/preview', { template: record.template, variables: {} })
         if (!res.data?.success) throw new Error(res.data?.message || '模板校验失败')
-        if (selectedRef.value === selected) variables.value = res.data.data.placeholders
-    } catch (e) { error.value = e.message }
+        if (version===variableVersion && selectedRef.value === selected) variables.value = res.data.data.placeholders
+    } catch (e) { if(version===variableVersion && selectedRef.value===selected)error.value = e.message }
 }
 function selectTemplate(value) {
     if (!value) { emit('update-value', props.data.allowed_prompts?.[0] || props.item.default_value || null); return }
@@ -62,7 +68,8 @@ function setBinding(key, value) {
     emit('update-value', { ref: selectedRef.value, bindings: { ...bindings.value, [key]: value } })
 }
 watch(selectedRef, updateVariables)
-onMounted(load)
+onMounted(()=>{load();stopChanges=subscribeChanges(change=>{if(change.topic==='resources')load()})})
+onUnmounted(()=>{stopChanges?.();loadVersion++;variableVersion++})
 </script>
 <style scoped>
 .prompt-resource-input { font-size: 12px; padding: 10px 0; }

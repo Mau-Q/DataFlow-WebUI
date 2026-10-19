@@ -8,7 +8,7 @@ from referencing import Registry, Resource
 from referencing.jsonschema import DRAFT7, DRAFT201909, DRAFT202012
 from referencing.exceptions import NoSuchResource, Unresolvable
 from app.core.config import settings
-from app.services.resource_store import ResourceStore
+from app.services.resource_store import ResourceStore, ResourceConflictError
 
 BACKEND_DIR = Path(__file__).parent.parent.parent
 SCHEMAS_DIR = BACKEND_DIR / settings.RESOURCE_DIR / "schemas"
@@ -89,6 +89,9 @@ class JsonSchemaManager:
             if schema_id not in data:
                 return None
             rec = data[schema_id]
+            expected = fields.get('expected_updated_at')
+            if expected is not None and expected != rec.get('updated_at'):
+                raise ResourceConflictError('资源已在其他页面修改；请取消编辑后重新打开，当前输入已保留。')
             for key in ('name', 'description', 'schema', 'example', 'usage', 'purpose'):
                 if fields.get(key) is not None:
                     rec[key] = fields[key]
