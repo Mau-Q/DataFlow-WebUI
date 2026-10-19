@@ -1,5 +1,4 @@
 <template>
-    <router-link v-if="currentPipeline?.tags?.includes('platform-text')" :to="{path:'/m/generation',query:{pipeline:currentPipeline.id}}" class="wizard-return">返回文本生成向导</router-link>
     <router-link v-if="isMM" :to="{path:'/m/multimodal',query:{config:mmRecord?.id}}" class="wizard-return">图片、服务与输出设置 · MM 未启用运行</router-link>
     <div class="df-default-container" :class="[{ dark: theme === 'dark', 'show-pipeline': show.pipeline, 'show-chat': show.chat }]">
         <pipeline v-model="show.pipeline" v-model:loading="lock.loading" v-model:pipeline="currentPipeline"
