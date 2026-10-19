@@ -7,6 +7,18 @@ export default {
     component: () => AsyncLoad(() => import('@/views/manage/index.vue')),
     children: [
         {
+            path: 'materials',
+            component: () => AsyncLoad(() => import('@/views/manage/library/index.vue')),
+            props: { mode: 'materials' },
+            meta: { title: '原始材料' }
+        },
+        {
+            path: 'training-datasets',
+            component: () => AsyncLoad(() => import('@/views/manage/library/index.vue')),
+            props: { mode: 'drafts' },
+            meta: { title: '训练数据集' }
+        },
+        {
             path: '',
             component: () => AsyncLoad(() => import('@/views/manage/dataflow/index.vue'))
         },

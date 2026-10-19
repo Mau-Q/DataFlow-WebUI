@@ -16,6 +16,7 @@ class AppContainer:
         self.dataset_visualize_service = None
         self.json_schema_manager = None
         self.user_prompt_registry = None
+        self.data_library = None
 
     def init(self):
         from app.services.dataset_registry import DatasetRegistry, VisualizeDatasetService
@@ -53,6 +54,8 @@ class AppContainer:
         self.text2sql_database_manager_registry = Text2SQLDatabaseManagerRegistry()
         self.json_schema_manager = JsonSchemaManager()
         self.user_prompt_registry = UserPromptRegistry()
+        from app.services.data_library import DataLibrary
+        self.data_library = DataLibrary()
 
 
 

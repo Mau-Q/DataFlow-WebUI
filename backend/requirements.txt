@@ -11,3 +11,6 @@ ray
 open-dataflow==1.0.10
 # DataFlow text operators still import pkg_resources. setuptools 82 removed it.
 setuptools<82
+# Source-library validation and previews (PDF and raster images).
+pypdf>=5,<7
+Pillow>=10,<13

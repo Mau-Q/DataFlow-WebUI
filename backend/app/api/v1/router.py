@@ -26,3 +26,6 @@ api_router.include_router(agent.router, prefix="/agent")
 api_router.include_router(json_schemas.router, prefix="/json_schemas")
 # api_router.include_router(models.router, prefix="/models")
 # api_router.include_router(inference.router, prefix="/inference")
+
+from .endpoints import data_library
+api_router.include_router(data_library.router, prefix="/library")
