@@ -17,7 +17,7 @@
             </template>
             <template #node-operator-node="nodeProps">
                 <operatorNode v-bind="nodeProps" @delete-node="deleteNode" @update-node-data="updateNodeData"
-                    @update-run-value="updateRunValue" @show-details="showDetails" @download-data="downloadData" />
+                    @update-run-value="updateRunValue" @show-details="showDetails" @download-data="downloadData" @inspect-node="inspectOperator" />
             </template>
 
             <template #connection-line="connectionLineProps">
@@ -27,9 +27,11 @@
                 <baseEdge v-bind="edgeProps" />
             </template>
         </VueFlow>
-        <operator-detail-panel v-if="selectedOperator" v-model="showInspector"
-            :node-id="selectedOperator.id" :data="selectedOperator.data" :theme="theme"
-            @update-run-value="updateRunValue" @show-details="showDetails" @download-data="downloadData" />
+        <Teleport to="body">
+            <operator-detail-panel v-if="selectedOperator" v-model="showInspector"
+                :node-id="selectedOperator.id" :data="selectedOperator.data" :theme="theme"
+                @update-run-value="updateRunValue" @show-details="showDetails" @download-data="downloadData" />
+        </Teleport>
     </div>
 </template>
 
@@ -46,6 +48,8 @@ import databaseNode from './nodes/databaseNode.vue'
 import operatorNode from './nodes/operatorNode/index.vue'
 import operatorDetailPanel from './panels/operatorDetailPanel.vue'
 import baseConnectionLine from './edges/baseConnectionLine.vue'
+
+defineOptions({ name: 'DataflowCanvas' })
 
 const { $Guid, $infoBox } = useGlobal()
 const appConfig = useAppConfig()
@@ -132,6 +136,10 @@ const selectOperator = ({ node }) => {
     }
     selectedOperator.value = node
     showInspector.value = true
+}
+
+const inspectOperator = (nodeId) => {
+    selectOperator({ node: useVueFlow(props.id).findNode(nodeId) })
 }
 
 const closeInspector = () => {

@@ -175,7 +175,7 @@ const downloadData = () => emits('download-data', { pipeline_idx: props.data?.pi
 
 <style lang="scss">
 .operator-detail-drawer {
-    position: absolute;
+    position: fixed;
     top: 15px;
     right: 15px;
     bottom: 15px;
@@ -190,7 +190,7 @@ const downloadData = () => emits('download-data', { pipeline_idx: props.data?.pi
     flex-direction: column;
     box-shadow: 0px 12px 40px rgba(0, 0, 0, 0.18);
     backdrop-filter: blur(14px);
-    z-index: 8;
+    z-index: 30;
 
     &.dark {
         background: rgba(30, 30, 30, 0.96);

@@ -4,30 +4,15 @@
             <fv-progress-ring v-if="loading" :loading="true" :r="18" :border-width="3" background="white"
                 :color="thisData.borderColor"></fv-progress-ring>
         </div>
-        <div v-if="!showPorts" class="operator-compact-summary" @mousedown.stop>
+        <div class="operator-compact-summary" @mousedown.stop>
             <div class="operator-summary-row">
                 <span class="step-pill">{{ stepLabel }}</span>
                 <span class="parameter-count">{{ initParamCount }} init · {{ runParamCount }} run</span>
             </div>
-            <button class="ports-toggle nodrag" type="button" @click.stop="showPorts = true">
-                <i class="ms-Icon ms-Icon--Plug"></i>
-                {{ appConfig.local('Show ports') }}
+            <button class="details-button nodrag" type="button" :aria-label="`${thisData.label} 参数详情`" @click.stop="emits('inspect-node', props.id)">
+                <i class="ms-Icon ms-Icon--Info"></i>
+                {{ appConfig.local('参数详情') }}
             </button>
-        </div>
-        <div v-else class="operator-ports nodrag" @mousedown.stop @click.stop @wheel.stop>
-            <div class="ports-header">
-                <span>{{ appConfig.local('Run Parameters') }}</span>
-                <button type="button" :title="appConfig.local('Hide ports')" @click.stop="showPorts = false">
-                    <i class="ms-Icon ms-Icon--ChevronUp"></i>
-                </button>
-            </div>
-            <div v-for="(item, index) in visibleRunParams" :key="`port_${index}`" class="port-row">
-                <Handle :id="`${item.name}::target::run_key`" type="target" class="handle-item compact-port"
-                    :position="Position.Left" />
-                <span :title="item.name">{{ item.name }}</span>
-                <Handle :id="`${item.name}::source::run_key`" type="source" class="handle-item compact-port"
-                    :position="Position.Right" />
-            </div>
         </div>
     </base-node>
 </template>
@@ -38,13 +23,14 @@ import { useGlobal } from '@/hooks/general/useGlobal'
 import { useAppConfig } from '@/stores/appConfig'
 import { useDataflow } from '@/stores/dataflow'
 import { useTheme } from '@/stores/theme'
-import { Position, Handle } from '@vue-flow/core'
 
 import baseNode from '@/components/manage/mainFlow/nodes/baseNode.vue'
 
+defineOptions({ name: 'OperatorCanvasNode' })
+
 const { $api } = useGlobal()
 
-const emits = defineEmits(['update-node-data'])
+const emits = defineEmits(['update-node-data', 'inspect-node'])
 
 const props = defineProps({
     id: {
@@ -99,7 +85,6 @@ const hiddenParam = (item) => {
     return true
 }
 
-const showPorts = ref(false)
 const compactDescription = computed(() => {
     let text = String(
         thisData.value.pipelineRole || thisData.value.nodeInfo || thisData.value.description || ''
@@ -124,7 +109,7 @@ const compactDescription = computed(() => {
 const displayData = computed(() => ({
     ...thisData.value,
     nodeInfo: compactDescription.value,
-    compact: !showPorts.value
+    compact: true
 }))
 const visibleRunParams = computed(() => thisData.value.operatorParams?.run?.filter(hiddenParam) || [])
 const initParamCount = computed(() => thisData.value.operatorParams?.init?.filter((item) => item.show).length || 0)
@@ -289,7 +274,7 @@ onMounted(async () => {
             white-space: nowrap;
         }
 
-        .ports-toggle {
+        .details-button {
             height: 28px;
             padding: 0px 9px;
             flex-shrink: 0;
@@ -310,60 +295,5 @@ onMounted(async () => {
         }
     }
 
-    .operator-ports {
-        width: 100%;
-        max-height: 280px;
-        padding-bottom: 5px;
-        overflow-y: auto;
-
-        .ports-header,
-        .port-row {
-            position: relative;
-            min-height: 30px;
-            padding: 0px 15px;
-            display: flex;
-            align-items: center;
-        }
-
-        .ports-header {
-            justify-content: space-between;
-            color: var(--node-status-color);
-            font-size: 10px;
-            font-weight: 700;
-
-            button {
-                width: 26px;
-                height: 26px;
-                color: var(--node-title-color);
-                background: transparent;
-                border: 0;
-                border-radius: 6px;
-                cursor: pointer;
-
-                &:hover {
-                    background: var(--node-group-background);
-                }
-            }
-        }
-
-        .port-row {
-            margin: 0px 10px 5px;
-            padding: 0px 10px;
-            background: var(--node-group-background);
-            border-radius: 6px;
-            color: var(--node-title-color);
-            font-size: 10px;
-
-            span {
-                overflow: hidden;
-                text-overflow: ellipsis;
-                white-space: nowrap;
-            }
-
-            .compact-port {
-                top: 50%;
-            }
-        }
-    }
 }
 </style>

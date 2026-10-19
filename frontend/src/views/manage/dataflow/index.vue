@@ -430,7 +430,7 @@ export default {
     },
     methods: {
         async fitPlatformWhenReady() {
-            if (!this.$route.query.workflow) return
+            if (!this.currentPipeline && !this.isMM) return
             const flow = useVueFlow(this.flowId)
             const count = this.isMM ? this.mmRecord?.config.steps.length : this.currentPipeline?.config?.operators.length
             if (flow.nodes.value.length !== count + 1) return
@@ -438,7 +438,7 @@ export default {
             if (key === this.platformFitKey) return
             this.platformFitKey = key
             await this.$nextTick()
-            flow.fitView({padding:0.15,duration:0})
+            flow.fitView({padding:0.22,duration:0})
         },
         async platformRequest(method, path, data) {
             const r = await http({method, url:'/api/v1'+path, data})
@@ -480,8 +480,7 @@ export default {
                     flow.addEdges(graph.edges)
                 }
                 await this.$nextTick()
-                if (workflow === 'multimodal') useVueFlow(this.flowId).fitView({padding:0.15,duration:300})
-                else await this.autoLayoutPipeline()
+                await this.autoLayoutPipeline()
             } catch (e) { this.$barWarning(e.message, {status:'error'}) }
             finally {
                 this.loadingPlatform = false
@@ -557,7 +556,7 @@ export default {
                 flow.updateNode(nodeId, { position })
             })
             await this.$nextTick()
-            flow.fitView({ padding: 0.15, duration: 300 })
+            flow.fitView({ padding: 0.22, duration: 300 })
         },
         updateDatabaseNode() {
             if (!this.sourceDatabase) return
@@ -897,9 +896,12 @@ export default {
                     `/api/v1/tasks/execution/${this.executionInfo.task_id}/download?step=${pipeline_idx - 1}`)
             window.open(url, '_blank')
         },
-        selectPipelineCallback() {
+        async selectPipelineCallback() {
             this.clearExecution()
             this.executionInfo.task_id = null
+            this.show.pipeline = false
+            await this.$nextTick()
+            await this.autoLayoutPipeline()
         },
         async selectExecutionPipeline(config) {
             console.log(config)
@@ -938,7 +940,7 @@ export default {
                 confirmDatasetCall,
                 this.$Guid
             )
-            this.selectPipelineCallback()
+            await this.selectPipelineCallback()
             this.lock.loading = true
         },
         async handleWatchExecution({ task_id }) {
