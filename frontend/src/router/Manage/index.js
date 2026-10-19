@@ -10,13 +10,13 @@ export default {
             path: 'materials',
             component: () => AsyncLoad(() => import('@/views/manage/library/index.vue')),
             props: { mode: 'materials' },
-            meta: { title: '原始材料' }
+            meta: { title: '原始数据集' }
         },
         {
             path: 'training-datasets',
             component: () => AsyncLoad(() => import('@/views/manage/library/index.vue')),
             props: { mode: 'drafts' },
-            meta: { title: '训练数据集' }
+            meta: { title: '生成数据集' }
         },
         {
             path: '',

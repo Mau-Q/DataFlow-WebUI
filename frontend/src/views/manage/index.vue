@@ -64,8 +64,8 @@ export default {
                     name: () => this.local('Data Preparation'),
                     type: 'header'
                 },
-                { key: 0.1, name: () => this.local('原始材料'), icon: 'Library', img: dbManager, route: '/m/materials' },
-                { key: 0.2, name: () => this.local('训练数据集'), icon: 'BulletedList', img: dataviz, route: '/m/training-datasets' },
+                { key: 0.1, name: () => this.local('原始数据集'), icon: 'Library', img: dbManager, route: '/m/materials' },
+                { key: 0.2, name: () => this.local('生成数据集'), icon: 'BulletedList', img: dataviz, route: '/m/training-datasets' },
                 {
                     key: 0,
                     name: () => this.local('DataFlow Hub'),

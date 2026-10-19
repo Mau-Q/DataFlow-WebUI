@@ -1,5 +1,8 @@
 import os
 import shutil
+import uuid
+from pathlib import Path
+from app.services.dataset_visibility import annotate_datasets
 from fastapi import APIRouter, HTTPException, UploadFile, File
 from app.schemas.dataset import DatasetIn, DatasetOut
 from app.core.container import container
@@ -11,9 +14,10 @@ from app.api.v1.errors import *
 router = APIRouter(tags=["datasets"])
 
 @router.get("/", response_model=ApiResponse[list[DatasetOut]], operation_id="list_datasets", summary="返回目前所有注册的数据集列表，包含每个数据集的条目数和文件大小")
-def list_datasets():
+def list_datasets(visible_only: bool = False):
     """返回所有数据集列表，每个数据集包含条目数(num_samples)和文件大小(file_size)信息"""
-    return ok(container.dataset_registry.list())
+    records = annotate_datasets(container.dataset_registry.list())
+    return ok([r for r in records if r['is_visible']] if visible_only else records)
 
 @router.post("/", response_model=ApiResponse[DatasetOut], operation_id="register_dataset", summary="注册一个新的数据集或更新已有数据集的信息，根据路径作为唯一主键")
 def register_dataset(payload: DatasetIn):
@@ -142,7 +146,10 @@ async def upload_dataset(file: UploadFile = File(...), name: str = None):
             os.makedirs(upload_dir)
         
         # 保存文件
-        file_path = os.path.join(upload_dir, file.filename)
+        filename = Path((file.filename or 'dataset').replace('\\', '/')).name
+        target_dir = Path(upload_dir) / uuid.uuid4().hex
+        target_dir.mkdir()
+        file_path = str(target_dir / filename)
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
         

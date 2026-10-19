@@ -1,12 +1,12 @@
 # 原始材料与训练数据集（M1）
 
-侧栏新增「原始材料」和「训练数据集」两个入口，分别对应 `/#/m/materials` 和 `/#/m/training-datasets`。旧 DataFlow Hub、输入数据集和 Pipeline 保留原有入口与注册语义。
+侧栏提供「原始数据集」和「生成数据集」两个入口，分别对应 `/#/m/materials` 和 `/#/m/training-datasets`。旧 DataFlow Hub、输入数据集和 Pipeline 保留原有入口与注册语义。
 
 ## 原始材料
 
-1. 上传文件，或输入运行后端的机器上的本地路径。两种方式都会保存平台持有的文件副本，原路径后续修改不会改变材料。
-2. 填写名称、分组、来源与说明；可关联已有原始材料，并标记为 PDF 页面图、解析图片、表格产物或公式产物。
-3. 在列表中搜索或按分组筛选。详情可修改元数据、打开原文件、预览 PDF / 图片、跳转关联产物。
+1. 点击原始数据集页「添加数据集」，或原画布「数据集 → 添加」，选择 PDF / 图片并填写名称。平台保存文件副本并生成兼容的输入清单。
+2. 在左侧列表选择数据集，切换文件并预览 PDF / 图片。已有 JSON / JSONL / CSV / Parquet 也可通过同一表单单独添加。
+3. 新上传文件的分组、来源、说明及解析产物关系在「编辑文件信息」中按需展开；后台仍保留本地路径登记 API。
 
 第一批支持 PDF、PNG、JPEG、WebP、GIF、BMP；公式、表格通过这些原文件或解析后的图片管理。此阶段不运行解析、不新建公式或表格编辑器，不接受任意解析格式。PDF 需能解析且未加密；图片按实际格式检查，不能仅改扩展名。每份上限 100 MiB。
 
@@ -36,7 +36,7 @@
 [{"instruction": "图中是什么？", "output": "一张图表。", "images": ["images/chart.png"]}]
 ```
 
-先在材料库导入图片，再在导入面板填入明确映射（将示例 ID 换为实际图片 ID）：
+先通过原始数据集入口导入图片，再在生成数据集的导入对话框中为每个引用选择图片；高级入口仍支持明确的 JSON 映射（将示例 ID 换为实际图片 ID）：
 
 ```json
 {"images/chart.png": "mat_0123456789abcdef0123456789abcdef"}
@@ -59,7 +59,7 @@ M1 提供创建、导入与预览。样本编辑、发布冻结、数据和媒�
 
 写入通过临时文件、fsync 和原子替换完成；损坏的 JSON 元数据会报错，不会自动重建空库。备份时停止后端并复制完整 `library/`，不能只备份 JSON 而遗漏图片。M1 面向本地小批量数据，草稿按文件保存；分页只限制响应大小，不代表已具备大规模数据集数据库能力。
 
-旧 `DatasetRegistry` 不扫描这个新目录，不迁移或重注册已有记录。
+旧 `DatasetRegistry` 不扫描材料目录；通过原始数据集导入表单添加 PDF / 图片时，由薄适配登记输入清单。已有注册记录保留，不做全量迁移。
 
 API 前缀为 `/api/v1/library`，使用现有 ApiResponse 封装。业务失败在应用中通常仍返回 HTTP 200，调用方需检查 `success` 及 `meta.http_status`：
 
@@ -75,3 +75,25 @@ API 前缀为 `/api/v1/library`，使用现有 ApiResponse 封装。业务失败
 | 导入训练文件（file + media_bindings JSON 字符串） | POST `/drafts/{id}/import` |
 
 开发验证：从 backend 执行 `python -m pytest tests/test_data_library.py -q`；前端执行 `npm run build`。工作区完整回归入口为 `./scripts/test-local.sh`。
+
+## 数据集入口与精简视图（2026-10-19 更新）
+
+当前侧栏名称为「原始数据集」和「生成数据集」，路径保持不变。
+
+- 原画布「数据集 → 添加」与原始数据集页右上角「添加数据集」共用导入表单。名称可自动填写；PDF / 图片可多选，JSON / JSONL / CSV / Parquet 每次添加一份。
+- PDF / 图片保存为材料副本，并生成含 `source` / `source_name` / `material_id` 的 JSONL 输入清单，登记到兼容的 DatasetRegistry。可以在原画布中选择；这不代表对应 Pipeline 已经运行，也不保证任意算子接受所有模态。
+- 原始数据集页以列表与内容预览为主，PDF / 图片可逐份切换。新上传文件的名称、分组、来源、关联关系等编辑入口折叠在「编辑文件信息」中；旧注册文件保持原有输入信息。后台材料管理 API 仍保留，包括本地路径登记。
+- 生成数据集页直接展示问题、回答、上下文和图片；新建与导入使用按需打开的对话框。图文文件会提取图片引用，通过下拉框选择材料，手动 JSON 映射作为高级入口保留。
+- ID、哈希、完整路径、字段列表和导入记录收在「数据集详情」里；原始 JSON 收在每条样本的「查看原始数据」里。信息和数据没有被删除。
+
+显示偏好保存在 `backend/data/dataset_visibility.json`（沿用 BASE_DIR / RESOURCE_DIR），结构为 `hidden_dataset_ids` 与 `hidden_draft_ids` 两个 ID 数组。仅隐藏指定记录；后来新增的记录默认可见。清除对应数组中的 ID 可以恢复显示。该文件是本地运行配置，不提交到源码仓库。
+
+`GET /datasets/` 仍返回全部记录，并增加 `is_visible` 和 `type` 字段；`?visible_only=true` 返回可见子集。画布的数据选择列表与原始数据集页使用相同偏好，但加载历史 Pipeline 仍能解析完整数据列表。`GET /library/drafts?visible_only=true` 对生成数据集应用相同规则，按 ID 读取不受隐藏影响。
+
+新增桥接接口：
+
+- POST `/api/v1/library/inputs/upload`：`files` 多文件 + `name`；单份最多 100 MiB，一批最多 100 份 / 200 MiB。重复整批或同批重复内容明确报错。
+- GET `/api/v1/library/inputs/{id}/preview?offset=0&limit=20`：分页预览原始输入；读取失败明确报错。
+- GET `/api/v1/library/inputs/{id}/file?row=0`：只从已登记的数据集记录定位 PDF / 图片原件；新材料校验保存时的哈希。
+
+旧的结构化文件上传也改用独立目录，同名上传不再覆盖已有文件。

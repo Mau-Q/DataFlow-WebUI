@@ -252,7 +252,7 @@ export default {
         loadDatasets() {
             this.$api.datasets.list_datasets().then((res) => {
                 if (res.code === 200) {
-                    this.datasets = res.data || []
+                    this.datasets = (res.data || []).filter(item => item.is_visible !== false)
                 }
             }).catch((err) => {
                 console.error('Failed to load datasets', err)

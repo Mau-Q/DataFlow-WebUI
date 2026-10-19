@@ -1,4 +1,4 @@
-"""Source materials and training drafts; legacy /datasets is unchanged."""
+"""Source materials, compatible input manifests and training drafts."""
 import json
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
@@ -7,6 +7,7 @@ from app.api.v1.resp import ok
 from app.core.container import container
 from app.schemas.data_library import DraftCreate, MaterialMetadata, MaterialRegister
 from app.services.data_library import LibraryError, MAX_BYTES, MAX_IMPORT_BYTES
+from app.services.dataset_visibility import visible_drafts
 
 router = APIRouter(tags=['data_library'])
 
@@ -57,8 +58,9 @@ def material_file(material_id: str):
 
 
 @router.get('/drafts')
-def list_drafts():
-    return ok(container.data_library.list_drafts())
+def list_drafts(visible_only: bool = False):
+    records = container.data_library.list_drafts()
+    return ok(visible_drafts(records) if visible_only else records)
 
 
 @router.post('/drafts')
@@ -79,3 +81,26 @@ def import_draft(draft_id: str, file: UploadFile = File(...), media_bindings: st
         raise HTTPException(400, '媒体映射必须是 JSON 对象') from exc
     return ok(_call(container.data_library.import_rows, draft_id, file.filename or '',
                     file.file.read(MAX_IMPORT_BYTES + 1), bindings))
+
+
+@router.post('/inputs/upload')
+def upload_source_dataset(files: list[UploadFile] = File(...), name: str = Form(...)):
+    from app.services.source_datasets import SourceDatasets
+    service = SourceDatasets(container.data_library, container.dataset_registry)
+    return ok(_call(service.upload, files, name))
+
+
+@router.get('/inputs/{dataset_id}/file')
+def source_dataset_file(dataset_id: str, row: int = Query(0, ge=0)):
+    from app.services.source_datasets import SourceDatasets
+    service = SourceDatasets(container.data_library, container.dataset_registry)
+    path, mime = _call(service.file, dataset_id, row)
+    return FileResponse(path, media_type=mime, filename=path.name,
+                        content_disposition_type='inline', headers={'X-Content-Type-Options': 'nosniff'})
+
+
+@router.get('/inputs/{dataset_id}/preview')
+def source_dataset_preview(dataset_id: str, offset: int = Query(0, ge=0), limit: int = Query(20, ge=1, le=100)):
+    from app.services.source_datasets import SourceDatasets
+    service = SourceDatasets(container.data_library, container.dataset_registry)
+    return ok(_call(service.preview, dataset_id, offset, limit))

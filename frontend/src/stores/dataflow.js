@@ -128,6 +128,7 @@ export const useDataflow = defineStore('useDataflow', () => {
     }
 
     const datasets = ref([])
+    const visibleDatasets = computed(() => datasets.value.filter(item => item.is_visible !== false))
     const getDatasets = async () => {
         let res = await proxy.$api.datasets.list_datasets().catch((err) => {
             proxy.$barWarning(err, {
@@ -299,6 +300,7 @@ export const useDataflow = defineStore('useDataflow', () => {
         promptInfo,
         getPromptInfo,
         datasets,
+        visibleDatasets,
         getDatasets,
         text2sqlDatasets,
         getText2SqlDatasets,

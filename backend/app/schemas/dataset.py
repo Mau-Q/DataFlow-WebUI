@@ -12,6 +12,8 @@ class DatasetIn(BaseModel):
     meta: Dict[str, str] = Field(default_factory=dict)
 
 class DatasetOut(DatasetIn):
+    is_visible: bool = True
+    type: str = ""
     id: str
     num_samples: int = 0
     file_size: int = 0
