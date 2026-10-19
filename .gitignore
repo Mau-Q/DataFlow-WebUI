@@ -6,6 +6,7 @@ dist_release/
 data/
 backend/dataflow_cache/
 backend/cache_local/
+backend/results/
 backend/data/dataflow_core/
 
 # editor / OS

@@ -1,5 +1,5 @@
 from app.services.resource_resolution import ResourceReferenceError
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request, Body
 from fastapi.responses import FileResponse
 from typing import List, Dict
 from pydantic import BaseModel, Field
@@ -22,6 +22,10 @@ import os
 logger = get_logger(__name__)
 
 router = APIRouter(tags=["tasks"])
+
+
+class RunOutput(BaseModel):
+    output_root: str | None = Field(default=None, min_length=1, max_length=4000)
 
 
 # CRUD操作API
@@ -311,7 +315,7 @@ async def execute_pipeline(request: Request, pipeline_id):
 
 
 @router.post("/execute-async", response_model=ApiResponse[Dict], operation_id="execute_pipeline_async", summary="异步执行Pipeline（使用Ray）")
-async def execute_pipeline_async(request: Request, pipeline_id: str):
+async def execute_pipeline_async(request: Request, pipeline_id: str, body: RunOutput | None = Body(default=None)):
     """
     异步执行 Pipeline
     
@@ -328,13 +332,13 @@ async def execute_pipeline_async(request: Request, pipeline_id: str):
         if pipeline_config.get('config', {}).get('execution_options', {}).get('capture_responses'):
             from app.services.text_generation import TextGeneration
             try:
-                return ok(await TextGeneration().submit(pipeline_id=pipeline_id))
+                return ok(await TextGeneration().submit(pipeline_id=pipeline_id, output_root=body.output_root if body else None))
             except LibraryError as exc:
                 raise HTTPException(exc.status, str(exc)) from exc
 
         # 调用服务层开始异步执行
         result = await container.task_registry.start_execution_async(
-            pipeline_id=pipeline_id
+            pipeline_id=pipeline_id, output_root=body.output_root if body else None
         )
         task_id = result["task_id"]
         logger.info(f"Async Execution ID: {task_id}, Task ID: {task_id}")
@@ -345,6 +349,8 @@ async def execute_pipeline_async(request: Request, pipeline_id: str):
             "message": "Pipeline execution submitted to Ray"
         })
         
+    except LibraryError as exc:
+        raise HTTPException(exc.status, str(exc)) from exc
     except HTTPException:
         raise
     except ResourceReferenceError as e:
@@ -424,3 +430,33 @@ def download_final_result(task_id: str):
 @router.post('/execution/{task_id}/final-result/collect')
 def collect_final_result(task_id: str, body: CollectResult):
     return ok(result_call(TaskResults().collect, task_id, **body.model_dump()))
+
+
+@router.get('/result-storage')
+def get_result_storage():
+    from app.services.result_storage import preferences
+    return ok(preferences())
+
+
+@router.put('/result-storage')
+def update_result_storage(body: RunOutput):
+    from app.services.result_storage import save_preferences
+    if not body.output_root:
+        raise HTTPException(422, '请填写默认结果目录')
+    return ok(result_call(save_preferences, body.output_root))
+
+
+@router.post('/result-storage/check')
+def check_result_storage(body: RunOutput):
+    from app.services.result_storage import check_root, preferences
+    return ok({'output_root': result_call(check_root, body.output_root or preferences()['output_root'])})
+
+
+@router.post('/result-storage/choose')
+def choose_result_storage():
+    from app.services.local_source_picker import pick_paths
+    from app.services.result_storage import check_root
+    paths = result_call(pick_paths, directories_only=True)
+    if not paths:
+        return ok({'cancelled': True})
+    return ok({'cancelled': False, 'output_root': result_call(check_root, paths[0])})

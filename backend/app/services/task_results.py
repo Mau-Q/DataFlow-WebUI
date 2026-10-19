@@ -39,6 +39,8 @@ class TaskResults:
                 raise LibraryError('任务步骤未完整完成，不能作为最终结果', 409)
             path = last.get('file_path') or Path(settings.CACHE_DIR) / f'{task["task_id"]}_output' / f'dataflow_cache_step_step{last["index"]+1}.jsonl'
             item = {'path': str(path), 'step': last['index']}
+        if output.get('final_file') and Path(output['final_file']).is_file():
+            item['path'] = output['final_file']
         saved = self.lib.root / 'task_results' / task['task_id'] / 'manifest.json'
         if saved.is_file():
             item = _parse_json(saved.read_text('utf-8'))
@@ -93,7 +95,9 @@ class TaskResults:
     def detail(self, task_id):
         task = self.task(task_id)
         result = {k: task.get(k) for k in ('task_id', 'pipeline_id', 'name', 'status', 'created_at', 'completed_at')}
-        result.update(available=False, collectable=False, collections=[], sample_data=[])
+        result.update(available=False, collectable=False, collections=[], sample_data=[],
+                      result_directory=task.get('output', {}).get('result_directory') or task.get('pipeline_config', {}).get('execution_options', {}).get('result_directory'),
+                      storage_error=task.get('output', {}).get('storage_error'))
         try:
             item, rows, _ = self._file(task)
         except LibraryError as exc:

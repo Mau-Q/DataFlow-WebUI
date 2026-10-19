@@ -4,6 +4,8 @@
         <p v-if="error" role="alert" class="error">{{ error }}</p>
         <template v-if="result && !loading">
             <h3>最终结果</h3>
+            <p v-if="result.storage_error" role="alert" class="error">{{ result.storage_error }}</p>
+            <details v-if="result.result_directory"><summary>本次结果目录</summary><p class="directory">{{ result.result_directory }}</p></details>
             <p>任务 {{ result.task_id }} · {{ statusLabel(result.status) }}</p>
             <p v-if="result.reason" class="help">{{ result.reason }}</p>
             <template v-if="result.available">
@@ -18,15 +20,15 @@
             <form v-if="result.collectable" @submit.prevent="collect">
                 <h4>收录到生成数据集</h4>
                 <p class="help">{{ result.modality === 'image_text' ? '图文' : '文本' }} {{ result.training_type.toUpperCase() }} · 相同样本只保留一条，来源任务仍会记录。</p>
-                <label>收录方式<select v-model="mode" :disabled="busy"><option value="new">新建生成数据集</option><option value="append">追加到已有数据集</option></select></label>
-                <label v-if="mode === 'new'">数据集名称<input v-model="name" required maxlength="240" :disabled="busy" /></label>
-                <label v-else>目标数据集<select v-model="draftId" required :disabled="busy"><option value="">请选择同模态、同训练类型的数据集</option><option v-for="d in compatibleDrafts" :key="d.id" :value="d.id">{{ d.name }} · {{ d.row_count }} 条</option></select></label>
+                <div class="form-field">收录方式<fv-combobox v-model="modeModel" :theme="theme" :options="modeOptions" :disabled="busy" aria-label="收录方式" style="width:100%" /></div>
+                <div class="form-field" v-if="mode === 'new'">数据集名称<fv-text-box v-model="name" :theme="theme" aria-label="数据集名称" :disabled="busy" :border-radius="6" style="width:100%;height:38px" /></div>
+                <div class="form-field" v-else>目标数据集<fv-combobox v-model="draftModel" :theme="theme" :options="draftOptions" :disabled="busy" placeholder="请选择同模态、同训练类型的数据集" aria-label="目标数据集" style="width:100%" /></div>
                 <p v-if="mode === 'append' && !compatibleDrafts.length" class="help">暂无匹配的数据集，可切换为新建。</p>
                 <template v-if="result.media_refs?.length">
                     <p class="help">绑定样本中的图片引用。追加时可沿用目标数据集已有绑定。</p>
-                    <label v-for="ref in result.media_refs" :key="ref">{{ ref }}<select v-model="bindings[ref]" :required="!targetBindings[ref]" :disabled="busy"><option value="">{{ targetBindings[ref] ? '沿用目标已有图片' : '请选择本地图片材料' }}</option><option v-for="m in images" :key="m.id" :value="m.id">{{ m.name }}</option></select></label>
+                    <div class="form-field" v-for="ref in result.media_refs" :key="ref">{{ ref }}<fv-combobox :model-value="imageOptions.find(m => m.key === bindings[ref]) || {key:'', text:''}" :theme="theme" :options="imageOptions" :disabled="busy" :placeholder="targetBindings[ref] ? '沿用目标已有图片' : '请选择本地图片材料'" :aria-label="ref" style="width:100%" @update:modelValue="setBinding(ref, $event)" /></div>
                 </template>
-                <button :disabled="busy || (mode === 'append' && !draftId)">{{ busy ? '正在收录…' : '确认收录' }}</button>
+                <fv-button :theme="theme" :border-radius="6" :disabled="!canCollect" @click="collect">{{ busy ? '正在收录…' : '确认收录' }}</fv-button>
             </form>
         </template>
         <p v-if="notice" role="status" class="notice">{{ notice }}</p>
@@ -39,6 +41,12 @@ export default {
     emits: ['navigate'],
     data: () => ({ result: null, drafts: [], images: [], loading: false, busy: false, error: '', notice: '', mode: 'new', name: '', draftId: '', bindings: {}, requestId: 0 }),
     computed: {
+        modeOptions() { return [{key:'new',text:'新建生成数据集'},{key:'append',text:'追加到已有数据集'}] },
+        modeModel: { get() { return this.modeOptions.find(o => o.key === this.mode) }, set(o) { if(o)this.mode = o.key } },
+        draftOptions() { return this.compatibleDrafts.map(d => ({key:d.id,text:`${d.name} · ${d.row_count} 条`})) },
+        draftModel: { get() { return this.draftOptions.find(o => o.key === this.draftId) || {key:'', text:''} }, set(o) { this.draftId = o?.key || '' } },
+        imageOptions() { return this.images.map(m => ({key:m.id,text:m.name})) },
+        canCollect() { return !this.busy && (this.mode === 'new' ? !!this.name.trim() && this.name.length <= 240 : !!this.draftId) && (this.result?.media_refs || []).every(ref => this.bindings[ref] || this.targetBindings[ref]) },
         downloadUrl() { return `/api/v1/tasks/execution/${encodeURIComponent(this.taskId)}/final-result/download` },
         compatibleDrafts() { return this.drafts.filter(d => d.modality === this.result?.modality && d.training_type === this.result?.training_type) },
         targetBindings() { return this.mode === 'append' ? this.drafts.find(d => d.id === this.draftId)?.media_bindings || {} : {} }
@@ -64,8 +72,9 @@ export default {
             } catch (e) { if (requestId === this.requestId) this.error = e.response?.data?.message || e.message }
             finally { if (requestId === this.requestId) this.loading = false }
         },
+        setBinding(ref, option) { this.bindings[ref] = option?.key || '' },
         async collect() {
-            if (this.busy) return
+            if (!this.canCollect) return
             const taskId = this.taskId
             this.busy = true; this.error = ''; this.notice = ''
             try {
@@ -86,5 +95,5 @@ export default {
 }
 </script>
 <style scoped>
-.task-final-result{padding:16px;background:#fff;color:#26334d;border:1px solid #d9dfeb;border-radius:8px;overflow-wrap:anywhere}.task-final-result.dark{background:#252833;color:#eee}h3{margin:0 0 10px}h4{margin:18px 0 10px}p{line-height:1.6}label{display:block;margin:12px 0}select,input{display:block;box-sizing:border-box;width:100%;margin-top:6px;padding:9px;border:1px solid #c9d1e1;border-radius:6px;font:inherit;color:inherit;background:transparent}button{padding:9px 16px;border:0;border-radius:6px;background:#4e5bd5;color:#fff;cursor:pointer}button:disabled{opacity:.5;cursor:default}summary{padding:10px 0;cursor:pointer}.sample{border-bottom:1px solid #d9dfeb}pre{white-space:pre-wrap;max-height:300px;overflow:auto;font-size:12px}dd{margin:6px 0 12px;font-size:12px}.help{color:#718096;font-size:13px}.error{color:#b63830}.notice{color:#28713e}.actions{display:flex;gap:16px;align-items:center}a{color:#4e5bd5}
+.task-final-result{padding:16px;background:#fff;color:#26334d;border:1px solid #d9dfeb;border-radius:8px;overflow-wrap:anywhere}.task-final-result.dark{background:#252833;color:#eee}h3{margin:0 0 10px}h4{margin:18px 0 10px}p{line-height:1.6}.form-field{display:block;margin:12px 0}summary{padding:10px 0;cursor:pointer}.sample{border-bottom:1px solid #d9dfeb}pre{white-space:pre-wrap;max-height:300px;overflow:auto;font-size:12px}dd{margin:6px 0 12px;font-size:12px}.help{color:#718096;font-size:13px}.error{color:#b63830}.notice{color:#28713e}.actions{display:flex;gap:16px;align-items:center}a{color:#4e5bd5}
 </style>

@@ -189,6 +189,10 @@ class TaskRegistry:
         # 生成执行ID
         task_id = self._generate_task_id()
         
+        from app.services.result_storage import prepare
+        if pipeline_config.get('execution_options', {}).get('output_root'):
+            prepare(pipeline_config, task_id, pipeline.get('name', 'Pipeline') if pipeline_id else pipeline_config.get('execution_options', {}).get('pipeline_name', 'Pipeline'))
+
         # 创建初始结果记录
         initial_result = {
             "task_id": task_id,
@@ -391,7 +395,7 @@ class TaskRegistry:
     async def start_execution_async(
         self, 
         pipeline_id: Optional[str] = None, 
-        config: Optional[Dict[str, Any]] = None
+        config: Optional[Dict[str, Any]] = None, output_root: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         异步开始执行Pipeline（使用 Ray）
@@ -418,6 +422,13 @@ class TaskRegistry:
             pipeline_config = config
             logger.info("Executing pipeline with provided config asynchronously")
         
+        import copy
+        pipeline_config = copy.deepcopy(pipeline_config)
+        if output_root is not None:
+            options = pipeline_config.setdefault('execution_options', {})
+            options['output_root'] = output_root
+            if pipeline_id:
+                options['pipeline_name'] = pipeline.get('name', 'Pipeline')
         task_id, pipeline_config, initial_result = self.start_execution(config=pipeline_config)
         if pipeline_id:
             patch_task(self.path, task_id, {'pipeline_id': pipeline_id})

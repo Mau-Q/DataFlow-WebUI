@@ -55,7 +55,7 @@
                                 border-radius="30" :disabled="!currentPipeline" :reveal-background-color="[
                                     'rgba(255, 255, 255, 0.5)',
                                     'rgba(103, 105, 251, 0.6)'
-                                ]" style="width: 120px;" @click="handleRunClick">
+                                ]" style="width: 120px;" @click="openRunConfirm">
                                 <i v-show="lock.running" class="ms-Icon ms-Icon--Play" style="margin-right: 5px"></i>
                                 <fv-progress-ring v-show="!lock.running" loading="true" :r="10" :border-width="2"
                                     background="rgba(200, 200, 200, 1)" :color="'white'"
@@ -133,6 +133,7 @@
             @confirm="addPipeline"></pipelinePanel>
         <execResultPanel v-model="show.execResult" :title="local('Execute Result')" :current-pipeline="currentPipeline"
             :current-step="executionInfo.currentStep" :running-result="executionInfo.runningResult"></execResultPanel>
+        <run-confirm-panel v-model="show.runConfirm" :theme="theme" :pipeline-name="currentPipeline?.name || 'Pipeline'" :dataset-name="sourceDatabase?.name || ''" @confirm="handleRunClick" />
         <taskPanel v-model="show.taskPanel" :title="local('运行记录')" :current-pipeline="currentPipeline" :initial-task-id="historyTaskId"
             @confirm="handleWatchExecution"></taskPanel>
     </div>
@@ -157,6 +158,7 @@ import operatorPanel from '@/components/manage/mainFlow/panels/operatorPanel.vue
 import pageLoading from '@/components/general/pageLoading.vue'
 import currentPipelineBlock from '@/components/manage/mainFlow/tools/currentPipelineBlock.vue'
 import execResultPanel from '@/components/manage/mainFlow/panels/execResultPanel/index.vue'
+import runConfirmPanel from '@/components/manage/mainFlow/panels/runConfirmPanel.vue'
 import taskPanel from '@/components/manage/mainFlow/panels/taskPanel.vue'
 import chatPanel from '@/components/manage/chatPanel/index.vue'
 
@@ -194,6 +196,7 @@ export default {
         currentPipelineBlock,
         execResultPanel,
         taskPanel,
+        runConfirmPanel,
         chatPanel
     },
     data() {
@@ -279,6 +282,7 @@ export default {
                 serving: false,
                 execResult: false,
                 taskPanel: false,
+                runConfirm: false,
                 chat: false
             },
             lock: {
@@ -825,7 +829,7 @@ export default {
                     }
                 })
         },
-        async executePipeline() {
+        async executePipeline(outputRoot) {
             if (this.isMM) {
                 try { await this.platformRequest('post', `/multimodal/configs/${this.mmRecord.id}/submit`) }
                 catch (e) { this.$barWarning(e.message, {status:'warning'}); this.lock.running = true }
@@ -838,8 +842,8 @@ export default {
                 })
                 return
             }
-            await this.$api.tasks
-                .execute_pipeline_async(this.currentPipeline.id)
+            await this.platformRequest('post', `/tasks/execute-async?pipeline_id=${encodeURIComponent(this.currentPipeline.id)}`, {output_root: outputRoot})
+                .then((data) => ({code: 200, data}))
                 .then((res) => {
                     if (res.code === 200) {
                         this.executionInfo.task_id = res.data.task_id
@@ -862,7 +866,12 @@ export default {
                     this.lock.running = true
                 })
         },
-        async handleRunClick() {
+        openRunConfirm() {
+            if (!this.lock.running) { this.$barWarning(this.local('Please wait for the previous pipeline to finish'), {status:'warning'}); return }
+            if (this.isMM) { this.$barWarning('图片流程当前未启用运行', {status:'warning'}); return }
+            this.show.runConfirm = true
+        },
+        async handleRunClick(outputRoot) {
             if (!this.lock.running) {
                 this.$barWarning(this.local('Please wait for the previous pipeline to finish'), {
                     status: 'warning'
@@ -875,7 +884,7 @@ export default {
                 this.lock.running = true
                 return;
             }
-            await this.executePipeline()
+            await this.executePipeline(outputRoot)
         },
         showExecDetails(pipeline_idx) {
             if (!this.executionInfo.task_id) return

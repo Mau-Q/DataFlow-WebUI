@@ -87,13 +87,15 @@ def with_task_artifacts(function):
             for item in [snapshot, *snapshot.get('materials', [])]:
                 path = Path(item['path'])
                 if not path.is_file() or _hash(path.read_bytes()) != item['sha256']:
-                    return {'task_id': bound['task_id'], 'status': 'failed', 'output': {'error': '固定的输入文件缺失或已变化'}, 'logs': ['输入快照校验失败，未执行算子']}
+                    from app.services.result_storage import persist
+                    return persist(config, {'task_id': bound['task_id'], 'status': 'failed', 'output': {'error': '固定的输入文件缺失或已变化'}, 'logs': ['输入快照校验失败，未执行算子']})
         result = function(*args, **kwargs)
         try:
-            return finalize_artifacts(config, result)
+            result = finalize_artifacts(config, result)
         except Exception as exc:
             result['status'] = 'failed'
             result.setdefault('output', {})['artifact_error'] = str(exc)
             result['logs'].append(f'Artifact finalization failed: {exc}')
-            return result
+        from app.services.result_storage import persist
+        return persist(config, result)
     return wrapped

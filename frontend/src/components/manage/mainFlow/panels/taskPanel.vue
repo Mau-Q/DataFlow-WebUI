@@ -2,7 +2,7 @@
     <basePanel v-model="thisValue" :title="title" width="800px" height="80%" :theme="theme">
         <template v-slot:content>
             <div v-show="thisValue" class="panel-task-content-block">
-                <div class="task-history-toolbar"><button :disabled="refreshing" @click="refreshTasks">{{ refreshing ? '刷新中…' : '刷新运行记录' }}</button><span v-if="!filteredTasks.length">暂无运行记录</span></div>
+                <div class="task-history-toolbar"><fv-button :theme="theme" :border-radius="6" :disabled="refreshing" @click="refreshTasks">{{ refreshing ? '刷新中…' : '刷新运行记录' }}</fv-button><span v-if="!filteredTasks.length">暂无运行记录</span></div>
                 <TaskFinalResult v-if="selectedTaskId" :key="selectedTaskId" :task-id="selectedTaskId" :theme="theme" @navigate="thisValue = false" />
                 <fv-Collapse :theme="theme" v-for="(item, index) in filteredTasks" :key="index" class="task-item"
                     :title="item.task_id" :content="formatTime(item.completed_at)"
@@ -20,7 +20,7 @@
                         <fv-img :src="img.task" style="width: auto; height: 30px; margin: 0px 5px"></fv-img>
                     </template>
                     <template v-slot:extension>
-                        <button class="final-result-button" @click.stop="selectedTaskId = item.task_id">最终结果</button>
+                        <fv-button :theme="theme" :border-radius="6" style="margin-right:8px" @click.stop="selectedTaskId = item.task_id">最终结果</fv-button>
                         <fv-button theme="dark" :icon="'View'"
                             :background="'linear-gradient(130deg, rgba(229, 123, 67, 1), rgba(225, 107, 56, 1))'"
                             :borderRadius="8" :isBoxShadow="true" @click="confirmView(item)">
@@ -123,7 +123,7 @@ export default {
 </script>
 
 <style lang="scss">
-.task-history-toolbar{display:flex;align-items:center;gap:12px;padding:8px}.task-history-toolbar button,.final-result-button{border:1px solid #d9dfeb;background:transparent;color:inherit;padding:8px 12px;border-radius:6px;cursor:pointer}.final-result-button{margin-right:8px}
+.task-history-toolbar{display:flex;align-items:center;gap:12px;padding:8px}
 .task-final-result{flex-shrink:0;}
 .resource-snapshot { padding: 12px; font-size: 12px; overflow-wrap: anywhere; }
 .resource-snapshot pre { max-height: 200px; overflow: auto; white-space: pre-wrap; }

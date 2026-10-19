@@ -21,6 +21,15 @@
                             style="width: 120px;"></fv-combobox>
                     </template>
                 </fv-Collapse>
+                <fv-Collapse :theme="theme" class="serving-item" icon="FolderOpen" title="运行结果目录" :content="outputRoot || '读取中…'" :max-height="300">
+                    <div class="result-storage-settings">
+                        <p>每次运行创建独立子目录，保留最终结果、中间文件与日志。运行前可临时更改位置。</p>
+                        <fv-button :theme="theme" icon="FolderOpen" :disabled="savingStorage" :border-radius="6" style="margin-bottom:8px" @click="chooseOutputRoot">选择文件夹</fv-button>
+                        <fv-text-box v-model="outputRoot" :theme="theme" aria-label="默认结果根目录" placeholder="输入本机绝对目录路径" :border-radius="6" style="width:100%;height:38px" />
+                        <p v-if="storageError" role="alert" class="storage-error">{{ storageError }}</p><p v-if="storageNotice" role="status">{{ storageNotice }}</p>
+                        <fv-button :theme="theme" :disabled="savingStorage || !outputRoot.trim()" :border-radius="6" style="margin-top:12px" @click="saveOutputRoot">{{ savingStorage ? '正在保存…' : '保存默认目录' }}</fv-button>
+                    </div>
+                </fv-Collapse>
             </div>
         </div>
     </div>
@@ -28,12 +37,15 @@
 
 <script>
 import { mapState, mapActions } from 'pinia'
+import axios from 'axios'
 import { useAppConfig } from '@/stores/appConfig'
 import { useTheme } from '@/stores/theme'
 
 export default {
+    name: 'DataflowSettings',
     data() {
         return {
+            outputRoot: '', storageError: '', storageNotice: '', savingStorage: false,
             languageList: [
                 {
                     key: 'en',
@@ -87,8 +99,23 @@ export default {
     },
     mounted() {
         this.getConfig()
+        this.loadOutputRoot()
     },
     methods: {
+        async loadOutputRoot() {
+            try { const r = await axios.get('/api/v1/tasks/result-storage'); if (!r.data.success) throw new Error(r.data.message); this.outputRoot = r.data.data.output_root }
+            catch(e) { this.storageError = e.message }
+        },
+        async chooseOutputRoot() {
+            this.savingStorage=true;this.storageError='';try{const r=await axios.post('/api/v1/tasks/result-storage/choose');if(!r.data.success)throw new Error(r.data.message);if(!r.data.data.cancelled)this.outputRoot=r.data.data.output_root}catch(e){this.storageError=e.response?.data?.message||e.message}finally{this.savingStorage=false}
+        },
+        async saveOutputRoot() {
+            if (this.savingStorage) return
+            this.savingStorage = true; this.storageError = ''; this.storageNotice = ''
+            try { const r = await axios.put('/api/v1/tasks/result-storage', {output_root:this.outputRoot}); if (!r.data.success) throw new Error(r.data.message); this.outputRoot = r.data.data.output_root; this.storageNotice = '默认结果目录已保存。' }
+            catch(e) { this.storageError = e.response?.data?.message || e.message }
+            finally { this.savingStorage = false }
+        },
         ...mapActions(useAppConfig, ['reviseLanguage']),
         ...mapActions(useTheme, ['reviseTheme']),
         getConfig() {
@@ -122,6 +149,7 @@ export default {
 </script>
 
 <style lang="scss">
+.result-storage-settings{padding:16px;line-height:1.7;font-size:13px}.storage-error{color:#b63830}
 .df-settings-container {
     position: relative;
     width: 100%;

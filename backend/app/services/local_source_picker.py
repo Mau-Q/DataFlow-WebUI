@@ -35,13 +35,16 @@ JSON.stringify(paths);
 '''
 
 
-def pick_paths():
+def pick_paths(*, directories_only=False):
     if sys.platform != 'darwin':
-        raise LibraryError('此系统可直接拖入文件或文件夹，或使用浏览器选择文件', 501)
+        raise LibraryError('此系统请手动填写目录绝对路径' if directories_only else '此系统可直接拖入文件或文件夹，或使用浏览器选择文件', 501)
     if not _CHOOSER.acquire(blocking=False):
         raise LibraryError('系统选择窗口已经打开，请先完成当前选择', 409)
     try:
-        result = subprocess.run(['osascript', '-l', 'JavaScript', '-e', _SCRIPT],
+        script = _SCRIPT
+        if directories_only:
+            script = script.replace('canChooseFiles = true', 'canChooseFiles = false').replace('allowsMultipleSelection = true', 'allowsMultipleSelection = false').replace('选择文件或文件夹', '选择结果保存目录')
+        result = subprocess.run(['osascript', '-l', 'JavaScript', '-e', script],
                                 capture_output=True, text=True, timeout=180, check=True)
         paths = json.loads(result.stdout)
         if not isinstance(paths, list) or any(not isinstance(p, str) for p in paths):

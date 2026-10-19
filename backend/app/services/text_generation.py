@@ -162,7 +162,7 @@ class TextGeneration:
             shutil.rmtree(root)
             raise
 
-    async def submit(self, pipeline_id=None, previous_id=None):
+    async def submit(self, pipeline_id=None, previous_id=None, output_root=None):
         previous = self.c.task_registry.get(previous_id) if previous_id else None
         if previous_id:
             if not previous:
@@ -194,6 +194,11 @@ class TextGeneration:
         from app.services.dataflow_engine import DataFlowEngine
         from app.services.ray_pipeline_executor import ray_executor
         task_id = self.c.task_registry._generate_task_id()
+        from app.services.result_storage import prepare
+        if output_root is not None:
+            config.setdefault('execution_options', {})['output_root'] = output_root
+        if config.get('execution_options', {}).get('output_root'):
+            prepare(config, task_id, previous.get('name', '文本生成') if previous else pipeline.get('name', '文本生成'))
         for op in config['operators']:
             if op['name'] == 'MinerU4PDFParser':
                 for param in op['params']['init']:
