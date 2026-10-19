@@ -89,6 +89,8 @@ def test_pdf_adoption_preserves_id_original_and_is_idempotent(tmp_path):
     adopt_pdf_dataset(registry,lib,source['id'])
     assert len(lib.list_materials())==count
     assert original.read_bytes()==content
+    re_registered=registry.add_or_update(dict(registry.get(source['id'])))
+    assert re_registered['id']==source['id'] and len(registry.list())==1
 
 
 def test_backup_restore_isolated_does_not_read_live_originals(tmp_path):

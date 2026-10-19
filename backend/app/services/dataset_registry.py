@@ -177,8 +177,11 @@ class DatasetRegistry:
     @registry_write
     def add_or_update(self, ds: Dict):
         data = self._read()
-        # 计算一个稳定 id（基于路径）
-        ds_id = hashlib.md5(ds["root"].encode("utf-8")).hexdigest()[:10]
+        # Keep the existing identity when an adopted source now has an owned path.
+        registered = [r for r in data['datasets'].values() if r['root'] == ds['root']]
+        if len(registered) > 1:
+            raise ValueError('Multiple existing dataset IDs refer to this path')
+        ds_id = registered[0]['id'] if registered else hashlib.md5(ds['root'].encode('utf-8')).hexdigest()[:10]
         ds["id"] = ds_id
         try: 
             ds["hash"] = self._load_file_hash(ds["root"])
