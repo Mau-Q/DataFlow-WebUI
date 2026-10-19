@@ -10,10 +10,21 @@ from typing import List
 router = APIRouter(tags=["json_schemas"])
 
 
+@router.post('/validate', response_model=ApiResponse[dict], summary='按标准校验 Schema 与示例（不保存）')
+def validate_schema_preview(body: JsonSchemaCreate):
+    from app.services.json_schema_manager import validate_schema
+    try:
+        validate_schema(body.schema, body.example or '')
+        return ok({'valid': True})
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+
 def _manager():
     return container.json_schema_manager
 
 
+@router.post("/", response_model=ApiResponse[JsonSchemaOut], include_in_schema=False)
 @router.post(
     "",
     response_model=ApiResponse[JsonSchemaOut],
@@ -29,11 +40,14 @@ def create_schema(schema_in: JsonSchemaCreate):
             example=schema_in.example or ""
         )
         return ok(JsonSchemaOut(**schema_out))
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
         log.error(f"Failed to create schema: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/", response_model=ApiResponse[List[JsonSchemaOut]], include_in_schema=False)
 @router.get(
     "",
     response_model=ApiResponse[List[JsonSchemaOut]],
@@ -44,6 +58,8 @@ def list_schemas():
     try:
         schemas = _manager().list_all()
         return ok([JsonSchemaOut(**s) for s in schemas])
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
         log.error(f"Failed to list schemas: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -66,6 +82,8 @@ def get_schema(schema_id: str):
         return ok(JsonSchemaOut(**schema))
     except HTTPException:
         raise
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
         log.error(f"Failed to get schema {schema_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -89,6 +107,8 @@ def update_schema(schema_id: str, schema_update: JsonSchemaUpdate):
         return ok(JsonSchemaOut(**schema))
     except HTTPException:
         raise
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
         log.error(f"Failed to update schema {schema_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -111,6 +131,8 @@ def delete_schema(schema_id: str):
         return ok({"deleted": True, "id": schema_id})
     except HTTPException:
         raise
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
         log.error(f"Failed to delete schema {schema_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))

@@ -14,3 +14,6 @@ setuptools<82
 # Source-library validation and previews (PDF and raster images).
 pypdf>=5,<7
 Pillow>=10,<13
+
+# Standard JSON Schema validation for managed resources.
+jsonschema>=4.23,<5

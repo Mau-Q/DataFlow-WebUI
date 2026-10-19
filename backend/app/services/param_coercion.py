@@ -17,35 +17,24 @@ _SCHEMA_REF_PREFIX = "schema_ref:"
 
 
 def _resolve_schema_ref(value: Any) -> Any:
-    """If value looks like "schema_ref:<id>", return the stored schema JSON
-    (as a Python object when possible, otherwise the raw string). Unknown refs
-    are returned unchanged so that the caller can fail loudly instead of
-    silently passing an empty dict."""
+    """Resolve and validate a saved Schema; missing references fail explicitly.
+
+    Task submissions normally replace these strings before execution. This
+    fallback also protects direct callers of parameter coercion.
+    """
     if not isinstance(value, str):
         return value
     if not value.startswith(_SCHEMA_REF_PREFIX):
         return value
     schema_id = value[len(_SCHEMA_REF_PREFIX):].strip()
-    if not schema_id:
-        return value
-    # Lazy import to avoid circular dependency at module load time.
-    try:
-        from app.core.container import container
-        manager = getattr(container, "json_schema_manager", None)
-        if manager is None:
-            return value
-        record = manager.get(schema_id)
-        if not record:
-            return value
-        schema_text = record.get("schema")
-        if isinstance(schema_text, str):
-            try:
-                return json.loads(schema_text)
-            except Exception:
-                return schema_text
-        return schema_text
-    except Exception:
-        return value
+    from app.core.container import container
+    from app.services.resource_resolution import ResourceReferenceError
+    from app.services.json_schema_manager import validate_schema
+    manager = container.json_schema_manager
+    record = manager.get(schema_id) if manager and schema_id else None
+    if record is None:
+        raise ResourceReferenceError(f"资源引用不存在: {value}")
+    return validate_schema(record['schema'])
 
 
 def _normalize_empty_string(value: Any) -> Any:
@@ -144,3 +133,23 @@ def coerce_param_value(
 
     return value
 
+
+
+def coerce_keyword_params(value):
+    """Decode the object/list forms produced by the canvas **kwargs editor."""
+    if value is None:
+        return {}
+    if isinstance(value, str):
+        value = json.loads(value)
+    if isinstance(value, dict):
+        return {k: coerce_param_value(v) for k, v in value.items()}
+    if not isinstance(value, list):
+        raise ValueError('关键字参数必须是对象或键值列表')
+    result = {}
+    for item in value:
+        name = item.get('name') or item.get('key')
+        if not isinstance(name, str) or not name or name in result:
+            raise ValueError('关键字参数名称为空或重复')
+        val = item.get('value') if item.get('value') is not None else item.get('default_value')
+        result[name] = coerce_param_value(val, default_value=item.get('default_value'))
+    return result

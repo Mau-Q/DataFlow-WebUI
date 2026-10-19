@@ -1,123 +1,107 @@
+"""JSON Schema resources, validated on the server and atomically persisted."""
 import json
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
-from datetime import datetime
-from typing import Dict, List, Optional, Any
-from loguru import logger as log
+from jsonschema import validators, exceptions
+from referencing import Registry, Resource
+from referencing.jsonschema import DRAFT7, DRAFT201909, DRAFT202012
+from referencing.exceptions import NoSuchResource, Unresolvable
 from app.core.config import settings
+from app.services.resource_store import ResourceStore
 
-
-# --- Path definitions ---
 BACKEND_DIR = Path(__file__).parent.parent.parent
 SCHEMAS_DIR = BACKEND_DIR / settings.RESOURCE_DIR / "schemas"
 SCHEMAS_FILE = SCHEMAS_DIR / "schemas.json"
 
 
+def _no_remote(uri):
+    raise NoSuchResource(ref=uri)
+
+
+def validate_schema(schema, example=''):
+    try:
+        def strict_load(text):
+            return json.loads(text, parse_constant=lambda v: (_ for _ in ()).throw(ValueError(f'非法 JSON 数值: {v}')))
+        parsed = strict_load(schema) if isinstance(schema, str) else schema
+        if not isinstance(parsed, (dict, bool)):
+            raise ValueError('Schema 必须是 JSON 对象或布尔值')
+        dialect = parsed.get('$schema') if isinstance(parsed, dict) else None
+        known = {v.META_SCHEMA['$id'].rstrip('#'): v for v in
+                 (validators.Draft7Validator, validators.Draft201909Validator, validators.Draft202012Validator)}
+        if dialect is not None and not isinstance(dialect, str):
+            raise ValueError('$schema 必须是字符串')
+        if dialect and dialect.rstrip('#') not in known:
+            raise ValueError('支持 JSON Schema draft-07、2019-09 和 2020-12')
+        cls = known[dialect.rstrip('#')] if dialect else validators.Draft202012Validator
+        cls.check_schema(parsed)
+        registry = Registry(retrieve=_no_remote)
+        spec = {validators.Draft7Validator: DRAFT7, validators.Draft201909Validator: DRAFT201909, validators.Draft202012Validator: DRAFT202012}[cls]
+        resource = Resource.from_contents(parsed, default_specification=spec)
+        def check_refs(resource, resolver):
+            if isinstance(resource.contents, dict):
+                for key in ('$ref', '$dynamicRef'):
+                    ref = resource.contents.get(key)
+                    if isinstance(ref, str):
+                        if not ref.startswith('#'):
+                            raise ValueError('Schema 引用仅支持文档内 # 引用，不加载外部资源')
+                        resolver.lookup(ref)
+            for child in resource.subresources():
+                check_refs(child, resolver.in_subresource(child))
+        check_refs(resource, registry.resolver_with_root(resource))
+        validator = cls(parsed, registry=registry)
+        if example and example.strip():
+            validator.validate(strict_load(example))
+        return parsed
+    except (exceptions.SchemaError, exceptions.ValidationError) as exc:
+        raise ValueError(f'Schema 校验失败: {exc.message}') from exc
+    except (json.JSONDecodeError, Unresolvable, exceptions._WrappedReferencingError, RecursionError) as exc:
+        raise ValueError(f'Schema 或示例无效: {exc}') from exc
+
+
 class JsonSchemaManager:
-    """
-    Manages JSON Schema CRUD operations with file-based persistence.
-    """
-    
-    def __init__(self):
-        """Initialize schema manager and ensure schemas directory exists."""
-        self._ensure_storage()
-        self.schemas: Dict[str, Any] = self._load_schemas()
-    
-    def _ensure_storage(self):
-        """Ensure the schemas directory and file exist."""
-        SCHEMAS_DIR.mkdir(parents=True, exist_ok=True)
-        if not SCHEMAS_FILE.exists():
-            SCHEMAS_FILE.write_text(json.dumps({}))
-    
-    def _load_schemas(self) -> Dict[str, Any]:
-        """Load all schemas from file."""
-        try:
-            if SCHEMAS_FILE.exists():
-                content = SCHEMAS_FILE.read_text()
-                return json.loads(content) if content.strip() else {}
-            return {}
-        except Exception as e:
-            log.warning(f"Failed to load schemas: {e}")
-            return {}
-    
-    def _save_schemas(self) -> None:
-        """Save all schemas to file."""
-        try:
-            SCHEMAS_FILE.write_text(json.dumps(self.schemas, ensure_ascii=False, indent=2))
-        except Exception as e:
-            log.error(f"Failed to save schemas: {e}")
-            raise
-    
-    def create(self, name: str, description: str, schema: str, example: str) -> Dict[str, Any]:
-        """
-        Create a new JSON schema.
-        """
-        schema_id = f"schema_{uuid.uuid4().hex[:8]}"
-        now = datetime.utcnow().isoformat()
-        
-        schema_obj = {
-            "id": schema_id,
-            "name": name,
-            "description": description,
-            "schema": schema,
-            "example": example,
-            "created_at": now,
-            "updated_at": now
-        }
-        
-        self.schemas[schema_id] = schema_obj
-        self._save_schemas()
-        log.info(f"Created schema: {schema_id}")
-        return schema_obj
-    
-    def get(self, schema_id: str) -> Optional[Dict[str, Any]]:
-        """Get a schema by ID."""
-        return self.schemas.get(schema_id)
-    
-    def list_all(self) -> List[Dict[str, Any]]:
-        """List all schemas."""
-        return list(self.schemas.values())
-    
-    def update(self, schema_id: str, **kwargs) -> Optional[Dict[str, Any]]:
-        """
-        Update a schema by ID.
-        Only provided fields are updated.
-        """
-        if schema_id not in self.schemas:
-            return None
-        
-        schema_obj = self.schemas[schema_id]
-        
-        # Update only provided fields
-        if "name" in kwargs and kwargs["name"] is not None:
-            schema_obj["name"] = kwargs["name"]
-        if "description" in kwargs and kwargs["description"] is not None:
-            schema_obj["description"] = kwargs["description"]
-        if "schema" in kwargs and kwargs["schema"] is not None:
-            schema_obj["schema"] = kwargs["schema"]
-        if "example" in kwargs and kwargs["example"] is not None:
-            schema_obj["example"] = kwargs["example"]
-        
-        schema_obj["updated_at"] = datetime.utcnow().isoformat()
-        self._save_schemas()
-        log.info(f"Updated schema: {schema_id}")
-        return schema_obj
-    
-    def delete(self, schema_id: str) -> bool:
-        """Delete a schema by ID."""
-        if schema_id in self.schemas:
-            del self.schemas[schema_id]
-            self._save_schemas()
-            log.info(f"Deleted schema: {schema_id}")
-            return True
-        return False
-    
-    def delete_by_name(self, name: str) -> bool:
-        """Delete all schemas with a given name."""
-        to_delete = [sid for sid, s in self.schemas.items() if s.get("name") == name]
-        for sid in to_delete:
-            del self.schemas[sid]
-        if to_delete:
-            self._save_schemas()
-            log.info(f"Deleted {len(to_delete)} schemas with name: {name}")
-        return len(to_delete) > 0
+    def __init__(self, path=None):
+        self.store = ResourceStore(path or SCHEMAS_FILE)
+        self.store.read()
+
+    def create(self, name, description, schema, example):
+        validate_schema(schema, example)
+        if not name.strip():
+            raise ValueError('Schema 名称不能为空')
+        now = datetime.now(timezone.utc).isoformat()
+        rec = dict(id=f'schema_{uuid.uuid4().hex[:8]}', name=name, description=description or '',
+                   schema=schema, example=example or '', created_at=now, updated_at=now)
+        with self.store.writing() as data:
+            data[rec['id']] = rec
+        return rec
+
+    def get(self, schema_id):
+        return self.store.get(schema_id)
+
+    def list_all(self):
+        return self.store.list_all()
+
+    def update(self, schema_id, **fields):
+        with self.store.writing() as data:
+            if schema_id not in data:
+                return None
+            rec = data[schema_id]
+            for key in ('name', 'description', 'schema', 'example'):
+                if fields.get(key) is not None:
+                    rec[key] = fields[key]
+            if not rec['name'].strip():
+                raise ValueError('Schema 名称不能为空')
+            validate_schema(rec['schema'], rec.get('example', ''))
+            rec['updated_at'] = datetime.now(timezone.utc).isoformat()
+        return rec
+
+    def delete(self, schema_id):
+        with self.store.writing() as data:
+            return data.pop(schema_id, None) is not None
+
+    def delete_by_name(self, name):
+        with self.store.writing() as data:
+            ids = [key for key, rec in data.items() if rec['name'] == name]
+            for key in ids:
+                del data[key]
+        return bool(ids)

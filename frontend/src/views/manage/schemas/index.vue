@@ -217,7 +217,7 @@ export default {
     methods: {
         async loadSchemas() {
             try {
-                const res = await axios.get(`${BASE}/`)
+                const res = await axios.get(BASE)
                 if (res.data?.code === 200) {
                     this.schemaList = res.data.data || []
                     this.schemaList.forEach(item => {
@@ -226,7 +226,7 @@ export default {
                 }
             } catch (e) {
                 console.error('Failed to load schemas', e)
-                this.$barWarning({ status: 'warning', title: 'Failed to load schemas' })
+                this.$barWarning('Failed to load schemas', { status: 'warning' })
             }
         },
         validateSchemaJson(event) {
@@ -266,100 +266,31 @@ export default {
         },
         // 轻量 schema 校验：支持 type/required/properties/items/enum/anyOf/oneOf
         // 返回 [] 代表通过；否则返回字符串错误列表。
-        validateAgainstSchema(data, schema, pathPrefix = '') {
-            const errors = []
-            if (!schema || typeof schema !== 'object') return errors
-
-            if (Array.isArray(schema.anyOf)) {
-                const ok = schema.anyOf.some((s) => this.validateAgainstSchema(data, s, pathPrefix).length === 0)
-                if (!ok) errors.push(`${pathPrefix || 'value'} does not match any of anyOf schemas`)
-                return errors
-            }
-            if (Array.isArray(schema.oneOf)) {
-                const matches = schema.oneOf.filter((s) => this.validateAgainstSchema(data, s, pathPrefix).length === 0)
-                if (matches.length !== 1) {
-                    errors.push(`${pathPrefix || 'value'} must match exactly one of oneOf (matched ${matches.length})`)
-                }
-                return errors
-            }
-            const type = schema.type
-            const actual = Array.isArray(data) ? 'array' : (data === null ? 'null' : typeof data)
-            if (type) {
-                const allowed = Array.isArray(type) ? type : [type]
-                // JSON Schema 里 integer 是 number 的子集
-                const matchType =
-                    allowed.includes(actual) ||
-                    (allowed.includes('integer') && actual === 'number' && Number.isInteger(data))
-                if (!matchType) {
-                    errors.push(`${pathPrefix || 'value'} expected type ${allowed.join('|')}, got ${actual}`)
-                    return errors
-                }
-            }
-            if (Array.isArray(schema.enum)) {
-                const found = schema.enum.some((v) => JSON.stringify(v) === JSON.stringify(data))
-                if (!found) errors.push(`${pathPrefix || 'value'} not in enum`)
-            }
-            if (type === 'object' || (!type && typeof data === 'object' && data !== null && !Array.isArray(data))) {
-                const props = schema.properties || {}
-                const required = schema.required || []
-                for (const r of required) {
-                    if (!(r in data)) errors.push(`missing required field "${r}"${pathPrefix ? ' at ' + pathPrefix : ''}`)
-                }
-                for (const k of Object.keys(props)) {
-                    if (k in data) {
-                        errors.push(...this.validateAgainstSchema(data[k], props[k], pathPrefix ? `${pathPrefix}.${k}` : k))
-                    }
-                }
-            }
-            if (type === 'array' && schema.items && Array.isArray(data)) {
-                data.forEach((el, i) => {
-                    errors.push(...this.validateAgainstSchema(el, schema.items, `${pathPrefix || 'value'}[${i}]`))
-                })
-            }
-            return errors
-        },
         // scope: 'new' | item.id；反射到 schemaError / editError
         onSchemaInput(scope, text) {
-            const { error } = this.tryParseJson(text)
-            if (scope === 'new') {
-                this.schemaError = error
-            } else {
-                if (error) this.editError[scope] = error
-                else delete this.editError[scope]
-            }
-            // schema 变了之后，example 的校验结果也要刷新
-            const exampleText =
-                scope === 'new'
-                    ? this.newSchema.example
-                    : (this.schemaList.find((x) => x.id === scope) || {}).example
-            this.onExampleInput(scope, exampleText || '')
+            this.validateResource(scope)
         },
         onExampleInput(scope, text) {
-            const setErr = (msg) => {
-                if (scope === 'new') this.exampleError = msg
-                else {
-                    if (msg) this.editExampleError[scope] = msg
-                    else delete this.editExampleError[scope]
-                }
-            }
-            const { value, error } = this.tryParseJson(text)
-            if (error) { setErr(error); return }
-            if (value === null) { setErr(''); return }
-            // 把 schema 拿出来做结构化校验
-            const schemaText =
-                scope === 'new'
-                    ? this.newSchema.schema
-                    : (this.schemaList.find((x) => x.id === scope) || {}).schema
-            const parsedSchema = this.tryParseJson(schemaText || '').value
-            if (!parsedSchema) { setErr(''); return }
-            const errs = this.validateAgainstSchema(value, parsedSchema)
-            setErr(errs.length ? errs.slice(0, 3).join('; ') : '')
+            this.validateResource(scope)
+        },
+        async validateResource(scope) {
+            const item = scope === 'new' ? this.newSchema : this.schemaList.find(x => x.id === scope)
+            if (!item) return
+            const schema = item.schema, example = item.example || ''
+            let error = ''
+            try {
+                const res = await axios.post(`${BASE}/validate`, { name: item.name || '校验', schema, example })
+                if (!res.data?.success) error = res.data?.message || 'Schema 校验失败'
+            } catch (e) { error = e.message || '无法连接校验服务' }
+            if (item.schema !== schema || (item.example || '') !== example) return
+            if (scope === 'new') { this.schemaError = error; this.exampleError = '' }
+            else { this.editError[scope] = error; this.editExampleError[scope] = '' }
         },
         formatField(objName, field) {
             const obj = this[objName]
             const { value, error } = this.tryParseJson(obj[field])
             if (error) {
-                this.$barWarning({ status: 'warning', title: 'Cannot format: ' + error })
+                this.$barWarning('Cannot format: ' + error, { status: 'warning' })
                 return
             }
             if (value === null) return
@@ -371,7 +302,7 @@ export default {
         formatEditField(item, field) {
             const { value, error } = this.tryParseJson(item[field])
             if (error) {
-                this.$barWarning({ status: 'warning', title: 'Cannot format: ' + error })
+                this.$barWarning('Cannot format: ' + error, { status: 'warning' })
                 return
             }
             if (value === null) return
@@ -407,7 +338,7 @@ export default {
             if (!this.checkAdd() || !this.lock.add) return
             
             this.lock.add = false
-            axios.post(`${BASE}/`, {
+            axios.post(BASE, {
                 name: this.newSchema.name,
                 description: this.newSchema.description,
                 schema: this.newSchema.schema,
@@ -418,13 +349,13 @@ export default {
                     this.show.add = false
                     this.newSchema = { name: '', description: '', schema: '', example: '' }
                     this.schemaError = ''
-                    this.$barWarning({ status: 'correct', title: this.local('Schema created successfully') })
+                    this.$barWarning(this.local('Schema created successfully'), { status: 'correct' })
                 } else {
-                    this.$barWarning({ status: 'warning', title: res.data?.message || 'Creation failed' })
+                    this.$barWarning(res.data?.message || 'Creation failed', { status: 'warning' })
                 }
                 this.lock.add = true
             }).catch((err) => {
-                this.$barWarning({ status: 'error', title: err.message || 'Failed to create schema' })
+                this.$barWarning(err.message || 'Failed to create schema', { status: 'error' })
                 this.lock.add = true
             })
         },
@@ -444,7 +375,7 @@ export default {
                     JSON.parse(item.example)
                 }
             } catch (e) {
-                this.$barWarning({ status: 'warning', title: 'Invalid JSON' })
+                this.$barWarning('Invalid JSON', { status: 'warning' })
                 return
             }
             
@@ -458,14 +389,14 @@ export default {
                 if (res.data?.code === 200) {
                     item.edit = false
                     delete this.editError[item.id]
-                    this.$barWarning({ status: 'correct', title: this.local('Schema updated successfully') })
+                    this.$barWarning(this.local('Schema updated successfully'), { status: 'correct' })
                     this.loadSchemas()
                 } else {
-                    this.$barWarning({ status: 'warning', title: res.data?.message || 'Update failed' })
+                    this.$barWarning(res.data?.message || 'Update failed', { status: 'warning' })
                 }
                 this.lock.edit = true
             }).catch((err) => {
-                this.$barWarning({ status: 'error', title: err.message || 'Failed to update schema' })
+                this.$barWarning(err.message || 'Failed to update schema', { status: 'error' })
                 this.lock.edit = true
             })
         },
@@ -480,14 +411,14 @@ export default {
                     this.lock.delete = false
                     axios.delete(`${BASE}/${item.id}`).then((res) => {
                         if (res.data?.code === 200) {
-                            this.$barWarning({ status: 'correct', title: this.local('Schema deleted successfully') })
+                            this.$barWarning(this.local('Schema deleted successfully'), { status: 'correct' })
                             this.loadSchemas()
                         } else {
-                            this.$barWarning({ status: 'warning', title: res.data?.message || 'Delete failed' })
+                            this.$barWarning(res.data?.message || 'Delete failed', { status: 'warning' })
                         }
                         this.lock.delete = true
                     }).catch((err) => {
-                        this.$barWarning({ status: 'error', title: err.message || 'Failed to delete schema' })
+                        this.$barWarning(err.message || 'Failed to delete schema', { status: 'error' })
                         this.lock.delete = true
                     })
                 }
@@ -501,7 +432,7 @@ export default {
                     this.copyLabel = ''
                 }, 2000)
             } catch (e) {
-                this.$barWarning({ status: 'warning', title: this.local('Copy failed') })
+                this.$barWarning(this.local('Copy failed'), { status: 'warning' })
             }
         }
     }
@@ -510,7 +441,11 @@ export default {
 
 <style lang="scss" scoped>
 .df-schemas-container {
-    @include app;
+    flex: 1;
+    min-width: 0;
+    position: relative;
+    height: 100%;
+    overflow: auto;
     background: rgba(250, 250, 250, 1);
     display: flex;
     flex-direction: column;

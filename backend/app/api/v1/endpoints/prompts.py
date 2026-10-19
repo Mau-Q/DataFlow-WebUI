@@ -33,13 +33,16 @@ def list_user_prompts():
     summary="创建用户自定义 prompt 模板",
 )
 def create_user_prompt(body: UserPromptTemplateCreate):
-    rec = container.user_prompt_registry.create(
-        name=body.name,
-        description=body.description or "",
-        template=body.template,
-        allowed_operators=body.allowed_operators,
-        example_variables=body.example_variables,
-    )
+    try:
+        rec = container.user_prompt_registry.create(
+            name=body.name,
+            description=body.description or "",
+            template=body.template,
+            allowed_operators=body.allowed_operators,
+            example_variables=body.example_variables,
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
     return ok(UserPromptTemplateOut(**rec))
 
 
@@ -61,9 +64,12 @@ def get_user_prompt(tpl_id: str):
     summary="更新用户自定义 prompt 模板",
 )
 def update_user_prompt(tpl_id: str, body: UserPromptTemplateUpdate):
-    updated = container.user_prompt_registry.update(
-        tpl_id, **body.model_dump(exclude_unset=True)
-    )
+    try:
+        updated = container.user_prompt_registry.update(
+            tpl_id, **body.model_dump(exclude_unset=True)
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
     if not updated:
         raise HTTPException(status_code=404, detail=f"Template {tpl_id} not found")
     return ok(UserPromptTemplateOut(**updated))

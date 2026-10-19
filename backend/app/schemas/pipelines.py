@@ -113,6 +113,8 @@ class PipelineExecutionResult(BaseModel):
     task_id: str = Field(..., description="执行会话唯一标识符")
     pipeline_id: Optional[str] = Field(None, description="Pipeline ID")
     pipeline_config: Optional[Dict[str, Any]] = Field(None, description="Pipeline配置快照")
+    pipeline_source_config: Optional[Dict[str, Any]] = None
+    resource_snapshots: List[Dict[str, Any]] = Field(default_factory=list)
     status: ExecutionStatus = Field(..., description="执行状态")
     output: Dict[str, Any] = Field(default_factory=dict, description="执行输出结果")
     logs: List[str] = Field(default_factory=list, description="执行日志列表")

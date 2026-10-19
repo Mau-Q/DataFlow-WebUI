@@ -138,7 +138,9 @@ const paramsWrapper = (objs) => {
         item.show = true
         if (item.name === 'prompt_template') {
             let val = item.value
-            if (typeof (val) === 'string') {
+            if (typeof val === 'string' && val.startsWith('user_prompt:')) {
+                item.value = { ref: val }
+            } else if (typeof (val) === 'string') {
                 if (val.indexOf("'") > -1) {
                     val = val.match(/'(.*)'/)
                     if (val) {

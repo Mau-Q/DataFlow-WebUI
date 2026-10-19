@@ -222,6 +222,11 @@ class TaskRegistry:
             pipeline_config = config
             logger.info("Executing pipeline with provided config")
         
+        from app.services.resource_resolution import resolve_pipeline_resources
+        import copy
+        pipeline_source_config = copy.deepcopy(pipeline_config)
+        pipeline_config, resource_snapshots = resolve_pipeline_resources(pipeline_config)
+
         # 生成执行ID
         task_id = self._generate_task_id()
         
@@ -230,6 +235,8 @@ class TaskRegistry:
             "task_id": task_id,
             "pipeline_id": pipeline_id,
             "pipeline_config": pipeline_config,
+            "pipeline_source_config": pipeline_source_config,
+            "resource_snapshots": resource_snapshots,
             "status": "queued",
             "output": {},
             "logs": [f"[{self.get_current_time()}] Pipeline execution queued"]
@@ -275,6 +282,8 @@ class TaskRegistry:
             "task_id": task_id,
             "pipeline_id": execution_data.get("pipeline_id"),
             "pipeline_config": execution_data.get("pipeline_config"),
+            "pipeline_source_config": execution_data.get("pipeline_source_config"),
+            "resource_snapshots": execution_data.get("resource_snapshots", []),
             "status": execution_data.get("status"),
             "operators_detail": output.get("operators_detail", {}),
             "operator_logs": output.get("operator_logs", {}),
@@ -409,6 +418,8 @@ class TaskRegistry:
             "task_id": task_id,
             "pipeline_id": execution_data.get("pipeline_id"),
             "pipeline_config": execution_data.get("pipeline_config"),
+            "pipeline_source_config": execution_data.get("pipeline_source_config"),
+            "resource_snapshots": execution_data.get("resource_snapshots", []),
             "status": execution_data.get("status"),
             "step": step,
             "operator_name": operator_name,
@@ -448,48 +459,18 @@ class TaskRegistry:
             if not pipeline:
                 raise ValueError(f"Pipeline with id {pipeline_id} not found")
             pipeline_config = pipeline.get("config", {})
-            pipeline_name = pipeline.get("name", "Unknown Pipeline")
             logger.info(f"Executing predefined pipeline asynchronously: {pipeline_id}")
         else:
             if not config:
                 raise ValueError("Either pipeline_id or config must be provided")
             pipeline_config = config
-            pipeline_name = "Custom Pipeline"
             logger.info("Executing pipeline with provided config asynchronously")
         
-        # 生成执行ID
-        task_id = self._generate_task_id()
-        
-        # 创建 Task
-        task_data = {
-            "dataset_id": pipeline_config.get("input_dataset", ""),
-            "executor_name": pipeline_name,
-            "executor_type": "pipeline",
-            "meta": {
-                "pipeline_id": pipeline_id if pipeline_id else "custom",
-                "task_id": task_id
-            }
-        }
-        task = container.task_registry.create(task_data)
-        task_id = task["id"]
-        
-        logger.info(f"Task created: {task_id}")
-        
-        # 创建初始结果
-        initial_result = {
-            "task_id": task_id,
-            "pipeline_id": pipeline_id,
-            "pipeline_config": pipeline_config,
-            "status": "queued",
-            "output": {},
-            "logs": [f"[{self.get_current_time()}] Pipeline execution queued"],
-            "operator_progress": {}
-        }
-        
-        # 保存初始状态
-        data = self._read()
-        data["tasks"][task_id] = initial_result
-        self._write(data)
+        task_id, pipeline_config, initial_result = self.start_execution(config=pipeline_config)
+        if pipeline_id:
+            data = self._read()
+            data['tasks'][task_id]['pipeline_id'] = pipeline_id
+            self._write(data)
         dataflow_runtime = DataFlowEngine.decode_hashed_arguments(pipeline_config, task_id)
         
         # 提交到 Ray 异步执行

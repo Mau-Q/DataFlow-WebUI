@@ -5,7 +5,15 @@
                 <fv-Collapse :theme="theme" v-for="(item, index) in filteredTasks" :key="index" class="task-item"
                     :title="item.task_id" :content="formatTime(item.completed_at)"
                     :maxHeight="item.showPreview ? 690 : 380" background="rgba(251, 251, 251, 1)"
-                    :disabled-collapse="true">
+                    :disabled-collapse="!item.resource_snapshots?.length">
+                    <template v-slot:default>
+                        <div v-for="snapshot in item.resource_snapshots || []" :key="`${snapshot.operator_index}-${snapshot.param_name}`" class="resource-snapshot">
+                            <strong>步骤 {{ snapshot.operator_index + 1 }} · {{ snapshot.name }}</strong>
+                            <p>{{ snapshot.ref }}</p>
+                            <p>SHA-256：{{ snapshot.sha256 }}</p>
+                            <pre>{{ JSON.stringify(snapshot.content, null, 2) }}</pre>
+                        </div>
+                    </template>
                     <template v-slot:icon>
                         <fv-img :src="img.task" style="width: auto; height: 30px; margin: 0px 5px"></fv-img>
                     </template>
@@ -102,6 +110,8 @@ export default {
 </script>
 
 <style lang="scss">
+.resource-snapshot { padding: 12px; font-size: 12px; overflow-wrap: anywhere; }
+.resource-snapshot pre { max-height: 200px; overflow: auto; white-space: pre-wrap; }
 .panel-task-content-block {
     position: relative;
     width: 100%;

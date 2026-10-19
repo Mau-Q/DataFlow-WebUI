@@ -23,7 +23,8 @@
                             <span class="count">{{ visibleInitParams.length }}</span>
                         </div>
 
-                        <div v-if="allowedPrompts.length > 0 && promptTemplateItem" class="parameter-field">
+                        <prompt-resource-input v-if="promptTemplateItem" :item="promptTemplateItem" :data="data" />
+                        <div v-if="allowedPrompts.length > 0 && promptTemplateItem && !isResourcePrompt" class="parameter-field">
                             <span class="field-label">{{ appConfig.local('Prompt Template') }}</span>
                             <fv-combobox :theme="theme" v-model="promptTemplateModel"
                                 :placeholder="appConfig.local('Select Prompt')" :options="allowedPrompts"
@@ -95,6 +96,7 @@ import { useAppConfig } from '@/stores/appConfig'
 import { useDataflow } from '@/stores/dataflow'
 
 import valueInput from '@/components/manage/mainFlow/nodes/operatorNode/valueInput/index.vue'
+import PromptResourceInput from './PromptResourceInput.vue'
 import kvInput from '@/components/manage/mainFlow/nodes/operatorNode/valueInput/kvInput.vue'
 
 const props = defineProps({
@@ -117,6 +119,7 @@ const visibleRunParams = computed(() => (props.data?.operatorParams?.run || [])
 const stepLabel = computed(() => props.data?.pipeline_idx ? `Step ${props.data.pipeline_idx}` : 'Operator')
 const promptTemplateItem = computed(() => (props.data?.operatorParams?.init || [])
     .find((item) => item.name === 'prompt_template'))
+const isResourcePrompt = computed(() => !!promptTemplateItem.value?.value?.ref || String(promptTemplateItem.value?.value || '').startsWith('user_prompt:'))
 const allowedPrompts = computed(() => (props.data?.allowed_prompts || []).map((item) => ({ key: item, text: item })))
 
 const promptTemplateModel = computed({

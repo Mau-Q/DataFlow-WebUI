@@ -736,6 +736,8 @@ class PipelineRegistry:
                     refs.append((param_name, value))
                 elif isinstance(value, list):
                     refs.extend((param_name, item) for item in value if isinstance(item, str))
+                    refs.extend((param_name, item.get("value")) for item in value
+                                if isinstance(item, dict) and isinstance(item.get("value"), str))
                 elif isinstance(value, dict):
                     refs.extend((param_name, item) for item in value.values() if isinstance(item, str))
                 continue
@@ -754,6 +756,7 @@ class PipelineRegistry:
                 refs.append((param_name, value))
             elif isinstance(value, list):
                 refs.extend((param_name, item) for item in value if isinstance(item, str))
+
         return refs
 
     @staticmethod
@@ -809,6 +812,12 @@ class PipelineRegistry:
     def validate_pipeline_config(self, config: Dict[str, Any]) -> PipelineValidationResult:
         errors: List[PipelineValidationIssue] = []
         warnings: List[PipelineValidationIssue] = []
+
+        from app.services.resource_resolution import resolve_pipeline_resources, ResourceReferenceError
+        try:
+            config, _ = resolve_pipeline_resources(config)
+        except (ResourceReferenceError, ValueError) as exc:
+            errors.append(self._make_validation_issue(level='error', code='invalid_resource_reference', message=str(exc)))
 
         dataset_id = self._extract_dataset_id(config.get("input_dataset"))
         available_fields: List[str] = []
@@ -1399,7 +1408,9 @@ class PipelineRegistry:
                     # 1. actual value from pipeline code (__init__)
                     # 2. stored params (user customized)
                     # 3. default value from operator definition
-                    p_val = actual_init_params.get(p_name)
+                    stored_value = stored_params.get(p_name)
+                    is_resource = (isinstance(stored_value, str) and stored_value.startswith(('user_prompt:', 'schema_ref:'))) or (isinstance(stored_value, dict) and 'ref' in stored_value)
+                    p_val = stored_value if is_resource else actual_init_params.get(p_name)
                     if p_val is None:
                         p_val = stored_params.get(p_name)
                     if p_val is None:

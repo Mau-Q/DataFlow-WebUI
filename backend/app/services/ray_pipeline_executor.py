@@ -3,7 +3,7 @@ from dataflow.serving import APILLMServing_request
 from dataflow.utils.text2sql.database_manager import DatabaseManager
 from dataflow.utils.storage import FileStorage
 from dataflow.pipeline import PipelineABC
-from dataflow.utils.registry import PROMPT_REGISTRY, OPERATOR_REGISTRY
+from dataflow.utils.registry import OPERATOR_REGISTRY
 import ray
 from typing import Dict, Any, Optional, List
 from app.core.config import settings
@@ -19,7 +19,8 @@ import re
 import time
 from contextlib import redirect_stdout, redirect_stderr
 
-from app.services.param_coercion import coerce_param_value
+from app.services.param_coercion import coerce_param_value, coerce_keyword_params
+from app.services.resource_resolution import instantiate_prompt, resolve_pipeline_resources
 from app.services.pipeline_compile_check import compile_check
 from app.services.dataflow_engine import (
     _compile_dynamic_code_callable,
@@ -173,6 +174,7 @@ def dataflow_pipeline_execute(pipeline_config: Dict[str, Any], dataflow_runtime:
         task_id: Execution ID
         execution_path: Execution path
     """
+    pipeline_config, _ = resolve_pipeline_resources(pipeline_config)
     started_at = datetime.now().isoformat()
     logs: List[str] = []
     output: Dict[str, Any] = {}
@@ -436,32 +438,7 @@ def dataflow_pipeline_execute(pipeline_config: Dict[str, Any], dataflow_runtime:
                                 param_value = db_manager_instance_map[db_manager_id]
                         
                         elif param_name == "prompt_template":
-                            if isinstance(param_value, str):
-                                prompt_cls_name = extract_class_name(param_value)
-                                add_log("init", f"[{datetime.now().isoformat()}]   - Loading prompt template: {prompt_cls_name}", op_key)
-                                prompt_cls = PROMPT_REGISTRY.get(prompt_cls_name)
-                                if not prompt_cls:
-                                    raise DataFlowEngineError(
-                                        f"Prompt class not found: {prompt_cls_name}",
-                                        context={"operator": op_name, "param": param_name}
-                                    )
-                                param_value = prompt_cls()
-                            elif isinstance(param_value, dict):
-                                prompt_cls_name = extract_class_name(param_value.get("cls_name", "FormatStrPrompt"))
-                                add_log("init", f"[{datetime.now().isoformat()}]   - Loading prompt template: {prompt_cls_name} (dict-form)", op_key)
-                                prompt_cls = PROMPT_REGISTRY.get(prompt_cls_name)
-                                if not prompt_cls:
-                                    raise DataFlowEngineError(
-                                        f"Prompt class not found: {prompt_cls_name}",
-                                        context={"operator": op_name, "param": param_name}
-                                    )
-                                if "params" in param_value:
-                                    param_dict = {}
-                                    for p in param_value["params"]:
-                                        param_dict[p["name"]] = p.get("value") if p.get("value") is not None else p.get("default_value")
-                                else:
-                                    param_dict = {k: v for k, v in param_value.items() if k != "cls_name"}
-                                param_value = prompt_cls(**param_dict)
+                            param_value = instantiate_prompt(param_value)
                         elif param_name in ("process_fn", "filter_rules"):
                             normalized_items = _normalize_dynamic_code_param_value(
                                 param_value, param_name=param_name,
@@ -516,11 +493,7 @@ def dataflow_pipeline_execute(pipeline_config: Dict[str, Any], dataflow_runtime:
                     if param.get('kind') == "VAR_KEYWORD" and param_value is None:
                         continue
                     if param.get('kind') == "VAR_KEYWORD":
-                        for item in param_value:
-                            item_name = item.get("name")
-                            item_val = item.get("value") if item.get("value") is not None else item.get("default_value")
-                            item_default = item.get("default_value")
-                            run_params[item_name] = coerce_param_value(item_val, annotation=inspect.Parameter.empty, default_value=item_default)
+                        run_params.update(coerce_keyword_params(param_value))
                     else:
                         # 跳过签名里不存在、且 run() 又不吃 **kwargs 的多余参数，
                         # 否则 operator.run(**run_params) 会因未知关键字参数直接失败。

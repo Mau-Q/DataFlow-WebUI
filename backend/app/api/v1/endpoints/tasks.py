@@ -1,3 +1,4 @@
+from app.services.resource_resolution import ResourceReferenceError
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from typing import List, Dict
@@ -214,15 +215,17 @@ async def execute_pipeline(request: Request, pipeline_id):
             raise HTTPException(404, f"Pipeline {pipeline_id} not found")
 
         # 调用服务层开始执行
-        task_id, _, initial_result = container.task_registry.start_execution(
+        task_id, frozen_config, initial_result = container.task_registry.start_execution(
             pipeline_id=pipeline_id, 
             config=pipeline_config
         )
         logger.info(f"Execution ID: {task_id}")
         
         # 执行 pipeline (run 方法内部已经处理所有异常，总是返回结果)
-        result = dataflow_engine.run(pipeline_config["config"], task_id, execution_path=container.task_registry.path)
+        result = dataflow_engine.run(frozen_config, task_id, execution_path=container.task_registry.path)
         
+        result = {**initial_result, **result}
+
         # 更新执行记录到 registry
         data = container.task_registry._read()
         if task_id in data.get("tasks", {}):
@@ -233,6 +236,8 @@ async def execute_pipeline(request: Request, pipeline_id):
         
     except HTTPException:
         raise
+    except ResourceReferenceError as e:
+        raise HTTPException(422, str(e))
     except Exception as e:
         # 导入 DataFlowEngineError 来检查异常类型
         from app.services.dataflow_engine import DataFlowEngineError
@@ -259,7 +264,7 @@ async def execute_pipeline(request: Request, pipeline_id):
                             },
                             "completed_at": datetime.now().isoformat()
                         })
-                        container.pipeline_registry._write(data)
+                        container.task_registry._write(data)
                 except Exception as update_error:
                     logger.error(f"Failed to update execution status: {update_error}")
             
@@ -309,6 +314,8 @@ async def execute_pipeline_async(request: Request, pipeline_id: str):
         
     except HTTPException:
         raise
+    except ResourceReferenceError as e:
+        raise HTTPException(422, str(e))
     except Exception as e:
         logger.error(f"Failed to submit pipeline execution: {e}")
         import traceback

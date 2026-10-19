@@ -279,7 +279,7 @@ export const useDataflow = defineStore('useDataflow', () => {
     const jsonSchemaList = ref([])
     const getJsonSchemaList = async () => {
         try {
-            const res = await axios.get('/api/v1/json_schemas/')
+            const res = await axios.get('/api/v1/json_schemas')
             const payload = res.data && res.data.data ? res.data.data : res.data
             const list = Array.isArray(payload) ? payload : []
             // normalise for fv-combobox consumption

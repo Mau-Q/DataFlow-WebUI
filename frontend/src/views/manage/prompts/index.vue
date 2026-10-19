@@ -240,8 +240,9 @@
                 </div>
                 <div class="editor-row">
                     <label>
-                        {{ local('Template (f-string, use {placeholder} syntax)') }}
+                        模板内容（使用 {变量名}；JSON 花括号可直接书写）
                     </label>
+                    <p class="template-hint">变量通过字段绑定传入；&#123;&#123;变量名&#125;&#125; 显示为字面量。当前支持 FormatStrPromptedGenerator，其他算子保留内置 Prompt。</p>
                     <textarea
                         v-model="editingTemplate.template"
                         class="editor-textarea"
@@ -438,10 +439,10 @@ export default {
         extractPlaceholders(tpl) {
             if (!tpl) return []
             const seen = []
-            const re = /\{([A-Za-z_][A-Za-z0-9_]*)\}/g
+            const re = /\{\{|\}\}|\{([A-Za-z_][A-Za-z0-9_]*)\}/g
             let m
             while ((m = re.exec(tpl)) !== null) {
-                if (!seen.includes(m[1])) seen.push(m[1])
+                if (m[1] && !seen.includes(m[1])) seen.push(m[1])
             }
             return seen
         },
@@ -520,12 +521,15 @@ export default {
                         template: this.editingTemplate.template,
                         variables: this.editingTemplate.example_variables || {},
                     })
+                    if (!res.data?.success) throw new Error(res.data?.message || '预览失败')
                     const data = (res.data && res.data.data) || {}
+                    this.detectedPlaceholders = data.placeholders || []
                     this.previewRendered = data.rendered || ''
                     this.previewMissing = data.missing || []
                 } catch (e) {
                     this.previewRendered = ''
                     this.previewMissing = []
+                    this.previewRendered = e.message
                 }
             }, 200)
         },
@@ -540,7 +544,7 @@ export default {
                 example_variables: this.editingTemplate.example_variables || {},
             }
             if (!payload.name) {
-                this.$barWarning && this.$barWarning({ status: 'warning', title: this.local('Name is required') })
+                this.$barWarning && this.$barWarning(this.local('Name is required'), { status: 'warning' })
                 return
             }
             try {
@@ -550,12 +554,13 @@ export default {
                 } else {
                     res = await axios.post(`${BASE}/user`, payload)
                 }
+                if (!res.data?.success) throw new Error(res.data?.message || '保存失败')
                 const saved = (res.data && res.data.data) || null
                 await this.loadUserTemplates()
                 if (saved && saved.id) this.selectUserTemplate(saved.id)
-                this.$barWarning && this.$barWarning({ status: 'correct', title: this.local('Template saved') })
+                this.$barWarning && this.$barWarning(this.local('Template saved'), { status: 'correct' })
             } catch (e) {
-                this.$barWarning && this.$barWarning({ status: 'error', title: e.message || 'Save failed' })
+                this.$barWarning && this.$barWarning(e.message || 'Save failed', { status: 'error' })
             }
         },
 
@@ -563,12 +568,13 @@ export default {
             if (!this.editingTemplate || !this.editingTemplate.id) return
             if (!window.confirm(`${this.local('Delete template')} "${this.editingTemplate.name}"?`)) return
             try {
-                await axios.delete(`${BASE}/user/${this.editingTemplate.id}`)
+                const res = await axios.delete(`${BASE}/user/${this.editingTemplate.id}`)
+                if (!res.data?.success) throw new Error(res.data?.message || '删除失败')
                 this.editingTemplate = null
                 this.selectedUserId = ''
                 await this.loadUserTemplates()
             } catch (e) {
-                this.$barWarning && this.$barWarning({ status: 'error', title: e.message || 'Delete failed' })
+                this.$barWarning && this.$barWarning(e.message || 'Delete failed', { status: 'error' })
             }
         },
 
@@ -1045,6 +1051,8 @@ export default {
     display: flex;
     flex-direction: column;
     height: 100%;
+    flex: 1;
+    min-width: 0;
     background: rgba(250, 250, 250, 1);
 
     &.dark {

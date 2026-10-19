@@ -2,7 +2,7 @@ from dataflow.serving import APILLMServing_request
 from dataflow.utils.text2sql.database_manager import DatabaseManager
 from dataflow.utils.storage import FileStorage
 from dataflow.pipeline import PipelineABC
-from dataflow.utils.registry import PROMPT_REGISTRY, OPERATOR_REGISTRY
+from dataflow.utils.registry import OPERATOR_REGISTRY
 from dataclasses import dataclass
 from app.services.serving_registry import SERVING_CLS_REGISTRY
 from app.services.serving_params import expand_serving_configs
@@ -24,7 +24,8 @@ logger = get_logger(__name__)
 
 import inspect
 
-from app.services.param_coercion import coerce_param_value
+from app.services.param_coercion import coerce_param_value, coerce_keyword_params
+from app.services.resource_resolution import instantiate_prompt, resolve_pipeline_resources
 
 class DataFlowEngineError(Exception):
     """DataFlow Engine 自定义异常类"""
@@ -440,6 +441,7 @@ class DataFlowEngine:
                 - started_at: str
                 - completed_at: str
         """
+        pipeline_config, _ = resolve_pipeline_resources(pipeline_config)
         started_at = datetime.now().isoformat()
         logs: List[str] = []
         output: Dict[str, Any] = {}
@@ -630,32 +632,7 @@ class DataFlowEngine:
                                     param_value = db_manager_instance_map[db_manager_id]
                             
                             elif param_name == "prompt_template":
-                                if isinstance(param_value, dict):
-                                    cls_name = extract_class_name(param_value.get("cls_name", "FormatStrPrompt"))
-                                    add_log("init", f"[{datetime.now().isoformat()}]   - Loading prompt template: {cls_name} (dict-form)", op_key)
-                                    prompt_cls = PROMPT_REGISTRY.get(cls_name)
-                                    if not prompt_cls:
-                                        raise DataFlowEngineError(
-                                            f"Prompt类未找到: {cls_name}",
-                                            context={"operator": op_name, "param": param_name}
-                                        )
-                                    if "params" in param_value:
-                                        ctor_kwargs = {}
-                                        for p in param_value["params"]:
-                                            ctor_kwargs[p["name"]] = p.get("value") if p.get("value") is not None else p.get("default_value")
-                                    else:
-                                        ctor_kwargs = {k: v for k, v in param_value.items() if k != "cls_name"}
-                                    param_value = prompt_cls(**ctor_kwargs)
-                                else:
-                                    prompt_cls_name = extract_class_name(param_value)
-                                    add_log("init", f"[{datetime.now().isoformat()}]   - Loading prompt template: {prompt_cls_name}", op_key)
-                                    prompt_cls = PROMPT_REGISTRY.get(prompt_cls_name)
-                                    if not prompt_cls:
-                                        raise DataFlowEngineError(
-                                            f"Prompt类未找到: {prompt_cls_name}",
-                                            context={"operator": op_name, "param": param_name}
-                                        )
-                                    param_value = prompt_cls()
+                                param_value = instantiate_prompt(param_value)
                             elif param_name in ("process_fn", "filter_rules"):
                                 normalized_items = _normalize_dynamic_code_param_value(
                                     param_value,
@@ -721,6 +698,9 @@ class DataFlowEngine:
                         param_kind = param.get("kind", "")
                         if param_kind == "VAR_KEYWORD" and param_value is None:
                             continue
+                        if param_kind == "VAR_KEYWORD":
+                            run_params.update(coerce_keyword_params(param_value))
+                            continue
                         # Skip DYNAMIC / unknown params the operator's run() can't accept.
                         if (param_name not in run_sig.parameters) and not run_accepts_var_kw:
                             logger.warning(
@@ -743,8 +723,8 @@ class DataFlowEngine:
                     ]
                     for vk_name in var_kw_names:
                         vk_val = run_params.pop(vk_name, None)
-                        if isinstance(vk_val, dict):
-                            run_params.update(vk_val)
+                        if vk_val is not None:
+                            run_params.update(coerce_keyword_params(vk_val))
 
                     # 实例化 Operator
                     operator_instance = operator_cls(**init_params)
