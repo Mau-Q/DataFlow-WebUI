@@ -134,3 +134,76 @@ def test_builtin_preview_renders_registered_parameters_without_model_calls(monke
         assert calls[0] == {'cls_name': 'RegisteredPrompt', 'params': [{'name': 'lang', 'value': 'zh'}]}
         result = client.post('/api/v1/prompts/builtin-preview', json={'name': 'missing'}).json()
         assert not result['success'] and result['meta']['http_status'] == 422
+
+
+def test_personal_scope_includes_actual_text_and_image_flow_resources(catalog):
+    from app.services.text_generation import template as text_template
+    from app.services.multimodal_templates import template as image_template
+    from app.services.resource_catalog import TEXT_SFT
+    from app.services.resource_store import ResourceStore
+    service, own, schemas, _, _ = catalog
+    mapping = {name: {'operator': [], 'description': '', 'primary_type': 'core_text',
+               'parameter': {'init': [], 'build_prompt': []}, 'class_str': 'test.' + name} for name in TEXT_SFT}
+    mapping['UnusedPrompt'] = dict(mapping['KnowledgeCleanerPrompt'])
+    service.c.prompt_registry.list_prompt_info = lambda: SimpleNamespace(model_dump=lambda: {'prompts': mapping})
+    flow = text_template()
+    flow.update(id='personal-text', name='My text')
+    service.c.pipeline_registry.list_pipelines = lambda: [flow]
+    image = image_template()
+    image.update(id='personal-image', name='My image')
+    store = ResourceStore(service.c.data_library.root / 'multimodal_configs.json')
+    with store.writing() as data:
+        data[image['id']] = image
+    before = (own.store.path.read_bytes(), schemas.store.path.read_bytes(), store.path.read_bytes())
+    result = service.prompts()
+    personal = [r for r in result['resources'] if r['personal']]
+    assert {r['id'] for r in personal if r['kind'] == 'python'} == TEXT_SFT
+    assert sum(r['id'].startswith('mm-') for r in personal) == 2
+    assert not next(r for r in result['resources'] if r['id'] == 'UnusedPrompt')['personal']
+    assert len({r['ref'] for r in personal}) == len(personal)
+    def reference(name):
+        return next(ref for r in personal if r['id'] == name for ref in r['references']
+                    if ref['pipeline_id'] == 'pipeline:personal-text')
+    cleaner = reference('KnowledgeCleanerPrompt')
+    assert next(p for p in result['pipelines'] if p['id']=='pipeline:personal-text')['family']=='text-sft'
+    assert next(p for p in result['pipelines'] if p['id']=='multimodal:personal-image')['family']=='image-sft'
+    assert next(p for p in result['pipelines'] if p['id']=='template:text-sft')['origin']=='platform_template'
+    assert cleaner['kind'] == 'operator_default'
+    assert cleaner['parameters']['constructor'] == {'lang': 'en'}
+    assert cleaner['parameters']['operator']['run']['input_key'] == 'raw_chunk'
+    qa = reference('Text2MultiHopQAGeneratorPrompt')
+    assert qa['kind'] == 'explicit' and qa['parameters']['constructor'] == {'lang': 'zh'}
+    assert reference('Text2QAAnswerAlignmentPrompt')['kind'] == 'operator_fixed'
+    assert reference('AlpagasusPrompt')['parameters']['constructor'] == {'dimension': 'quality'}
+    answer = next(r for r in personal if r['id'] == 'mm-answer-v1')
+    use = next(ref for ref in answer['references'] if ref['pipeline_source'] == 'user')
+    assert use['parameters']['inputs'] == {'image': 'image', 'question': 'question'}
+    assert use['bindings'] == {'question': 'question'}
+    personal_schemas = [r for r in service.schemas()['resources'] if r['personal']]
+    assert {r['id'] for r in personal_schemas} == {schemas.list_all()[0]['id'], 'builtin-mm-qa-v1'}
+    check = next(r for r in personal_schemas if r['id'] == 'builtin-mm-qa-v1')
+    assert check['readonly'] and check['references'][-1]['parameters']['output'] == 'validated'
+    assert before == (own.store.path.read_bytes(), schemas.store.path.read_bytes(), store.path.read_bytes())
+
+
+def test_explicit_override_suppresses_default_and_keeps_per_flow_parameters(catalog):
+    service, _, _, prompt, _ = catalog
+    mapping = {name: {'operator': [], 'description': '', 'primary_type': 'core_text',
+               'parameter': {'init': [], 'build_prompt': []}, 'class_str': 'test.' + name}
+               for name in ['KnowledgeCleanerPrompt', 'Text2MultiHopQAGeneratorPrompt']}
+    service.c.prompt_registry.list_prompt_info = lambda: SimpleNamespace(model_dump=lambda: {'prompts': mapping})
+    def flow(key, lang, override=False):
+        init = [{'name': 'lang', 'value': lang}, {'name': 'api_key', 'value': 'secret-value'}]
+        if override:
+            init.append({'name': 'prompt_template', 'value': {'ref': 'user_prompt:' + prompt['id']}})
+        return {'id': key, 'name': key, 'config': {'operators': [{'name': 'KBCTextCleaner', 'params': {'init': init}}]}}
+    service.c.pipeline_registry.list_pipelines = lambda: [flow('en', 'en'), flow('zh', 'zh'), flow('override', 'zh', True)]
+    result = service.prompts()
+    cleaner = next(r for r in result['resources'] if r['id'] == 'KnowledgeCleanerPrompt')
+    refs = [ref for ref in cleaner['references'] if ref['pipeline_source'] == 'user']
+    assert {ref['pipeline_id'] for ref in refs} == {'pipeline:en', 'pipeline:zh'}
+    assert {ref['parameters']['constructor']['lang'] for ref in refs} == {'en', 'zh'}
+    assert all(ref['parameters']['operator']['init']['api_key'] == '[已隐藏]' for ref in refs)
+    assert 'secret-value' not in json.dumps(result)
+    builtin_qa = next(r for r in result['resources'] if r['id'] == 'Text2MultiHopQAGeneratorPrompt')
+    assert not builtin_qa['personal']  # Only used by the system template.

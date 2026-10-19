@@ -1,4 +1,4 @@
-"""Read-only catalogs: saved references are distinct from operator compatibility."""
+"""Read-only catalogs of owned resources and actual saved-flow usage."""
 import copy
 from app.core.container import container
 from app.services.builtin_resources import builtin_schemas
@@ -7,6 +7,58 @@ from app.services.user_prompt_registry import _extract_placeholders
 
 TEXT_SFT = {'KnowledgeCleanerPrompt', 'Text2MultiHopQAGeneratorPrompt', 'Text2QAQuestionQualityPrompt',
             'Text2QAAnswerAlignmentPrompt', 'Text2QAAnswerVerifiabilityPrompt', 'Text2QADownstreamValuePrompt', 'AlpagasusPrompt'}
+
+
+PROMPT_LABELS = {
+    'KnowledgeCleanerPrompt': '文本清洗',
+    'Text2MultiHopQAGeneratorPrompt': '多跳 QA 生成',
+    'Text2QAQuestionQualityPrompt': '问题质量评分',
+    'Text2QAAnswerAlignmentPrompt': '答案对齐评分',
+    'Text2QAAnswerVerifiabilityPrompt': '答案可验证性评分',
+    'Text2QADownstreamValuePrompt': '下游价值评分',
+    'AlpagasusPrompt': 'Alpagasus 质量评分',
+}
+# Verified against the corresponding core operator constructors / _build_prompts.
+# This is actual execution behavior, not the registry's allowed-prompts list.
+OPERATOR_PROMPTS = {
+    'KBCTextCleaner': ('operator_default', ['KnowledgeCleanerPrompt'], {'lang': 'en'}),
+    'Text2MultiHopQAGenerator': ('operator_default', ['Text2MultiHopQAGeneratorPrompt'], {'lang': 'en'}),
+    'Text2QASampleEvaluator': ('operator_fixed', [
+        'Text2QAQuestionQualityPrompt', 'Text2QAAnswerAlignmentPrompt',
+        'Text2QAAnswerVerifiabilityPrompt', 'Text2QADownstreamValuePrompt'], {}),
+    'AlpagasusSampleEvaluator': ('operator_fixed', ['AlpagasusPrompt'], {'dimension': 'quality'}),
+}
+
+
+def _value(param):
+    return param.get('value') if param.get('value') is not None else param.get('default_value')
+
+
+def _safe(value):
+    """Do not echo credentials when presenting saved operator parameters."""
+    if isinstance(value, dict):
+        secret_keys = {'api_key', 'password', 'secret', 'token', 'access_token', 'authorization'}
+        named_secret = str(value.get('name', '')).lower() in secret_keys
+        return {k: '[已隐藏]' if str(k).lower() in secret_keys or
+                (named_secret and k in {'value', 'default_value'}) else _safe(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_safe(v) for v in value]
+    return copy.deepcopy(value)
+
+
+def _sections(op):
+    raw = op.get('params') or {}
+    if isinstance(raw, dict) and ('init' in raw or 'run' in raw):
+        return {section: _safe({p['name']: _value(p) for p in values}) if isinstance(values, list)
+                else _safe(values) for section in ('init', 'run') if (values := raw.get(section))}
+    return {'init': _safe({p['name']: _value(p) for p in _params(op)})}
+
+
+def _constructor(value):
+    if not isinstance(value, dict):
+        return {}
+    params = value.get('params')
+    return _safe({p['name']: _value(p) for p in params}) if isinstance(params, list) else _safe(params or {})
 
 
 def _params(op):
@@ -73,31 +125,59 @@ class ResourceCatalog:
                     schema_ops.append(op['name'])
             if any(s['id'] == 'validate' for s in steps):
                 schema_ops.append('platform:validate')
-            options.append({'source': pipeline['source'], 'schema_operators': schema_ops, 'id': pipeline['catalog_id'], 'name': pipeline['name'], 'operators': op_names, 'route': pipeline['route']})
-            def attach(ref, step, field, bindings=None):
+            family = 'image-sft' if steps and any(s['kind'].startswith('mm:') for s in steps) else 'text-sft' if ('platform-text' in pipeline.get('tags', []) or any(op['name'] in {'Text2MultiHopQAGenerator', 'Text2QASampleEvaluator'} for op in operators) or pipeline['catalog_id'] == 'template:text-sft') else None
+            origin = 'platform_template' if pipeline['catalog_id'].startswith('template:') else 'preset' if pipeline['source'] == 'builtin' else 'custom'
+            options.append({'family': family, 'origin': origin, 'source': pipeline['source'], 'schema_operators': schema_ops, 'id': pipeline['catalog_id'], 'name': pipeline['name'], 'operators': op_names, 'route': pipeline['route']})
+            def attach(ref, step, field, bindings=None, kind='explicit', parameters=None, evidence=None):
                 target = by_ref.get(ref)
                 if target is None:
                     return
-                usage = {'pipeline_id': pipeline['catalog_id'], 'pipeline_name': pipeline['name'], 'step': step,
-                         'field': field, 'bindings': bindings or {}, 'route': pipeline['route']}
+                usage = {'pipeline_id': pipeline['catalog_id'], 'pipeline_name': pipeline['name'],
+                         'pipeline_source': pipeline['source'], 'step': step, 'field': field,
+                         'bindings': _safe(bindings or {}), 'route': pipeline['route'],
+                         'kind': kind, 'parameters': _safe(parameters or {}), 'evidence': evidence}
                 if usage not in target['references']:
                     target['references'].append(usage)
             for index, op in enumerate(operators):
-                for param in _params(op):
-                    value = param.get('value')
+                step_name = f"{index + 1}. {op['name']}"
+                params = _params(op)
+                for param in params:
+                    value = _value(param)
                     ref = _reference(value)
                     if ref:
-                        attach(ref, f"{index + 1}. {op['name']}", param['name'], value.get('bindings') if isinstance(value, dict) else None)
+                        attach(ref, step_name, param['name'], value.get('bindings') if isinstance(value, dict) else None,
+                               parameters={'operator': _sections(op)})
                     elif param.get('name') == 'prompt_template':
                         cls = value.get('cls_name') if isinstance(value, dict) else value
                         if isinstance(cls, str):
                             if "<class '" in cls:
                                 cls = cls.split("'")[1].split('.')[-1]
-                            attach('builtin_prompt:' + cls, f"{index + 1}. {op['name']}", 'prompt_template')
+                            attach('builtin_prompt:' + cls, step_name, 'prompt_template',
+                                   parameters={'constructor': _constructor(value), 'operator': _sections(op)})
+                contract = OPERATOR_PROMPTS.get(op['name'])
+                if contract:
+                    kind, names, defaults = contract
+                    prompt_value = next((_value(p) for p in params if p['name'] == 'prompt_template'), None)
+                    # A selected prompt replaces the constructor default. Fixed evaluators
+                    # construct their own prompts regardless of the allowed-prompts metadata.
+                    if kind == 'operator_fixed' or not prompt_value:
+                        init = _sections(op).get('init', {})
+                        constructor = {key: init.get(key) if init.get(key) is not None else default
+                                       for key, default in defaults.items()}
+                        for name in names:
+                            attach('builtin_prompt:' + name, step_name,
+                                   'self.prompts' if op['name'] == 'Text2QASampleEvaluator' else
+                                   'self.prompt' if op['name'] == 'AlpagasusSampleEvaluator' else 'prompt_template', kind=kind,
+                                   parameters={'constructor': constructor, 'operator': _sections(op)},
+                                   evidence=op['name'] + ('._build_prompts' if op['name'] == 'Text2QASampleEvaluator' else '.__init__'))
             for step in steps:
-                attach(step.get('resource_ref'), step['id'], 'resource_ref', step.get('bindings'))
+                attach(step.get('resource_ref'), step['id'], 'resource_ref', step.get('bindings'),
+                       parameters={key: step[key] for key in ('inputs', 'output', 'bindings', 'resource_ref') if key in step})
+        for resource in resources:
+            resource['personal'] = resource['source'] == 'user' or any(
+                r['pipeline_source'] == 'user' for r in resource['references'])
         return {'resources': resources, 'pipelines': options,
-                'reference_scope': '引用来自已保存配置及内置流程的显式资源参数；不推断源码中的内联文本或未保存的默认参数。'}
+                'reference_scope': '使用记录来自已保存流程的显式绑定及已核实的算子默认/固定 Prompt；表示配置用法，不表示已运行。'}
 
     def prompts(self):
         records = []
@@ -112,7 +192,7 @@ class ResourceCatalog:
         info = self.c.prompt_registry.list_prompt_info().model_dump()['prompts'] if self.c.prompt_registry else {}
         for name, item in info.items():
             usage = '文本 SFT' if name in TEXT_SFT or item['primary_type'] == 'text_sft' else '通用'
-            records.append({'id': name, 'name': name, 'source': 'builtin', 'readonly': True, 'kind': 'python',
+            records.append({'id': name, 'name': PROMPT_LABELS.get(name, name), 'source': 'builtin', 'readonly': True, 'kind': 'python',
                             'ref': 'builtin_prompt:' + name, 'description': item['description'], 'usages': [usage],
                             'purpose': '清洗' if name == 'KnowledgeCleanerPrompt' else '评分' if name in TEXT_SFT - {'KnowledgeCleanerPrompt', 'Text2MultiHopQAGeneratorPrompt'} else '生成' if name == 'Text2MultiHopQAGeneratorPrompt' else '通用',
                             'operators': item['operator'], 'variables': [p['name'] for p in item['parameter']['build_prompt']],

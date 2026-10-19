@@ -4,11 +4,15 @@ Prompt Manager 的 My Templates 与 JSON Schema Manager 可独立使用，无需
 
 ## 默认列表与详情
 
-两个管理器均默认显示“我的”全部资源，与“内置”分栏。列表仅显示名称、用途/功能、适用算子或主要字段、更新时间；变量、源码、Schema、示例与引用位置在详情查看。可组合搜索、用途、功能、算子与 Pipeline 筛选。
+两个管理器均默认显示“我的”，包含自己创建的资源及自定义流程实际使用的资源；与完整的“内置”库分栏，允许同一内置资源出现在两个页签。资源按引用 ID 去重，不复制、不改变所有权。列表仅显示名称、用途/功能、来源、使用的自定义流程数量；变量、源码、Schema、字段、示例与更新时间在详情查看。可组合搜索、用途、功能、算子与 Pipeline 筛选。
 
-“我的模板”和“我的 Schema”的 Pipeline 下拉框只显示自定义的已保存流程（含图片流程配置）。预置流程按 PipelineRegistry 的 api 标签及 api_pipelines 路径规则识别；内置文本/图片流程模板也不会混入此下拉框。内置资源页允许按全部流程筛选，切回“我的”时会清除不适用的预置流程选项。
+“我的模板”和“我的 Schema”的 Pipeline 下拉框只显示“文本 SFT”“图像 SFT”两个入口，按配置标签与步骤结构归组，不按历史配置名称猜测。验收、试跑和历史配置保留为详情中的使用记录，不单独列入筛选。内置页只列系统自带的预置 Pipeline，按 PipelineRegistry 的 api 标签及 api_pipelines 路径规则识别，不混入个人配置或平台的两个 SFT 模板。切换页签会清除不适用的流程选项。
 
-“此流程已引用”只统计保存配置及内置模板中的显式引用，不从算子兼容性推断使用情况；“适用于此流程”按已接入算子和 Schema 参数匹配候选，变量绑定、格式与执行条件仍须检查。引用详情可跳转到对应流程。
+“此流程使用”统计已保存配置中的显式引用，以及已核实的算子默认/固定 Prompt。“适用于此流程”按已接入算子和 Schema 参数匹配候选，不把可选项当成实际用法。用法代表当前保存配置，不代表流程已经运行。
+
+文本 SFT 显示清洗、多跳 QA、四维评分和 Alpagasus 评分共七类 Prompt。默认映射依据 KBCTextCleaner、Text2MultiHopQAGenerator 的构造函数，固定映射依据 Text2QASampleEvaluator._build_prompts 与 AlpagasusSampleEvaluator.__init__；显式替换可选 Prompt 后不再统计被替换的默认项。图片 SFT 显示问题/答案 Prompt，结构检查计入 Schema，格式整理不虚构 Prompt。
+
+详情按流程和步骤列出显式/默认/固定用法、Prompt 构造参数、算子 init/run 参数或图片步骤输入/输出及绑定，凭据字段隐藏。共享资源只保留一行，参数不同的使用位置分别保留。“我的”详情默认只列自定义流程，选择 SFT 入口后只列这一类流程；内置页可查看全部配置中的用法，并可跳转到流程。
 
 内置 Prompt 包含注册的 Python Prompt 类和图片 SFT 问题/答案模板。Python 类只读，可查看源码及参数、填写构造和 build_prompt 参数预览；预览不调用模型。将预览另存为我的模板得到固定文本，需自行添加变量。文本模板可直接复制后编辑。
 
@@ -58,7 +62,7 @@ Pipeline 保存的形状如下，两份配置可以引用同一个 ID：
 
 ## API
 
-- `GET /api/v1/prompts/catalog`、`GET /api/v1/json_schemas/catalog` 返回标准化资源、来源、兼容算子和显式引用。
+- `GET /api/v1/prompts/catalog`、`GET /api/v1/json_schemas/catalog` 返回标准化资源、来源、personal 展示范围、兼容算子和实际配置用法。
 - `POST /api/v1/prompts/builtin-preview` 接收 name / init / variables，预览已注册 Python Prompt。
 - `GET /api/v1/json_schemas?include_builtin=true` 在原有个人列表上增加内置 Schema；省略此参数保持旧接口行为。
 

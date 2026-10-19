@@ -1,6 +1,13 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { pipelineOptions, filterResources, variablesOf, timeLabel } from './catalog.js'
+import {
+    matchesSource,
+    usageCount,
+    pipelineOptions,
+    filterResources,
+    variablesOf,
+    timeLabel
+} from './catalog.js'
 const rows = [
     {
         name: 'Own',
@@ -79,16 +86,66 @@ test('variables preserve JSON literals and escapes, invalid times remain unknown
     assert.equal(timeLabel('invalid'), '未记录')
 })
 
-test('personal pipeline dropdown includes only custom saved pipelines', () => {
+test('my dropdown contains two SFT families; builtin dropdown contains only shipped presets', () => {
     const options = [
-        { id: 'preset', source: 'builtin' },
-        { id: 'custom', source: 'user' },
-        { id: 'multimodal', source: 'user' },
-        { id: 'template', source: 'builtin' }
+        { id: 'preset', source: 'builtin', origin: 'preset', operators: ['Native'] },
+        {
+            id: 'custom',
+            source: 'user',
+            origin: 'custom',
+            family: 'text-sft',
+            operators: ['Generate']
+        },
+        {
+            id: 'history',
+            source: 'user',
+            origin: 'custom',
+            family: 'text-sft',
+            operators: ['Evaluate']
+        },
+        {
+            id: 'multimodal',
+            source: 'user',
+            origin: 'custom',
+            family: 'image-sft',
+            operators: ['VQA']
+        },
+        { id: 'template', source: 'builtin', origin: 'platform_template', family: 'text-sft' }
     ]
+    const own = pipelineOptions(options, 'user')
     assert.deepEqual(
-        pipelineOptions(options, 'user').map((p) => p.id),
-        ['custom', 'multimodal']
+        own.map((p) => p.name),
+        ['文本 SFT', '图像 SFT']
     )
-    assert.equal(pipelineOptions(options, 'builtin').length, 4)
+    assert.deepEqual(own[0].member_ids, ['custom', 'history'])
+    assert.deepEqual(own[0].operators, ['Generate', 'Evaluate'])
+    assert.deepEqual(
+        pipelineOptions(options, 'builtin').map((p) => p.id),
+        ['preset']
+    )
+    const resource = { ...rows[0], references: [{ pipeline_id: 'history' }] }
+    assert.equal(filterResources([resource], { pipeline: 'family:text-sft' }, own).length, 1)
+    assert.equal(filterResources([resource], { pipeline: 'family:image-sft' }, own).length, 0)
+})
+
+test('my resources include used builtins while keeping ownership and unique flow counts', () => {
+    const used = {
+        ...rows[1],
+        personal: true,
+        references: [
+            { pipeline_id: 'custom', pipeline_source: 'user' },
+            { pipeline_id: 'custom', pipeline_source: 'user' },
+            { pipeline_id: 'preset', pipeline_source: 'builtin' }
+        ]
+    }
+    assert.deepEqual(
+        filterResources([...rows, used], {}).map((r) => r.name),
+        ['Own', 'Builtin']
+    )
+    assert.equal(usageCount(used), 1)
+    assert.equal(matchesSource(used, 'user'), true)
+    assert.equal(matchesSource(used, 'builtin'), true)
+    assert.equal(used.source, 'builtin')
+    assert.equal(filterResources([used], { pipeline: 'unreferenced' }).length, 0)
+    assert.equal(filterResources([used], { pipeline: 'custom' }).length, 1)
 })

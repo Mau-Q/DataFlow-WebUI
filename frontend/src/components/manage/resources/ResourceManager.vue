@@ -39,9 +39,12 @@
                               ? '内置模板'
                               : '内置 Schema'
                     }}
-                    <span>{{ records.filter((r) => r.source === s).length }}</span>
+                    <span>{{ records.filter((r) => matchesSource(r, s)).length }}</span>
                 </button>
             </div>
+            <p class="scope" v-if="source === 'user'">
+                包含我创建的资源和自定义流程实际使用的资源；同一资源只显示一次。
+            </p>
             <div class="filters">
                 <input
                     v-model="search"
@@ -65,7 +68,7 @@
                         {{ p.name }}
                     </option></select
                 ><select v-if="pipeline" v-model="relation" aria-label="流程关系">
-                    <option value="referenced">此流程已引用</option>
+                    <option value="referenced">此流程使用</option>
                     <option value="compatible">适用于此流程</option>
                 </select>
                 <button
@@ -89,33 +92,33 @@
                             <tr>
                                 <th>名称</th>
                                 <th>用途 / 功能</th>
-                                <th>{{ isPrompt ? '适用算子' : '主要字段' }}</th>
-                                <th>更新时间</th>
+                                <th>来源</th>
+                                <th>使用情况</th>
                                 <th>查看</th>
                             </tr>
                         </thead>
                         <tbody>
                             <tr v-for="r in filtered" :key="r.ref">
                                 <td>
-                                    <button class="name-link" @click="open(r)">{{ r.name }}</button
-                                    ><small v-if="r.kind === 'python'">Python Prompt 类</small>
+                                    <button class="name-link" @click="open(r)">{{ r.name }}</button>
                                 </td>
                                 <td>
                                     {{ r.usages.join(' · ') }}<small>{{ r.purpose }}</small>
                                 </td>
                                 <td>
                                     {{
-                                        isPrompt
-                                            ? r.operators.join(' · ') || '暂无已验证的适用算子'
-                                            : (r.fields || schemaFields(r.schema)).join(' · ') ||
-                                              '查看结构规则'
+                                        r.source === 'user'
+                                            ? '自建'
+                                            : source === 'user'
+                                              ? '内置引用'
+                                              : '内置'
                                     }}
                                 </td>
                                 <td>
                                     {{
-                                        r.source === 'builtin'
-                                            ? r.version || '随代码维护'
-                                            : timeLabel(r.updated_at)
+                                        usageCount(r)
+                                            ? usageCount(r) + ' 个自定义流程使用'
+                                            : '尚未被自定义流程使用'
                                     }}
                                 </td>
                                 <td>
@@ -238,6 +241,8 @@
                     <template v-if="isPrompt"
                         ><dt>适用算子</dt>
                         <dd>{{ selected.operators.join(' · ') || '未声明' }}</dd>
+                        <dt v-if="selected.kind === 'python'">Python 类</dt>
+                        <dd v-if="selected.kind === 'python'">{{ selected.id }}</dd>
                         <dt>变量 / 参数</dt>
                         <dd>{{ (selected.variables || []).join(' · ') || '无' }}</dd></template
                     ><template v-else
@@ -288,17 +293,25 @@
                         {{ isPrompt ? '预览模板' : '校验示例' }}
                     </button></template
                 >
-                <h3>已引用的 Pipeline 与步骤</h3>
-                <ul v-if="selected.references.length" class="references">
-                    <li v-for="(ref, i) in selected.references" :key="i">
+                <h3>使用流程、步骤与参数</h3>
+                <ul v-if="visibleReferences.length" class="references">
+                    <li v-for="(ref, i) in visibleReferences" :key="i">
                         <router-link :to="ref.route">{{ ref.pipeline_name }}</router-link> ·
-                        {{ ref.step }} · {{ ref.field }}
+                        {{ ref.step }} · {{ usageKind(ref.kind) }} · {{ ref.field }}
+                        <small>{{
+                            ref.pipeline_source === 'user' ? '自定义流程' : '内置流程'
+                        }}</small>
+                        <details>
+                            <summary>查看此步骤的实际参数</summary>
+                            <pre>{{ JSON.stringify(ref.parameters || {}, null, 2) }}</pre>
+                            <p v-if="ref.evidence" class="help">用法依据：{{ ref.evidence }}</p>
+                        </details>
                         <pre v-if="Object.keys(ref.bindings).length">{{
                             JSON.stringify(ref.bindings, null, 2)
                         }}</pre>
                     </li>
                 </ul>
-                <p v-else class="help">当前已保存配置中没有显式引用。</p>
+                <p v-else class="help">当前已保存流程中没有已确认的使用记录。</p>
                 <p class="help">{{ referenceScope }}</p>
             </template>
             <section v-if="previewText || previewError" class="preview">
@@ -313,7 +326,17 @@
 import axios from 'axios'
 import { mapState } from 'pinia'
 import { useTheme } from '@/stores/theme'
-import { usages, pipelineOptions, filterResources, timeLabel, variablesOf } from './catalog.js'
+import {
+    usages,
+    pipelineOptions,
+    filterResources,
+    timeLabel,
+    variablesOf,
+    matchesPipeline,
+    matchesSource,
+    usageCount,
+    usageKind
+} from './catalog.js'
 export default {
     name: 'ManagedResourceCatalog',
     props: { kind: { type: String, required: true } },
@@ -345,6 +368,13 @@ export default {
         usages
     }),
     computed: {
+        visibleReferences() {
+            return (this.selected?.references || []).filter((ref) =>
+                this.pipeline
+                    ? matchesPipeline(ref, this.pipeline, this.availablePipelines)
+                    : this.source !== 'user' || ref.pipeline_source === 'user'
+            )
+        },
         availablePipelines() {
             return pipelineOptions(this.pipelines, this.source)
         },
@@ -364,7 +394,7 @@ export default {
             return [...new Set(this.records.flatMap((r) => r.operators))].sort()
         },
         filtered() {
-            return filterResources(this.records, this, this.pipelines)
+            return filterResources(this.records, this, this.availablePipelines)
         }
     },
     watch: {
@@ -391,6 +421,10 @@ export default {
         this.load()
     },
     methods: {
+        matchesPipeline,
+        matchesSource,
+        usageCount,
+        usageKind,
         timeLabel,
         variablesOf,
         async request(method, path, data) {
@@ -431,8 +465,11 @@ export default {
             }
         },
         ensurePipeline() {
-            if (this.pipeline && !this.availablePipelines.some((p) => p.id === this.pipeline))
-                this.pipeline = ''
+            if (!this.pipeline) return
+            const selected = this.availablePipelines.find(
+                (p) => p.id === this.pipeline || p.member_ids?.includes(this.pipeline)
+            )
+            this.pipeline = selected?.id || ''
         },
         applyQuery() {
             if (this.$route.path !== (this.isPrompt ? '/m/prompts' : '/m/schemas')) return
@@ -446,7 +483,7 @@ export default {
             if (q.resource && !this.editing) {
                 const row = this.records.find((r) => r.ref === q.resource)
                 if (row) {
-                    this.source = row.source
+                    if (!matchesSource(row, this.source)) this.source = row.source
                     if (this.selected?.ref !== row.ref) this.open(row, false)
                 }
             }
