@@ -94,34 +94,44 @@ class TrainingLifecycle:
         if not path.is_file() or _hash(path.read_bytes()) != artifact['sha256']:
             raise LibraryError('任务产物缺失或内容已变化', 409)
         rows = [_parse_json(line) for line in path.read_text('utf-8').splitlines() if line.strip()]
-        key = task['task_id'] + ':' + artifact['id']
         with self.lib._writing():
-            rec = self.lib._get('drafts', draft_id)
-            if rec.get('training_type', 'sft') != 'sft':
-                raise LibraryError('当前文本生成产物仅能收集到 SFT 草稿')
-            ids = self._members(rec)
-            if key in rec.get('collections', []):
-                raise LibraryError('该任务产物已经收集，未重复写入', 409)
-            # Only the training contract enters drafts. Evidence remains in task artifacts.
-            existing = {_hash(_json_bytes(r)): sid for r, sid in zip(rec['rows'], ids)}
-            added = 0
-            for index, row in enumerate(rows):
-                self.lib._validate_row(row, rec['modality'], rec.get('training_type', 'sft'))
-                digest = _hash(_json_bytes(row))
-                sid = existing.get(digest)
-                if sid is None:
-                    sid = 'sample_' + _hash(_json_bytes([key, index]))[:24]
-                    rec['rows'].append(row)
-                    ids.append(sid)
-                    existing[digest] = sid
-                    added += 1
-                source = {'task_id': task['task_id'], 'artifact_id': artifact['id'], 'sha256': artifact['sha256'], 'row_index': index}
-                rec['sample_sources'].setdefault(sid, []).append(source)
-            self._validate(rec)
-            rec.setdefault('collections', []).append(key)
-            rec['updated_at'] = _now()
-            self.lib._atomic(self.lib._path('drafts', draft_id), _json_bytes(rec))
-        return dict(self.view(draft_id), added=added)
+            return self._collect_rows(draft_id, task, artifact, rows)
+
+    def _collect_rows(self, draft_id, task, artifact, rows, idempotent=False):
+        # Caller holds the library transaction; new draft and membership commit together.
+        key = task['task_id'] + ':' + artifact['id']
+        rec = self.lib._get('drafts', draft_id)
+        if rec.get('training_type', 'sft') != artifact.get('training_type', 'sft') or rec['modality'] != artifact.get('modality', 'text'):
+            raise LibraryError('产物与目标数据集的训练类型或模态不一致')
+        for ref, mid in (artifact.get('media_bindings') or {}).items():
+            if ref in rec['media_bindings'] and rec['media_bindings'][ref] != mid:
+                raise LibraryError(f'媒体引用已绑定其他材料: {ref}', 409)
+            rec['media_bindings'][ref] = mid
+        ids = self._members(rec)
+        if key in rec.get('collections', []):
+            if idempotent:
+                return dict(self.view(draft_id), added=0, duplicates_skipped=0, reused=True)
+            raise LibraryError('该任务产物已经收集，未重复写入', 409)
+        # Only the training contract enters drafts. Evidence remains in task artifacts.
+        existing = {_hash(_json_bytes(r)): sid for r, sid in zip(rec['rows'], ids)}
+        added = 0
+        for index, row in enumerate(rows):
+            self.lib._validate_row(row, rec['modality'], rec.get('training_type', 'sft'))
+            digest = _hash(_json_bytes(row))
+            sid = existing.get(digest)
+            if sid is None:
+                sid = 'sample_' + _hash(_json_bytes([key, index]))[:24]
+                rec['rows'].append(row)
+                ids.append(sid)
+                existing[digest] = sid
+                added += 1
+            source = {'task_id': task['task_id'], 'artifact_id': artifact['id'], 'sha256': artifact['sha256'], 'row_index': index, 'pipeline_id': task.get('pipeline_id')}
+            rec['sample_sources'].setdefault(sid, []).append(source)
+        self._validate(rec)
+        rec.setdefault('collections', []).append(key)
+        rec['updated_at'] = _now()
+        self.lib._atomic(self.lib._path('drafts', draft_id), _json_bytes(rec))
+        return dict(self.view(draft_id), added=added, duplicates_skipped=len(rows)-added, reused=False)
 
     def list_releases(self, draft_id):
         self.lib._get('drafts', draft_id)

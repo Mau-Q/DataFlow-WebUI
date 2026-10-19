@@ -2,6 +2,9 @@ from app.services.resource_resolution import ResourceReferenceError
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from typing import List, Dict
+from pydantic import BaseModel, Field
+from app.services.task_results import TaskResults
+from app.services.data_library import LibraryError
 from app.schemas.pipelines import (
     PipelineExecutionResult
 )
@@ -218,7 +221,6 @@ async def execute_pipeline(request: Request, pipeline_id):
         config = pipeline_config.get('config', {})
         if config.get('execution_options', {}).get('capture_responses'):
             from app.services.text_generation import TextGeneration
-            from app.services.data_library import LibraryError
             import copy
             config = copy.deepcopy(config)
             platform = TextGeneration()
@@ -325,7 +327,6 @@ async def execute_pipeline_async(request: Request, pipeline_id: str):
 
         if pipeline_config.get('config', {}).get('execution_options', {}).get('capture_responses'):
             from app.services.text_generation import TextGeneration
-            from app.services.data_library import LibraryError
             try:
                 return ok(await TextGeneration().submit(pipeline_id=pipeline_id))
             except LibraryError as exc:
@@ -390,3 +391,36 @@ async def kill_execution(request: Request, task_id: str):
         import traceback
         logger.error(traceback.format_exc())
         raise HTTPException(500, f"Failed to kill task: {str(e)}")
+
+# Final results use the same execution history as step inspection.
+
+
+class CollectResult(BaseModel):
+    expected_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    draft_id: str | None = None
+    name: str | None = Field(default=None, min_length=1, max_length=240)
+    media_bindings: Dict[str, str] = Field(default_factory=dict)
+
+
+
+def result_call(fn, *args, **kwargs):
+    try:
+        return fn(*args, **kwargs)
+    except LibraryError as exc:
+        raise HTTPException(exc.status, str(exc)) from exc
+
+
+@router.get('/execution/{task_id}/final-result')
+def final_result(task_id: str):
+    return ok(result_call(TaskResults().detail, task_id))
+
+
+@router.get('/execution/{task_id}/final-result/download')
+def download_final_result(task_id: str):
+    path = result_call(TaskResults().download, task_id)
+    return FileResponse(path, filename=f'{task_id}_final.jsonl', media_type='application/x-ndjson')
+
+
+@router.post('/execution/{task_id}/final-result/collect')
+def collect_final_result(task_id: str, body: CollectResult):
+    return ok(result_call(TaskResults().collect, task_id, **body.model_dump()))

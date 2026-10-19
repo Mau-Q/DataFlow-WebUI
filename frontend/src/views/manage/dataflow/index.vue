@@ -133,7 +133,7 @@
             @confirm="addPipeline"></pipelinePanel>
         <execResultPanel v-model="show.execResult" :title="local('Execute Result')" :current-pipeline="currentPipeline"
             :current-step="executionInfo.currentStep" :running-result="executionInfo.runningResult"></execResultPanel>
-        <taskPanel v-model="show.taskPanel" :title="local('Executions')" :current-pipeline="currentPipeline"
+        <taskPanel v-model="show.taskPanel" :title="local('运行记录')" :current-pipeline="currentPipeline" :initial-task-id="historyTaskId"
             @confirm="handleWatchExecution"></taskPanel>
     </div>
 </template>
@@ -199,6 +199,7 @@ export default {
     data() {
         return {
             flowId: 'df-main-flow',
+            historyTaskId: '',
             mmRecord: null,
             platformFitKey: '',
             value: null,
@@ -294,6 +295,7 @@ export default {
     watch: {
         $route(to, from) {
             if (to.path.replace(/\/$/, '') !== '/m') return
+            if (to.query.task && to.query.task !== from.query.task) this.openTaskHistory(to.query.task)
             if (to.query.workflow && to.fullPath !== from.fullPath) this.loadPlatformWorkflow()
             else if (!to.query.workflow && to.query.pipeline && (from.path !== to.path || from.query.pipeline !== to.query.pipeline)) this.loadLinkedPipeline(to.query.pipeline)
         },
@@ -419,7 +421,8 @@ export default {
         this.setViewport()
         this.getServing()
         this.getPromptInfo()
-        if (this.$route.query.workflow) this.loadPlatformWorkflow()
+        if (this.$route.query.task) this.openTaskHistory(this.$route.query.task)
+        else if (this.$route.query.workflow) this.loadPlatformWorkflow()
         else if (this.$route.query.pipeline) this.loadLinkedPipeline(this.$route.query.pipeline)
     },
     beforeUnmount() {
@@ -428,6 +431,15 @@ export default {
         window.removeEventListener('mouseup', this.stopChatResize)
     },
     methods: {
+        async openTaskHistory(taskId) {
+            this.historyTaskId = taskId
+            try {
+                const task = await this.platformRequest('get', `/tasks/execution/${encodeURIComponent(taskId)}/final-result`)
+                if (this.$route.query.task !== taskId) return
+                if (task.pipeline_id) await this.loadLinkedPipeline(task.pipeline_id)
+                this.show.taskPanel = true
+            } catch (e) { this.$barWarning(e.message, {status: 'error'}) }
+        },
         async fitPlatformWhenReady() {
             if (!this.currentPipeline && !this.isMM) return
             const flow = useVueFlow(this.flowId)

@@ -2,6 +2,8 @@
     <basePanel v-model="thisValue" :title="title" width="800px" height="80%" :theme="theme">
         <template v-slot:content>
             <div v-show="thisValue" class="panel-task-content-block">
+                <div class="task-history-toolbar"><button :disabled="refreshing" @click="refreshTasks">{{ refreshing ? '刷新中…' : '刷新运行记录' }}</button><span v-if="!filteredTasks.length">暂无运行记录</span></div>
+                <TaskFinalResult v-if="selectedTaskId" :key="selectedTaskId" :task-id="selectedTaskId" :theme="theme" @navigate="thisValue = false" />
                 <fv-Collapse :theme="theme" v-for="(item, index) in filteredTasks" :key="index" class="task-item"
                     :title="item.task_id" :content="formatTime(item.completed_at)"
                     :maxHeight="item.showPreview ? 690 : 380" background="rgba(251, 251, 251, 1)"
@@ -18,6 +20,7 @@
                         <fv-img :src="img.task" style="width: auto; height: 30px; margin: 0px 5px"></fv-img>
                     </template>
                     <template v-slot:extension>
+                        <button class="final-result-button" @click.stop="selectedTaskId = item.task_id">最终结果</button>
                         <fv-button theme="dark" :icon="'View'"
                             :background="'linear-gradient(130deg, rgba(229, 123, 67, 1), rgba(225, 107, 56, 1))'"
                             :borderRadius="8" :isBoxShadow="true" @click="confirmView(item)">
@@ -25,7 +28,7 @@
                                 v-show="item.status !== 'completed' && item.status !== 'failed' && item.status !== 'cancelled'"
                                 loading="true" r="10" :border-width="2" background="rgba(255, 255, 255, 0.6)"
                                 color="rgba(255, 255, 255, 1)"></fv-progress-ring>
-                            {{ local('View') }}
+                            查看流程
                         </fv-button>
                     </template>
                 </fv-Collapse>
@@ -47,11 +50,14 @@ import { useTheme } from '@/stores/theme'
 
 import basePanel from '@/components/general/basePanel.vue'
 
+import TaskFinalResult from './TaskFinalResult.vue'
+
 import taskIcon from '@/assets/flow/task.svg'
 
 export default {
     components: {
-        basePanel
+        basePanel,
+        TaskFinalResult
     },
     props: {
         modelValue: {
@@ -60,6 +66,7 @@ export default {
         title: {
             default: 'task'
         },
+        initialTaskId: { type: String, default: '' },
         currentPipeline: {
             default: null
         }
@@ -67,14 +74,19 @@ export default {
     data() {
         return {
             thisValue: this.modelValue,
+            selectedTaskId: this.initialTaskId,
+            refreshing: false,
             img: {
                 task: taskIcon
             }
         }
     },
     watch: {
+        initialTaskId(val) { this.selectedTaskId = val },
+        currentPipeline() { this.selectedTaskId = this.initialTaskId },
         modelValue(val) {
             this.thisValue = val
+            if (val) this.refreshTasks()
         },
         thisValue(val) {
             this.$emit('update:modelValue', val)
@@ -85,10 +97,7 @@ export default {
         ...mapState(useDataflow, ['tasks']),
         ...mapState(useTheme, ['theme', 'color', 'gradient']),
         filteredTasks() {
-            if (!this.currentPipeline) {
-                return []
-            }
-            return this.tasks.filter((item) => item.pipeline_id === this.currentPipeline.id)
+            return this.tasks.filter((item) => !this.currentPipeline || item.pipeline_id === this.currentPipeline.id).slice().sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')))
         },
         formatTime() {
             return (dateStr) => {
@@ -99,6 +108,10 @@ export default {
     mounted() { },
     methods: {
         ...mapActions(useDataflow, ['getTasks']),
+        async refreshTasks() {
+            this.refreshing = true
+            try { await this.getTasks() } finally { this.refreshing = false }
+        },
         confirmView(item) {
             this.$emit('confirm', {
                 task_id: item.task_id
@@ -110,6 +123,8 @@ export default {
 </script>
 
 <style lang="scss">
+.task-history-toolbar{display:flex;align-items:center;gap:12px;padding:8px}.task-history-toolbar button,.final-result-button{border:1px solid #d9dfeb;background:transparent;color:inherit;padding:8px 12px;border-radius:6px;cursor:pointer}.final-result-button{margin-right:8px}
+.task-final-result{flex-shrink:0;}
 .resource-snapshot { padding: 12px; font-size: 12px; overflow-wrap: anywhere; }
 .resource-snapshot pre { max-height: 200px; overflow: auto; white-space: pre-wrap; }
 .panel-task-content-block {
