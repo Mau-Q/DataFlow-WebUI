@@ -1,4 +1,4 @@
-"""Versioned representative workflows built from native DataFlow operators."""
+"""Representative generation workflows without model scoring."""
 import copy
 import json
 from pathlib import Path
@@ -58,7 +58,69 @@ def resources():
            '仅返回 JSON 对象，字段 score、grounded、reason。', '评分', '图文 SFT')
     prompt('representative-image-preference-v1', '代表性图片 DPO · 看图评价与排序', 'APIImagePairGenerator',
            preference + '来源为所附图片，无法辨认时不要假设事实。', '评分', '图文 DPO')
+    prompt('representative-text-negative-v1', '文本 DPO · 合成负例', 'FormatStrPromptedGenerator',
+           '为后附问题生成一个用于偏好训练的合成负例。回答应有一个明确的事实、计算或关键条件错误；'
+           '不要在回答中声明自己是负例。仅输出 JSON：question 为原问题原文，answer 为负例回答。'
+           '不评分、不比较候选。材料：{text}\n问题：{question}', usage='文本 DPO')
+    prompt('representative-image-negative-v1', '图片 DPO · 合成负例', 'APIImagePairGenerator',
+           '根据图片和后附问题生成一个用于偏好训练的合成负例。回答应有一个明确的读图、计算或关键条件错误；'
+           '不要在回答中声明自己是负例。不评分、不比较候选。仅输出 JSON：question 必须逐字保留后附问题，answer 为负例回答。', usage='图文 DPO')
     return prompts, schemas
+
+
+def synthetic_pair_operator():
+    return dict(name='PandasOperator', pipeline_role='正例写入 chosen、合成负例写入 rejected；标签未经独立评价',
+                params={'init':[{'name':'process_fn','value':[
+                    "lambda df: df.assign(preference_candidate=df['alternatives'].map(lambda pair: {'question': pair['question'], 'chosen': pair['answer_a'], 'rejected': pair['answer_b']}), preference_basis='synthetic_positive_negative')"]}],
+                        'run':[{'name':'output_key','value':'preference_candidate'}]},location=[0,0])
+
+
+def remove_scoring(config):
+    """Migrate representative configs only; retain input, serving and user names."""
+    config = copy.deepcopy(config)
+    options = config['execution_options']
+    if options.get('scoring_policy') == 'none':
+        return config
+    mode = options['simple_training']
+    dpo = mode['training_type'] == 'dpo'
+    target = 'preference_candidate' if dpo else 'candidate_a'
+    operators = []
+    for operator in config['operators']:
+        op = copy.deepcopy(operator)
+        sections = op.get('params', {})
+        def values(part):
+            data = sections.get(part, [])
+            return [{'name':k,'value':v} for k,v in data.items()] if isinstance(data,dict) else data
+        init, run = values('init'), values('run')
+        run_values = {p['name']:p.get('value') for p in run}
+        rules = str(next((p.get('value') for p in init if p['name']=='filter_rules'), ''))
+        if op['name'] in {'Text2QASampleEvaluator','TrainingReviewParser'} or run_values.get('output_key') == 'review':
+            continue
+        if op['name']=='GeneralFilter' and any(key in rules for key in ('question_score','alignment_score','grounding_score','value_score',"['accepted']")):
+            continue
+        if dpo and run_values.get('output_key') == 'candidate_b':
+            for param in init:
+                if param['name']=='prompt_template':
+                    param['value']='user_prompt:representative-'+('text' if mode['modality']=='text' else 'image')+'-negative-v1'
+            op['pipeline_role']='生成同题合成负例；不评分'
+        if op['name']=='TrainingPreferenceBuilder':
+            op['pipeline_role']='组合同题正例与合成负例；检查问题一致性，不评分'
+        for param in run:
+            value = param.get('value')
+            if op['name']=='TrainingPairFormatter' and param['name']=='input_key':param['value']=target
+            elif op['name']=='HashDeduplicateFilter':
+                if value == 'admitted_candidate':param['value']=target
+                elif isinstance(value,list):param['value']=[target if v=='admitted_candidate' else v for v in value]
+        op['params']={'init':init,'run':run}
+        operators.append(op)
+        if op['name']=='TrainingPreferenceBuilder':operators.append(synthetic_pair_operator())
+    # Preserve existing canvas positions; place only the added formatter between its neighbours.
+    for i,op in enumerate(operators):
+        if op['name']=='PandasOperator' and any(p.get('value')=='preference_candidate' for p in op['params']['run']):
+            x,y=operators[i-1].get('location',[320*i,150]);op['location']=[x+160,y+180]
+    config['operators']=operators
+    options.update(scoring_policy='none',preference_policy='synthetic_positive_negative' if dpo else None)
+    return config
 
 
 def definitions():
@@ -67,14 +129,13 @@ def definitions():
         return dict(name=name, pipeline_role=role, params={part:[{'name':k,'value':v} for k,v in values.items()]
                     for part,values in [('init',init or {}), ('run',run or {})]})
     def gen(ref, output, bindings):
-        role = '依据原文独立生成回答 B，不读取回答 A' if 'alternative' in ref else '依据原文独立评价 A/B，分别给分并判断来源支持'
+        role = '依据原文生成同题合成负例；不评分'
         return op('FormatStrPromptedGenerator', role,
                   {'llm_serving':None, 'prompt_template':'user_prompt:'+ref},
                   {'output_key':output, 'input_keys':[{'name':k,'value':v} for k,v in bindings.items()]})
     def image(ref, output, context=None):
         role = {'image_question':'看图生成问题，不生成答案', 'candidate_a':'看图生成完整回答 A，保留原问题',
-                'candidate_b':'独立看图生成简洁回答 B，不读取回答 A',
-                'review':'再次看图核验问答的事实依据和质量' if context=='candidate_a' else '再次看图独立评价 A/B，分别给分并判断图片依据'}[output]
+                'candidate_b':'根据图片生成同题合成负例；不评分'}[output]
         return op('APIImagePairGenerator', role,
                   {'llm_serving':None, 'prompt_template':'user_prompt:'+ref},
                   {'input_image_key':'source', 'input_context_key':context, 'output_key':output})
@@ -96,41 +157,22 @@ def definitions():
                            {'input_key':'cleaned_text','output_key':'qa_pairs','output_meta_key':'qa_metadata'}),
                         op('TrainingQAExpander', '展开嵌套 QA，保留来源、问题和回答', run={
                             'input_key':'qa_pairs','output_key':'candidate_a','output_question_key':'question','output_answer_key':'answer'})]
-                if kind == 'sft':
-                    init = {'llm_serving':None, **{key+'_prompt_template':'user_prompt:representative-'+key+'-v1'
-                            for key in ('question_quality','answer_alignment','answer_verifiability','downstream_value')}}
-                    ops += [op('Text2QASampleEvaluator', '独立四维评分；可验证性使用原文而非清洗稿', init, {
-                        'input_question_key':'question','input_answer_key':'answer','input_context_key':'text',
-                        'output_question_quality_key':'question_score','output_answer_alignment_key':'alignment_score',
-                        'output_answer_verifiability_key':'grounding_score','output_downstream_value_key':'value_score'}),
-                        op('GeneralFilter', '过滤缺失评分、无来源依据或低质量问答', {'filter_rules':[
-                            "lambda df: df['question_score'].ge(3) & df['alignment_score'].ge(4) & df['grounding_score'].ge(4) & df['value_score'].ge(3)"]})]
-                    final_candidate = 'candidate_a'
-                else:
-                    ops += [gen('representative-text-alternative-v1','candidate_b',{'text':'text','question':'question'}),
-                            op('TrainingPreferenceBuilder','组成同一问题的两个独立回答，不预设优劣',run={
-                                'input_key':'candidate_a','input_alternative_key':'candidate_b','output_key':'alternatives'}),
-                            gen('representative-text-preference-v1','review',{'text':'text','alternatives':'alternatives'})]
+                final_candidate = 'candidate_a'
+                if kind == 'dpo':
+                    ops += [gen('representative-text-negative-v1','candidate_b',{'text':'text','question':'question'})]
             else:
                 ops += [dedup(['material_id'],'source_unique'), image('representative-image-question-v1','image_question'),
                         image('representative-image-answer-a-v1','candidate_a','image_question')]
-                if kind == 'sft':
-                    ops += [image('representative-image-review-v1','review','candidate_a')]
-                else:
-                    ops += [image('representative-image-answer-b-v1','candidate_b','image_question'),
-                            op('TrainingPreferenceBuilder','组成同题视觉回答，交给后续看图评价',run={
-                                'input_key':'candidate_a','input_alternative_key':'candidate_b','output_key':'alternatives'}),
-                            image('representative-image-preference-v1','review','alternatives')]
-            if kind == 'dpo' or modality == 'image_text':
-                ops += [op('TrainingReviewParser', '评价无效、无依据、平局或分差不足均拒绝；不强造偏好对',
-                    {'training_type':kind,'json_schema':f'schema_ref:representative-{kind}-review-v1','min_score':4,'min_gap':1},
-                    {'input_key':'review','input_candidate_key':'candidate_a' if kind=='sft' else 'alternatives',
-                     'input_question_key':'image_question' if modality=='image_text' else None,
-                     'output_key':'accepted','output_candidate_key':'admitted_candidate','output_reason_key':'admission_reason'}),
-                    op('GeneralFilter','仅保留明确准入的样本；0 条通过也是有效筛选结果',{'filter_rules':["lambda df: df['accepted'].eq(True)"]})]
-                final_candidate = 'admitted_candidate'
+                final_candidate = 'candidate_a'
+                if kind == 'dpo':
+                    ops += [image('representative-image-negative-v1','candidate_b','image_question')]
+            if kind == 'dpo':
+                ops += [op('TrainingPreferenceBuilder','组合同题正例与合成负例；检查问题一致性，不评分',run={
+                            'input_key':'candidate_a','input_alternative_key':'candidate_b','output_key':'alternatives'}),
+                        synthetic_pair_operator()]
+                final_candidate = 'preference_candidate'
             ops += [dedup(['text' if modality=='text' else 'material_id', final_candidate], 'sample_unique'),
-                    op('TrainingPairFormatter','只导出训练字段；保留原文输入和图片关联',
+                    op('TrainingPairFormatter','校验输出结构并导出训练字段；不做模型评分或质量筛选',
                        {'training_type':kind,'modality':modality,'json_schema':f'schema_ref:representative-{kind}-sample-v1','allow_empty':True},
                        {'input_key':final_candidate,'output_key':'training_sample'})]
             for index, item in enumerate(ops):
@@ -139,7 +181,8 @@ def definitions():
             result.append(dict(id=key, name=f'代表性{label} {kind.upper()}',tags=['template','representative-training',modality,kind],
                 config={'file_path':'','input_dataset':{'id':'','location':[30,150]},'operators':ops,'execution_options':{
                     'simple_training':{'modality':modality,'training_type':kind},'representative_training':True,
-                    'capture_responses':True,'training_output':True,'additional_retries':0}}))
+                    'capture_responses':True,'training_output':True,'additional_retries':0,
+                    'scoring_policy':'none','preference_policy':'synthetic_positive_negative' if kind=='dpo' else None}}))
     return result
 
 
@@ -181,6 +224,21 @@ def install_templates(c):
                         else:
                             record.update(schema=json.dumps(record['schema'],ensure_ascii=False),example='',purpose='模型输出')
                         records[record['id']] = record
+    old = {key:copy.deepcopy(record) for key,record in data['pipelines'].items()
+           if record.get('config',{}).get('execution_options',{}).get('representative_training')
+           and record['config']['execution_options'].get('scoring_policy') != 'none'}
+    if old:
+        backup = Path(c.pipeline_registry.path).parent/'backups'/'removed-training-scoring'
+        atomic_write(backup/(_hash(_json_bytes(old))+'.json'), _json_bytes(old))
+        with c.user_prompt_registry.store.writing() as records:
+            for prompt in prompts:
+                if prompt['id'] in {'representative-text-negative-v1','representative-image-negative-v1'} and prompt['id'] not in records:
+                    records[prompt['id']]=dict(prompt,description='合成负例，无独立评分',created_at=now,updated_at=now)
+        for key,record in old.items():
+            record['config']=remove_scoring(record['config'])
+            record['updated_at']=now
+            data['pipelines'][key]=record
+        c.pipeline_registry._write(data)
     for definition in templates:
         data = c.pipeline_registry._read()
         if definition['id'] in data['pipelines']:

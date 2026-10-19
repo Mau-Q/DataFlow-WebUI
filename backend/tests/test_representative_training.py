@@ -22,7 +22,7 @@ from app.services.task_registry import TaskRegistry
 from app.services.task_store import patch_task
 from app.services.task_results import TaskResults
 from app.services.text_generation import TextGeneration
-from app.services.representative_training import definitions, resources, install_templates, LEGACY_IDS
+from app.services.representative_training import definitions, resources, install_templates, LEGACY_IDS, remove_scoring
 from app.services.representative_training_operators import TrainingReviewParser, TrainingPreferenceBuilder, TrainingQAExpander
 
 SOURCE = ('某实验室的数据采集器每隔两秒记录一次温度，记录频率在本次实验期间保持不变。'
@@ -104,6 +104,9 @@ def serving_fixture(calls, reject=False, tie=False, malformed=False, failure=Fal
                 raise ValueError("API response {'error': 'fixture failure'}")
             if '相邻事实' in prompt:
                 return json.dumps(dict(question=QUESTION,answer=ANSWER_A,reasoning_steps=[{'step':'300/2=150'}],supporting_facts=[SOURCE.split('。')[0]],type='计算'))
+            if '合成负例' in prompt:
+                assert QUESTION in prompt
+                return json.dumps(dict(question=QUESTION,answer=ANSWER_B))
             if '根据原始材料独立回答' in prompt:
                 assert ANSWER_A not in prompt
                 return json.dumps(dict(question=QUESTION,answer=ANSWER_B))
@@ -239,20 +242,13 @@ def test_cold_worker_executes_frozen_workflow_without_app_initialization(platfor
 
 
 @pytest.mark.parametrize('definition',definitions(),ids=lambda d:d['id'])
-def test_all_rejected_is_successful_empty_output_with_audit(platform,monkeypatch,definition):
-    c,_,_=platform
-    task,detail,_=run_pipeline(platform,monkeypatch,definition,reject=True)
-    assert detail['available'] and not detail['collectable']
-    assert detail['artifact']['row_count']==0
-    assert Path(detail['artifact']['path']).read_bytes()==b''
-    assert any(a['kind']=='raw_response' for a in task['output']['artifacts'])
-    assert not c.data_library.list_drafts()
-
-
-@pytest.mark.parametrize('definition',[definitions()[1],definitions()[3]],ids=lambda d:d['id'])
-def test_dpo_ties_never_become_forced_preference_pairs(platform,monkeypatch,definition):
-    _,detail,_=run_pipeline(platform,monkeypatch,definition,tie=True)
-    assert detail['artifact']['row_count']==0 and not detail['collectable']
+def test_generation_does_not_call_scoring_or_drop_for_scores(platform,monkeypatch,definition):
+    task,detail,calls=run_pipeline(platform,monkeypatch,definition,reject=True,tie=True,malformed=True)
+    assert detail['collectable'] and detail['artifact']['row_count']==1
+    assert all('Grading' not in prompt and '独立评价' not in prompt and '结合图片独立核对' not in prompt for prompt in calls)
+    names=[op['name'] for op in definition['config']['operators']]
+    assert 'Text2QASampleEvaluator' not in names and 'TrainingReviewParser' not in names
+    assert 'question_score' not in json.dumps(task['pipeline_config'])
 
 
 def test_input_filter_can_remove_everything_without_calling_model(platform,monkeypatch):
@@ -266,12 +262,6 @@ def test_frozen_prompt_is_used_after_manager_edit(platform,monkeypatch):
     _,detail,calls=run_pipeline(platform,monkeypatch,definitions()[2],change_resource=True)
     assert detail['collectable'] and all('CHANGED AFTER' not in p for p in calls)
 
-
-@pytest.mark.parametrize('definition',[definitions()[1],definitions()[2],definitions()[3]],ids=lambda d:d['id'])
-def test_malformed_reviews_are_auditable_rejections(platform,monkeypatch,definition):
-    task,detail,_=run_pipeline(platform,monkeypatch,definition,malformed=True)
-    assert detail['artifact']['row_count']==0
-    assert any(a['kind']=='candidate' for a in task['output']['artifacts'])
 
 
 def test_http_transport_receives_actual_image_and_context_without_network(platform,monkeypatch):
@@ -319,7 +309,7 @@ def test_every_model_node_requires_service_before_queueing(platform,monkeypatch)
     for definition in definitions():
         config=ready_config(c,definition)
         llm=[p for op in config['operators'] for p in op['params']['init'] if p['name']=='llm_serving']
-        assert len(llm)>=2
+        assert len(llm)>=1
         llm[-1]['value']=None
         saved=c.pipeline_registry.create_pipeline(dict(name='未配置',config=config))
         with pytest.raises(LibraryError,match='未配置文本服务'):
@@ -410,3 +400,41 @@ def test_qa_expansion_preserves_original_source():
     frame=pd.DataFrame([dict(text=SOURCE,id='source',qa_pairs=[pair,pair])]);out=[]
     TrainingQAExpander().run(SimpleNamespace(read=lambda _:frame,write=lambda f:out.append(f.copy())))
     assert len(out[0])==2 and out[0]['text'].tolist()==[SOURCE,SOURCE]
+
+
+@pytest.mark.parametrize('definition',definitions(),ids=lambda d:d['id'])
+def test_scored_saved_copy_migrates_once_preserving_input_and_services(platform,definition):
+    c,root,_=platform
+    old=ready_config(c,definition)
+    old['execution_options'].pop('scoring_policy')
+    old['operators']=[op for op in old['operators'] if not (op['name']=='PandasOperator' and
+        any(p.get('value')=='preference_candidate' for p in op['params']['run']))]
+    old['operators'].insert(-2,dict(name='Text2QASampleEvaluator',params={'init':[], 'run':[]}))
+    old['operators'].insert(-2,dict(name='GeneralFilter',params={'init':[{'name':'filter_rules','value':["lambda df: df['question_score'].ge(4)"]}], 'run':[]}))
+    mode=old['execution_options']['simple_training']
+    if mode['training_type']=='dpo' or mode['modality']=='image_text':
+        old['operators'].insert(-2,dict(name='APIImagePairGenerator' if mode['modality']=='image_text' else 'FormatStrPromptedGenerator',
+            params={'init':[], 'run':[{'name':'output_key','value':'review'}]}))
+        old['operators'].insert(-2,dict(name='TrainingReviewParser',params={'init':[], 'run':[]}))
+        old['operators'].insert(-2,dict(name='GeneralFilter',params={'init':[{'name':'filter_rules','value':["lambda df: df['accepted'].eq(True)"]}], 'run':[]}))
+        for op in old['operators']:
+            for param in op['params']['run']:
+                if op['name']=='TrainingPairFormatter' and param['name']=='input_key':param['value']='admitted_candidate'
+                if op['name']=='HashDeduplicateFilter' and isinstance(param.get('value'),list):
+                    param['value']=['admitted_candidate' if v in ('candidate_a','preference_candidate') else v for v in param['value']]
+    data=c.pipeline_registry._read()
+    record=copy.deepcopy(data['pipelines'][definition['id']])
+    record.update(id='saved-copy',name='我的既有配置',tags=['user'],config=old)
+    data['pipelines']['saved-copy']=record;c.pipeline_registry._write(data)
+    install_templates(c)
+    migrated=c.pipeline_registry.get_pipeline('saved-copy')
+    assert migrated['name']==record['name'] and migrated['tags']==record['tags']
+    assert migrated['config']['input_dataset']==old['input_dataset']
+    assert migrated['config']['execution_options']['scoring_policy']=='none'
+    assert remove_scoring(migrated['config'])==migrated['config']
+    assert [op['name'] for op in migrated['config']['operators']]==[op['name'] for op in definition['config']['operators']]
+    assert all(p['value']=='offline' for op in migrated['config']['operators'] for p in op['params']['init'] if p['name']=='llm_serving')
+    valid=c.pipeline_registry.validate_pipeline_config(migrated['config']);assert valid.valid,valid.errors
+    before=c.pipeline_registry._read();install_templates(c);assert c.pipeline_registry._read()==before
+    backups=list((root/'backups'/'removed-training-scoring').glob('*.json'))
+    assert len(backups)==1 and json.loads(backups[0].read_text())['saved-copy']==record
