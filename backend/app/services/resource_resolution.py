@@ -34,9 +34,9 @@ def _items(params):
     return copy.deepcopy(params or [])
 
 
-def _sections(op):
+def _sections(op, operator_registry):
     raw = op.get('params') or {}
-    details = container.operator_registry.get_op_details(op['name']) or {}
+    details = operator_registry.get_op_details(op['name']) or {}
     definitions = details.get('parameter', {})
     init_names = {p['name'] for p in definitions.get('init', [])}
     if isinstance(raw, dict) and ('init' in raw or 'run' in raw):
@@ -83,6 +83,7 @@ def resolve_pipeline_resources(config):
     """
     result = copy.deepcopy(config)
     snapshots, captured = [], {}
+    operator_registry = container.operator_registry
     for index, op in enumerate(result.get('operators', [])):
         # Native text controls serialize untouched optional fields as empty strings.
         # Normalize only verified SFT optional slots; required field names stay strict.
@@ -126,8 +127,14 @@ def resolve_pipeline_resources(config):
         has_schema = any(p.get('name') in SCHEMA_PARAMS and p.get('value') not in (None, '') for p in candidates)
         if not any(_ref(p.get('value')) for p in candidates) and not has_schema:
             continue
-        sections = _sections(op)
-        details = container.operator_registry.get_op_details(op['name']) or {}
+        if operator_registry is None:
+            # Ray workers import a fresh AppContainer, without the web app's
+            # startup lifecycle. Frozen prompts/schemas still need signatures,
+            # but must not initialize stores, scan datasets or seed templates.
+            from app.services.operator_registry import OperatorRegistry
+            operator_registry = OperatorRegistry()
+        sections = _sections(op, operator_registry)
+        details = operator_registry.get_op_details(op['name']) or {}
         declared = {section: {p['name'] for p in details.get('parameter', {}).get(section, [])}
                     for section in ('init', 'run')}
         for section, params in sections.items():

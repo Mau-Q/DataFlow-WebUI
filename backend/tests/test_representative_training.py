@@ -3,6 +3,8 @@ import copy
 import io
 import json
 import os
+import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -124,7 +126,7 @@ def serving_fixture(calls, reject=False, tie=False, malformed=False, failure=Fal
     return Serving
 
 
-def run_pipeline(platform, monkeypatch, definition, *, reject=False, tie=False, malformed=False, sync=False, change_resource=False, failure=False):
+def run_pipeline(platform, monkeypatch, definition, *, reject=False, tie=False, malformed=False, sync=False, change_resource=False, failure=False, cold_worker=False):
     c,root,_=platform
     from app.services import ray_pipeline_executor as worker, dataflow_engine as engine
     calls=[]
@@ -150,8 +152,49 @@ def run_pipeline(platform, monkeypatch, definition, *, reject=False, tie=False, 
     async def execute(frozen,runtime,tid,*args):
         if change_resource:
             c.user_prompt_registry.update('representative-image-question-v1',template='CHANGED AFTER SUBMISSION')
-        result=engine.DataFlowEngine().run(frozen,tid,c.task_registry.path) if sync else worker.dataflow_pipeline_execute(frozen,runtime,tid,c.task_registry.path)
-        patch_task(c.task_registry.path,tid,result)
+        task_path = c.task_registry.path
+        if cold_worker == 'process':
+            payload = root/'worker-input.json'
+            result_file = root/'worker-result.json'
+            payload.write_text(json.dumps(dict(config=frozen,runtime=runtime,task_id=tid,task_path=task_path,
+                base_dir=str(root),cache_dir=settings.CACHE_DIR)))
+            script = r'''
+import json, runpy, sys
+from pathlib import Path
+fixture = runpy.run_path(sys.argv[1])
+from app.core.container import container
+from app.core.config import settings
+from app.services import ray_pipeline_executor as worker
+assert all(value is None for value in vars(container).values())
+container.init = lambda: (_ for _ in ()).throw(AssertionError('full app initialization in worker'))
+data = json.loads(Path(sys.argv[2]).read_text())
+settings.BASE_DIR = data['base_dir']
+settings.CACHE_DIR = data['cache_dir']
+calls = []
+worker.APILLMServing_request = fixture['serving_fixture'](calls)
+result = worker.RayPipelineExecutor._execute_pipeline_remote._function(
+    data['config'],data['runtime'],data['task_id'],str(Path(data['base_dir'])/'pipelines.json'),data['task_path'])
+assert all(value is None for value in vars(container).values() if not callable(value))
+Path(sys.argv[3]).write_text(json.dumps(dict(result=result,calls=calls)))
+'''
+            process = subprocess.run([sys.executable,'-c',script,str(Path(__file__).resolve()),str(payload),str(result_file)],
+                                     capture_output=True,text=True,timeout=60)
+            assert process.returncode == 0, process.stderr[-6000:]
+            response = json.loads(result_file.read_text())
+            result = response['result']
+            calls.extend(response['calls'])
+        elif cold_worker:
+            # Match a fresh Ray process: submission has already frozen all
+            # resources; no web-app registries exist in the executing process.
+            with monkeypatch.context() as cold:
+                for name in vars(c):
+                    cold.setattr(c, name, None)
+                cold.setattr(c, 'init', lambda: pytest.fail('worker must not initialize the full application'))
+                result=worker.dataflow_pipeline_execute(frozen,runtime,tid,task_path)
+                assert all(value is None for value in vars(c).values() if not callable(value))
+        else:
+            result=engine.DataFlowEngine().run(frozen,tid,task_path) if sync else worker.dataflow_pipeline_execute(frozen,runtime,tid,task_path)
+        patch_task(task_path,tid,result)
     monkeypatch.setattr(worker.ray_executor,'submit_execution',execute)
     submitted=asyncio.run(TextGeneration().submit(pipeline_id=saved['id'],output_root=str(root/'chosen-results')))
     task=c.task_registry.get(submitted['task_id'])
@@ -183,6 +226,16 @@ def test_full_workflows_use_native_operators_and_collect(platform,monkeypatch,de
     counts=[s['sample_count'] for s in task['output']['operators_detail'].values() if s.get('status')=='completed']
     assert counts[-1]==1
     assert task['resource_snapshots']
+
+
+@pytest.mark.parametrize('definition',definitions(),ids=lambda d:d['id'])
+@pytest.mark.parametrize('cold_worker',[True,'process'],ids=['empty-container','fresh-process'])
+def test_cold_worker_executes_frozen_workflow_without_app_initialization(platform,monkeypatch,definition,cold_worker):
+    task,detail,calls=run_pipeline(platform,monkeypatch,definition,cold_worker=cold_worker)
+    assert task['status']=='completed'
+    assert detail['collectable'] and detail['artifact']['row_count']==1
+    assert calls
+    assert len(task['output']['execution_results'])==len(definition['config']['operators'])
 
 
 @pytest.mark.parametrize('definition',definitions(),ids=lambda d:d['id'])
