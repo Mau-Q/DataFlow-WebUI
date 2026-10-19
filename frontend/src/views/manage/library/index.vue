@@ -10,13 +10,13 @@
             <div class="list-toolbar"><input v-model="search" aria-label="搜索数据集" placeholder="搜索数据集名称" type="search" /><span>{{ filtered.length }} 个数据集</span></div>
             <div class="table-scroll"><table class="dataset-table">
                 <thead><tr><th scope="col">数据集名称</th><th scope="col">类型</th><th scope="col">{{ isSources ? '文件 / 记录数' : '样本数' }}</th><th scope="col"><span class="sr-only">查看</span></th></tr></thead>
-                <tbody><tr v-for="item in filtered" :key="item.id"><td><router-link :to="detailLocation(item.id)" @click="rememberListPosition"><span class="record-icon">{{ isSources ? '▤' : '◫' }}</span>{{ item.name }}</router-link></td><td>{{ isSources ? sourceType(item) : `${modalityLabel(item.modality)} SFT` }}</td><td>{{ isSources ? sourceCount(item) : `${item.row_count || 0} 条样本` }}</td><td class="open-cell"><router-link :to="detailLocation(item.id)" :aria-label="`查看 ${item.name}`" @click="rememberListPosition">查看 →</router-link></td></tr></tbody>
+                <tbody><tr v-for="item in filtered" :key="item.id"><td><router-link :to="detailLocation(item.id)" @click="rememberListPosition"><span class="record-icon">{{ isSources ? '▤' : '◫' }}</span>{{ item.name }}</router-link></td><td>{{ isSources ? sourceType(item) : `${modalityLabel(item.modality)} ${(item.training_type || 'sft').toUpperCase()}` }}</td><td>{{ isSources ? sourceCount(item) : `${item.row_count || 0} 条样本` }}</td><td class="open-cell"><router-link :to="detailLocation(item.id)" :aria-label="`查看 ${item.name}`" @click="rememberListPosition">查看 →</router-link></td></tr></tbody>
             </table></div>
             <p v-if="!filtered.length" class="empty-small">{{ loading ? '正在加载…' : '没有匹配的数据集' }}</p>
         </section>
         <div v-else-if="detailId" class="dataset-detail">
             <section class="detail" v-if="selected && !loading">
-                <div class="detail-heading"><div><h2>{{ selected.name }}</h2><p>{{ isSources ? `${selected.num_samples || 0} ${hasSourceFiles ? '个文件' : '条记录'} · ${fileType}` : `${modalityLabel(selected.modality)} · SFT · ${selected.row_count} 条` }}</p></div><button v-if="!isSources" @click="openImport">导入数据</button></div>
+                <div class="detail-heading"><div><h2>{{ selected.name }}</h2><p>{{ isSources ? `${selected.num_samples || 0} ${hasSourceFiles ? '个文件' : '条记录'} · ${fileType}` : `${modalityLabel(selected.modality)} · ${(selected.training_type || 'sft').toUpperCase()} · ${selected.row_count} 条` }}</p></div><button v-if="!isSources && !selected.is_example" @click="openImport">导入数据</button></div>
                 <template v-if="isSources && hasSourceFiles">
                     <div class="source-layout">
                         <div class="file-list"><button v-for="(row, i) in sourceRows" :key="i" :class="{ active: sourceIndex === i }" @click="sourceIndex = i"><span>{{ offset + i + 1 }}</span><strong :title="row.source_name || row.source">{{ sourceName(row) }}</strong></button></div>
@@ -32,7 +32,13 @@
                     <details v-for="(row, i) in sampleRows" :key="`${selected.id}-${offset + i}`" class="sample">
                         <summary class="sample-heading"><span>样本 {{ offset + i + 1 }}</span><span class="sample-excerpt">{{ sampleExcerpt(row) }}</span><span class="expand-label">展开</span></summary>
                         <div class="sample-body">
-                        <template v-if="Array.isArray(row.messages)">
+                        <template v-if="selected.training_type === 'dpo'">
+                            <div class="message"><span class="field-label">问题 · prompt</span><p>{{ row.prompt }}</p></div>
+                            <div v-if="row.images?.length" class="sample-media"><img v-for="src in row.images" :key="src" :src="src" alt="DPO 示例图片：红色正方形、蓝色圆形、绿色三角形" /></div>
+                            <div class="message preference chosen"><span class="field-label">优选回答 · chosen</span><p>{{ row.chosen }}</p></div>
+                            <div class="message preference rejected"><span class="field-label">较差回答 · rejected</span><p>{{ row.rejected }}</p></div>
+                        </template>
+                        <template v-else-if="Array.isArray(row.messages)">
                             <div v-for="(message, m) in row.messages" :key="m" class="message"><span class="field-label">{{ roleLabel(message.role) }}</span><p>{{ messageText(message.content) }}</p></div>
                         </template>
                         <template v-else-if="row.instruction || row.question">
@@ -58,7 +64,7 @@
                     </form>
                 </details>
                 <details class="advanced"><summary>数据集详情</summary><dl><dt>ID</dt><dd>{{ selected.id }}</dd><dt>字段</dt><dd>{{ (selected.fields || Object.keys(sourceRows[0] || {})).join(' · ') }}</dd><template v-if="selected.root"><dt>位置</dt><dd>{{ selected.root }}</dd></template><template v-if="selected.hash"><dt>哈希</dt><dd>{{ selected.hash }}</dd></template></dl><p v-if="selected.description">{{ selected.description }}</p><ul v-if="!isSources"><li v-for="(record, i) in selected.imports" :key="i">{{ record.filename }}：新增 {{ record.added }} 条，跳过 {{ record.duplicates_skipped }} 条</li></ul></details>
-                <dataset-lifecycle v-if="!isSources" :key="selected.id" :draft="selected" @updated="reload" @forked="draftForked" />
+                <dataset-lifecycle v-if="!isSources && !selected.is_example" :key="selected.id" :draft="selected" @updated="reload" @forked="draftForked" />
             </section>
             <section v-else class="empty"><h2>{{ loading ? '正在加载数据集…' : '无法打开数据集' }}</h2><p v-if="!loading">请返回列表选择数据集，或刷新重试。</p><button v-if="!loading" @click="backToList">返回列表</button></section>
         </div>
@@ -89,6 +95,7 @@
 </template>
 <script>
 import axios from 'axios'
+import { DPO_EXAMPLES } from '@/examples/dpoExamples'
 import { mapState } from 'pinia'
 import { useTheme } from '@/stores/theme'
 import DatasetLifecycle from '@/components/manage/library/DatasetLifecycle.vue'
@@ -120,7 +127,7 @@ export default {
         backToList() { this.$router.push({ path: this.isSources ? '/m/materials' : '/m/training-datasets' }) },
         sourceType(item) { return { pdf: 'PDF', image: '图片', pdf_image: 'PDF / 图片' }[item.content_type] || (item.type || '结构化数据').toUpperCase() },
         sourceCount(item) { return item.file_count != null ? `${item.file_count} 个文件` : `${item.num_samples || 0} 条记录` },
-        sampleExcerpt(row) { const message = Array.isArray(row.messages) ? row.messages.find(m => m.role === 'user') : null; const text = message ? this.messageText(message.content) : row.instruction || row.question || Object.values(row).map(this.displayValue).join(' · '); return String(text || '查看样本内容').replace(/\s+/g, ' ').slice(0, 140) },
+        sampleExcerpt(row) { const message = Array.isArray(row.messages) ? row.messages.find(m => m.role === 'user') : null; const text = message ? this.messageText(message.content) : row.prompt || row.instruction || row.question || Object.values(row).map(this.displayValue).join(' · '); return String(text || '查看样本内容').replace(/\s+/g, ' ').slice(0, 140) },
         async draftForked(draft) { await this.$router.push(this.detailLocation(draft.id)) },
         modalityLabel(value) { return value === 'image_text' ? '图文' : '文本' },
         roleLabel(role) { return { user: '用户', assistant: '回答', system: '系统', tool: '工具' }[role] || role },
@@ -131,10 +138,12 @@ export default {
         materialUrl(id) { return `/api/v1/library/materials/${id}/file` },
         async request(method, path, data) { const r = await axios({ method, url: `/api/v1${path}`, data }); if (!r.data.success) throw new Error(r.data.message); return r.data.data },
         async action(fn) { if (this.busy) return; this.busy = true; this.error = ''; this.notice = ''; try { await fn() } catch (e) { if (this.showCreate || this.showImport) this.dialogError = e.response?.data?.message || e.message; else this.error = e.response?.data?.message || e.message } finally { this.busy = false; if (this.pendingReload) { this.pendingReload = false; this.reload() } } },
-        async loadLists() { const mode = this.mode; const records = await this.request('get', this.isSources ? '/datasets/?visible_only=true' : '/library/drafts?visible_only=true'); if (mode === this.mode) this.records = records },
+        async loadLists() { const mode = this.mode; const records = await this.request('get', this.isSources ? '/datasets/?visible_only=true' : '/library/drafts?visible_only=true'); if (mode === this.mode) this.records = this.isSources ? records : [...records, ...DPO_EXAMPLES] },
         async reload() { this.loading = true; await this.action(async () => { await this.loadLists(); const id = this.detailId; if (id) await this.loadSelected(id); else this.selected = null }); this.loading = false; if (this.importAfterLoad && this.selected) { this.importAfterLoad = false; this.openImport() } if (!this.detailId) this.$nextTick(() => { if (this.$refs.libraryPane) this.$refs.libraryPane.scrollTop = this.listPositions[this.mode] || 0 }) },
         async loadSelected(id) {
             const version = ++this.loadVersion
+            const example = !this.isSources && DPO_EXAMPLES.find(record => record.id === id)
+            if (example) { this.selected = JSON.parse(JSON.stringify(example)); return }
             if (this.isSources) {
                 const selected = this.records.find(r => r.id === id)
                 if (!selected) throw new Error('未找到此数据集，请返回列表重新选择')
@@ -218,6 +227,9 @@ button { font: inherit; cursor: pointer; border: 1px solid #d9dfeb; border-radiu
     .detail { padding: 12px; }
     .dialog-backdrop { padding: 12px; }
 }
+.preference { padding:14px; border-radius:8px; }
+.chosen { background:#e9f4ed; color:#24563b; }
+.rejected { background:#fff0ed; color:#8d322a; }
 .breadcrumbs { display:flex; align-items:center; gap:12px; margin-bottom:22px; color:#78849a; font-size:13px; }
 .breadcrumbs button { border:0; padding:6px 0; background:transparent; color:#4e5bd5; }
 .dataset-catalog { width:100%; background:white; border:1px solid #e2e7f0; border-radius:12px; overflow:hidden; }

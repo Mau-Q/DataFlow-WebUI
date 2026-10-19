@@ -6,7 +6,9 @@
       <h2>生成配置</h2>
       <label>现有模板或配置<select v-model="selectedId" @change="selectConfig"><option value="">新建 · 论文 PDF → 多跳 QA → 筛选 → SFT</option><option v-for="p in configs" :key="p.id" :value="p.id">{{ p.name }}</option></select></label>
       <form v-if="config" @submit.prevent="save">
-        <div class="grid"><label>名称<input v-model="name" required maxlength="240" /></label><label>PDF 原始数据集<select v-model="datasetId" required><option value="">请选择</option><option v-for="d in datasets" :value="d.id" :key="d.id">{{ d.name }} · {{ d.num_samples }} 条</option></select></label></div>
+        <div class="grid"><label>名称<input v-model="name" required maxlength="240" /></label><label>PDF 原始数据集<select v-model="datasetId" required><option value="">请选择</option><option v-for="d in pdfDatasets" :value="d.id" :key="d.id">{{ d.name }} · {{ d.file_count }} 个 PDF</option></select></label></div>
+        <p v-if="datasetId && !pdfDatasets.some(d => d.id === datasetId)" class="error">当前配置的数据集不属于可用的纯 PDF 数据集，请重新选择。</p>
+        <p v-if="!pdfDatasets.length" class="help">暂无纯 PDF 数据集，请先在原始数据集中导入 PDF。</p>
         <div class="grid"><label>统一分配文本服务<select v-model="servingId" @change="bindServing"><option value="">按各步骤配置</option><option v-for="s in servings" :key="s.id" :value="s.id">{{ s.name }}</option></select></label><label>请求失败后的额外重试次数<input type="number" min="0" max="5" v-model.number="config.execution_options.additional_retries" /></label></div>
         <p class="help">进度按整批计数。完整批次产物可复用；失败批次手动从头重跑，保留原任务。任务完成后仍需检查数据质量。</p>
         <details><summary>查看步骤与必要参数</summary><article v-for="(op, i) in config.operators" :key="i"><strong>{{ i+1 }}. {{ op.name }}</strong><p>{{ op.pipeline_role }}</p><label v-for="p in editable(op)" :key="p.name">{{ p.name }}<select v-if="p.name === 'llm_serving'" v-model="p.value"><option :value="null">未配置</option><option v-for="s in servings" :key="s.id" :value="s.id">{{ s.name }}</option></select><input v-else v-model="p.value" :type="typeof p.value === 'number' ? 'number' : 'text'" /></label></article></details>
@@ -29,8 +31,9 @@ import axios from 'axios'
 import {mapState} from 'pinia'
 import {useTheme} from '@/stores/theme'
 export default {
+ name: 'TextGeneration',
  data:()=>({config:null, baseline:'', name:'论文 SFT 生成', selectedId:'',datasetId:'',servingId:'',configs:[],datasets:[],servings:[],tasks:[],task:null,drafts:[],draftId:'',conditions:null,busy:false,error:'',notice:'',timer:null}),
- computed:{...mapState(useTheme,['theme']),dirty(){return this.baseline!==JSON.stringify([this.name,this.datasetId,this.config])},failure(){const o=this.task?.output||{};return [o.error,o.original_error,o.error_message,o.artifact_error].filter(Boolean).join('；')}},
+ computed:{...mapState(useTheme,['theme']),pdfDatasets(){return this.datasets.filter(d=>d.content_type==='pdf' && d.type==='jsonl')},dirty(){return this.baseline!==JSON.stringify([this.name,this.datasetId,this.config])},failure(){const o=this.task?.output||{};return [o.error,o.original_error,o.error_message,o.artifact_error].filter(Boolean).join('；')}},
  async mounted(){await this.load();this.timer=setInterval(()=>{if(!this.busy && this.task && ['queued','running'].includes(this.task.status))this.selectTask(this.task.task_id)},4000)},
  watch:{$route(to,from){if(to.path==='/m/generation' && from.path!==to.path && this.config){this.selectedId=to.query.pipeline||this.selectedId;this.selectConfig();this.load()}}},
  beforeUnmount(){clearInterval(this.timer)},
