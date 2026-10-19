@@ -1,15 +1,16 @@
 <template>
-    <router-link v-if="currentPipeline?.tags?.includes('platform-text')" :to="{path:'/m/generation',query:{pipeline:currentPipeline.id}}" class="wizard-return">返回文本生成向导</router-link>
+    <router-link v-if="!$route.query.workflow && currentPipeline?.tags?.includes('platform-text')" :to="{path:'/m/generation',query:{pipeline:currentPipeline.id}}" class="wizard-return">返回文本生成向导</router-link>
     <div class="df-default-container" :class="[{ dark: theme === 'dark', 'show-pipeline': show.pipeline, 'show-chat': show.chat }]">
         <pipeline v-model="show.pipeline" v-model:loading="lock.loading" v-model:pipeline="currentPipeline"
             :flow-id="flowId" class="df-pipeline-container" @confirm-dataset="confirmDataset($event, true)"
             @select-pipeline="selectPipelineCallback"></pipeline>
         <div class="df-flow-container">
-            <mainFlow :id="flowId" v-model:nodes="nodes" v-model:edges="edges" @switch-database="show.dataset = true"
+            <PlatformPipelineCanvas v-if="$route.query.workflow" :key="$route.query.workflow" :workflow="$route.query.workflow" @open-pipelines="show.pipeline = !show.pipeline" />
+            <mainFlow v-show="!$route.query.workflow" :id="flowId" v-model:nodes="nodes" v-model:edges="edges" @switch-database="show.dataset = true"
                 @connect="onConnect" @connect-start="onConnectStart" @connect-end="onConnectEnd"
                 @update-run-value="useEdgeSync.syncRunValue($event, flowId)" @show-details="showExecDetails"
                 @download-data="downloadData" @click="show.pipeline = false"></mainFlow>
-            <div class="control-menu-block">
+            <div v-if="!$route.query.workflow" class="control-menu-block">
                 <fv-command-bar :theme="theme" v-model="value" :options="options" :item-border-radius="30"
                     :background="theme === 'dark' ? '' : 'rgba(250, 250, 250, 0.8)'" class="command-bar">
                     <template v-slot:optionItem="x">
@@ -149,6 +150,7 @@ import { usePipelineOperation } from '@/hooks/dataflow/usePipelineOperation'
 import { buildSnakeLayout } from '@/hooks/dataflow/useAutoLayout'
 
 import mainFlow from '@/components/manage/mainFlow/index.vue'
+import PlatformPipelineCanvas from '@/components/manage/platform/PlatformPipelineCanvas.vue'
 import pipeline from '@/components/manage/mainFlow/pipeline/index.vue'
 import pipelinePanel from '@/components/manage/mainFlow/panels/piplinePanel.vue'
 import datasetPanel from '@/components/manage/mainFlow/panels/datasetPanel/index.vue'
@@ -184,6 +186,7 @@ export default {
     name: "dataflowPage",
     components: {
         mainFlow,
+        PlatformPipelineCanvas,
         pipeline,
         pipelinePanel,
         datasetPanel,
@@ -288,7 +291,7 @@ export default {
     },
     watch: {
         $route(to, from) {
-            if (to.path.replace(/\/$/, '') === '/m' && to.query.pipeline && (from.path !== to.path || from.query.pipeline !== to.query.pipeline)) this.loadLinkedPipeline(to.query.pipeline)
+            if (!to.query.workflow && to.path.replace(/\/$/, '') === '/m' && to.query.pipeline && (from.path !== to.path || from.query.pipeline !== to.query.pipeline)) this.loadLinkedPipeline(to.query.pipeline)
         },
         sourceDatabase: {
             handler(newVal, oldVal) {
@@ -409,7 +412,7 @@ export default {
         this.setViewport()
         this.getServing()
         this.getPromptInfo()
-        if (this.$route.query.pipeline) this.loadLinkedPipeline(this.$route.query.pipeline)
+        if (!this.$route.query.workflow && this.$route.query.pipeline) this.loadLinkedPipeline(this.$route.query.pipeline)
     },
     beforeUnmount() {
         // 兜底清理拖拽监听，避免组件销毁后仍挂在 window 上

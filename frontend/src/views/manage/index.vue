@@ -65,8 +65,6 @@ export default {
                     type: 'header'
                 },
                 { key: 0.1, name: () => this.local('原始数据集'), icon: 'Library', img: dbManager, route: '/m/materials' },
-                { key: 0.4, name: () => this.local('图片 VQA'), icon: 'Play', img: dataviz, route: '/m/multimodal' },
-                { key: 0.3, name: () => this.local('文本生成'), icon: 'Play', img: dataviz, route: '/m/generation' },
                 { key: 0.2, name: () => this.local('生成数据集'), icon: 'BulletedList', img: dataviz, route: '/m/training-datasets' },
                 {
                     key: 0,
@@ -149,6 +147,8 @@ export default {
     },
     methods: {
         handleItemClick(item) {
+            // Navigation-view may emit selection while initializing. Keep canvas query state.
+            if (item.route.replace(/\/$/, '') === this.$route.path.replace(/\/$/, '')) return
             this.$Go(`${item.route}`)
         },
         routeFormat() {
@@ -156,7 +156,7 @@ export default {
             for (let item of this.navList) {
                 if (!item.route || item.type === 'header') continue
                 let targetPath = item.route
-                if (path == targetPath) {
+                if (path.replace(/\/$/, '') === targetPath.replace(/\/$/, '')) {
                     this.currentNav = item
                     break
                 }
