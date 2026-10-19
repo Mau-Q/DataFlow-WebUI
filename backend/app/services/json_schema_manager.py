@@ -64,29 +64,32 @@ class JsonSchemaManager:
         self.store = ResourceStore(path or SCHEMAS_FILE)
         self.store.read()
 
-    def create(self, name, description, schema, example):
+    def create(self, name, description, schema, example, usage='通用', purpose='通用'):
         validate_schema(schema, example)
         if not name.strip():
             raise ValueError('Schema 名称不能为空')
         now = datetime.now(timezone.utc).isoformat()
         rec = dict(id=f'schema_{uuid.uuid4().hex[:8]}', name=name, description=description or '',
-                   schema=schema, example=example or '', created_at=now, updated_at=now)
+                   schema=schema, example=example or '', usage=usage, purpose=purpose, created_at=now, updated_at=now)
         with self.store.writing() as data:
             data[rec['id']] = rec
         return rec
 
     def get(self, schema_id):
-        return self.store.get(schema_id)
+        from app.services.builtin_resources import get_builtin_schema
+        return get_builtin_schema(schema_id) if schema_id.startswith('builtin-') else self.store.get(schema_id)
 
     def list_all(self):
         return self.store.list_all()
 
     def update(self, schema_id, **fields):
+        if schema_id.startswith('builtin-'):
+            return None
         with self.store.writing() as data:
             if schema_id not in data:
                 return None
             rec = data[schema_id]
-            for key in ('name', 'description', 'schema', 'example'):
+            for key in ('name', 'description', 'schema', 'example', 'usage', 'purpose'):
                 if fields.get(key) is not None:
                     rec[key] = fields[key]
             if not rec['name'].strip():
@@ -96,6 +99,8 @@ class JsonSchemaManager:
         return rec
 
     def delete(self, schema_id):
+        if schema_id.startswith('builtin-'):
+            return False
         with self.store.writing() as data:
             return data.pop(schema_id, None) is not None
 

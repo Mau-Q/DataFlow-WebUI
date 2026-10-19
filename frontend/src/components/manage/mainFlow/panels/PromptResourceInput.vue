@@ -11,7 +11,7 @@
                 </select>
                 <button type="button" @click="load">刷新</button>
             </div>
-            <a href="#/m/prompts">管理模板</a>
+            <router-link :to="managerLocation">管理模板</router-link>
             <div v-for="variable in variables" :key="variable" class="binding-row">
                 <label :for="`binding-${variable}`">{{ variable }}</label>
                 <input :id="`binding-${variable}`" :aria-label="`变量 ${variable} 的数据列`" :value="bindings[variable] || ''"
@@ -25,7 +25,11 @@
 <script setup>
 import { computed, ref, onMounted, watch } from 'vue'
 import axios from 'axios'
+import { useRoute } from 'vue-router'
+const route = useRoute()
+const emit = defineEmits(['update-value'])
 const props = defineProps({ item: Object, data: Object })
+const managerLocation = computed(() => ({ path:'/m/prompts', query:{ operator:props.data.name||props.data.label, relation:'compatible', ...(route.query.pipeline ? {pipeline:'pipeline:'+route.query.pipeline}: {}) } }))
 const templates = ref([]), variables = ref([]), error = ref('')
 const supported = computed(() => (props.data.name || props.data.label) === 'FormatStrPromptedGenerator')
 const selectedRef = computed(() => typeof props.item.value === 'string' && props.item.value.startsWith('user_prompt:') ? props.item.value : props.item.value?.ref || '')
@@ -51,11 +55,11 @@ async function updateVariables() {
     } catch (e) { error.value = e.message }
 }
 function selectTemplate(value) {
-    if (!value) { props.item.value = props.data.allowed_prompts?.[0] || props.item.default_value || null; return }
-    props.item.value = { ref: value, bindings: {} }
+    if (!value) { emit('update-value', props.data.allowed_prompts?.[0] || props.item.default_value || null); return }
+    emit('update-value', { ref: value, bindings: {} })
 }
 function setBinding(key, value) {
-    props.item.value = { ref: selectedRef.value, bindings: { ...bindings.value, [key]: value } }
+    emit('update-value', { ref: selectedRef.value, bindings: { ...bindings.value, [key]: value } })
 }
 watch(selectedRef, updateVariables)
 onMounted(load)

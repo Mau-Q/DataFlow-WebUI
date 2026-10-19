@@ -37,7 +37,8 @@ def create_schema(schema_in: JsonSchemaCreate):
             name=schema_in.name,
             description=schema_in.description or "",
             schema=schema_in.schema,
-            example=schema_in.example or ""
+            example=schema_in.example or "",
+            usage=schema_in.usage, purpose=schema_in.purpose
         )
         return ok(JsonSchemaOut(**schema_out))
     except ValueError as e:
@@ -47,16 +48,25 @@ def create_schema(schema_in: JsonSchemaCreate):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get('/catalog')
+def schema_catalog():
+    from app.services.resource_catalog import ResourceCatalog
+    return ok(ResourceCatalog().schemas())
+
+
 @router.get("/", response_model=ApiResponse[List[JsonSchemaOut]], include_in_schema=False)
 @router.get(
     "",
     response_model=ApiResponse[List[JsonSchemaOut]],
     summary="获取所有 JSON Schemas"
 )
-def list_schemas():
+def list_schemas(include_builtin: bool = False):
     """List all JSON schemas."""
     try:
         schemas = _manager().list_all()
+        if include_builtin:
+            from app.services.builtin_resources import builtin_schemas
+            schemas += builtin_schemas()
         return ok([JsonSchemaOut(**s) for s in schemas])
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))

@@ -23,7 +23,7 @@
                             <span class="count">{{ visibleInitParams.length }}</span>
                         </div>
 
-                        <prompt-resource-input v-if="promptTemplateItem" :item="promptTemplateItem" :data="data" />
+                        <prompt-resource-input v-if="promptTemplateItem" :item="promptTemplateItem" :data="data" @update-value="promptTemplateItem.value = $event" />
                         <div v-if="allowedPrompts.length > 0 && promptTemplateItem && !isResourcePrompt" class="parameter-field">
                             <span class="field-label">{{ appConfig.local('Prompt Template') }}</span>
                             <fv-combobox :theme="theme" v-model="promptTemplateModel"

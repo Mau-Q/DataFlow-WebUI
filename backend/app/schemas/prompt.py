@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Any, Optional, List, Dict
+from typing import Any, Optional, List, Dict, Literal
 
 class GetPromptSchema(BaseModel):
     #allowed_prompts: Optional[List[str]] = []
@@ -45,7 +45,9 @@ class UserPromptTemplateBase(BaseModel):
     # f-string 风格模板，例如 "Given {question}, produce an answer."
     # 占位符名必须与运行时传入的列名一致。
     template: str
-    # 允许使用此模板的算子名称（可为空，代表对所有算子都可选）。
+    usage: Literal['通用', '文本 SFT', '图文 SFT', '文本 DPO', '图文 DPO'] = '通用'
+    purpose: Literal['通用', '生成', '清洗', '评分'] = '通用'
+    # 可为空，表示不额外限制；运行端仍检查实际支持的算子。
     allowed_operators: List[str] = Field(default_factory=list)
     # 样例渲染时的占位符 → 示例值映射
     example_variables: Dict[str, Any] = Field(default_factory=dict)
@@ -56,6 +58,8 @@ class UserPromptTemplateCreate(UserPromptTemplateBase):
 
 
 class UserPromptTemplateUpdate(BaseModel):
+    purpose: Optional[Literal['通用', '生成', '清洗', '评分']] = None
+    usage: Optional[Literal['通用', '文本 SFT', '图文 SFT', '文本 DPO', '图文 DPO']] = None
     name: Optional[str] = None
     description: Optional[str] = None
     template: Optional[str] = None
@@ -78,3 +82,8 @@ class RenderPreviewOut(BaseModel):
     rendered: str
     placeholders: List[str]
     missing: List[str]
+
+class BuiltinPromptPreviewIn(BaseModel):
+    name: str
+    init: Dict[str, Any] = Field(default_factory=dict)
+    variables: Dict[str, Any] = Field(default_factory=dict)

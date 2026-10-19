@@ -30,6 +30,7 @@
                 :reveal-border="true" :border-color="thisData.shadowColor"
                 :focus-border-color="thisData.borderColor" underline
                 style="width: 100%; height: 35px"></fv-text-box>
+            <router-link :to="{path:'/m/schemas', query:{relation:'compatible', ...( $route.query.pipeline ? {pipeline:'pipeline:'+$route.query.pipeline} : {} )}}">管理 Schema</router-link>
         </div>
         <kv-input v-if="computedUIType === 'kv_input'" v-model="thisValue"></kv-input>
     </div>
@@ -53,6 +54,7 @@ const JSON_SCHEMA_PARAM_NAMES = new Set([
 ])
 
 export default {
+    name: 'OperatorValueInput',
     components: {
         kvInput
     },

@@ -4,7 +4,7 @@ from app.schemas.prompt import (
     GetPromptSchema, PromptSourceOut, OperatorPromptMapOut,
     PromptInfoMapOut, PromptInfoOut,
     UserPromptTemplateCreate, UserPromptTemplateUpdate, UserPromptTemplateOut,
-    RenderPreviewIn, RenderPreviewOut,
+    RenderPreviewIn, RenderPreviewOut, BuiltinPromptPreviewIn,
 )
 from app.core.container import container
 from app.api.v1.resp import ok
@@ -40,6 +40,7 @@ def create_user_prompt(body: UserPromptTemplateCreate):
             template=body.template,
             allowed_operators=body.allowed_operators,
             example_variables=body.example_variables,
+            usage=body.usage, purpose=body.purpose,
         )
     except ValueError as exc:
         raise HTTPException(422, str(exc))
@@ -95,6 +96,25 @@ def delete_user_prompt(tpl_id: str):
 def preview_user_prompt(body: RenderPreviewIn):
     result = container.user_prompt_registry.preview(body.template, body.variables)
     return ok(RenderPreviewOut(**result))
+
+
+@router.post('/builtin-preview')
+def builtin_prompt_preview(body: BuiltinPromptPreviewIn):
+    from app.services.resource_resolution import instantiate_prompt
+    try:
+        prompt = instantiate_prompt(dict(cls_name=body.name, params=[{'name': k, 'value': v} for k, v in body.init.items()]))
+        rendered = prompt.build_prompt(**body.variables)
+        if not isinstance(rendered, str):
+            raise ValueError('此 Prompt 不返回单段文本，请查看源码')
+        return ok({'rendered': rendered})
+    except Exception as exc:
+        raise HTTPException(422, f'无法使用这些参数预览: {exc}') from exc
+
+
+@router.get('/catalog')
+def prompt_catalog():
+    from app.services.resource_catalog import ResourceCatalog
+    return ok(ResourceCatalog().prompts())
 
 
 # ── Built-in prompts (read-only browsing) ────────────────────────────────────

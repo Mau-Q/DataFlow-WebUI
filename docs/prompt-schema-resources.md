@@ -1,6 +1,20 @@
-# Prompt / Schema 资源管理（M2）
+# Prompt / Schema 资源管理
 
 Prompt Manager 的 My Templates 与 JSON Schema Manager 可独立使用，无需先创建 Pipeline。内置 Prompt 的类、注册表和默认行为保持不变。自定义模板与 JSON Schema 各自保存在 `backend/data/prompts/user_templates.json`、`backend/data/schemas/schemas.json`；写入使用文件锁和原子替换，损坏文件会明确报错，不会清空重建。
+
+## 默认列表与详情
+
+两个管理器均默认显示“我的”全部资源，与“内置”分栏。列表仅显示名称、用途/功能、适用算子或主要字段、更新时间；变量、源码、Schema、示例与引用位置在详情查看。可组合搜索、用途、功能、算子与 Pipeline 筛选。
+
+“我的模板”和“我的 Schema”的 Pipeline 下拉框只显示自定义的已保存流程（含图片流程配置）。预置流程按 PipelineRegistry 的 api 标签及 api_pipelines 路径规则识别；内置文本/图片流程模板也不会混入此下拉框。内置资源页允许按全部流程筛选，切回“我的”时会清除不适用的预置流程选项。
+
+“此流程已引用”只统计保存配置及内置模板中的显式引用，不从算子兼容性推断使用情况；“适用于此流程”按已接入算子和 Schema 参数匹配候选，变量绑定、格式与执行条件仍须检查。引用详情可跳转到对应流程。
+
+内置 Prompt 包含注册的 Python Prompt 类和图片 SFT 问题/答案模板。Python 类只读，可查看源码及参数、填写构造和 build_prompt 参数预览；预览不调用模型。将预览另存为我的模板得到固定文本，需自行添加变量。文本模板可直接复制后编辑。
+
+内置 Schema 提供文本 SFT、多轮文本 SFT、图文 SFT、文本 DPO、图文 DPO 与图片 VQA 问答输出六种版本化结构参考。它们只读，可复制为个人资源。结构规则不代替媒体存在性或回答差异检查，也不会自动应用到导入流程。图片结构检查下拉框仅提供模型输出/通用 Schema，训练样本 Schema 可在管理页查看。
+
+侧栏隐藏数据库管理入口；原有 `/m/dm` 页面和后端能力保留，未新增 SQLite 管理页面。
 
 ## 自定义模板与字段绑定
 
@@ -8,7 +22,7 @@ Prompt Manager 的 My Templates 与 JSON Schema Manager 可独立使用，无需
 2. `{question}` 是变量；JSON 对象可以直接写入。`{{literal}}` 预览和执行时显示为 `{literal}`。只支持简单变量名，不支持 Python 属性访问、下标、格式说明或表达式；替换不会递归处理变量值中的花括号。
 3. 示例变量用于预览，缺少变量会显示提示。示例值不会作为正式运行的字段默认值。
 4. 在画布中选中 `FormatStrPromptedGenerator`，打开参数面板，从“自定义模板”选择已保存的模板，为每个变量填写数据列名。可用“刷新”载入新建或修改的资源。
-5. 可选的 allowed operators 是额外限制；留空仍只支持已接入的算子契约。当前仅 `FormatStrPromptedGenerator.prompt_template` 支持任意字段模板。其他步骤显示契约限制并保留内置提示词，不能用这项功能替换专用 QA 或评分协议。
+5. 可选的 allowed operators 是额外限制；留空仍只支持已接入的算子契约。文本画布当前仅 `FormatStrPromptedGenerator.prompt_template` 支持任意字段模板；图片 VQA 配置支持 `PromptedVQAGenerator` 的问题/答案模板。其他步骤显示契约限制并保留内置提示词，不能用这项功能替换专用 QA 或评分协议。
 
 Pipeline 保存的形状如下，两份配置可以引用同一个 ID：
 
@@ -43,6 +57,10 @@ Pipeline 保存的形状如下，两份配置可以引用同一个 ID：
 执行器使用固定内容，不再从当前资源库读取。编辑或删除资源不会改变已有任务；之后的新任务会使用新内容，或因引用缺失而被阻止。历史任务列表可展开查看固定内容及哈希；旧任务没有这项记录时不虚构快照。状态与结果 API 同样提供快照，供后续恢复功能接入。本阶段没有新增恢复或自动重跑功能。
 
 ## API
+
+- `GET /api/v1/prompts/catalog`、`GET /api/v1/json_schemas/catalog` 返回标准化资源、来源、兼容算子和显式引用。
+- `POST /api/v1/prompts/builtin-preview` 接收 name / init / variables，预览已注册 Python Prompt。
+- `GET /api/v1/json_schemas?include_builtin=true` 在原有个人列表上增加内置 Schema；省略此参数保持旧接口行为。
 
 - `GET/POST /api/v1/prompts/user`；`GET/PUT/DELETE /api/v1/prompts/user/{id}`。
 - `POST /api/v1/prompts/user/preview`，返回 rendered / placeholders / missing。

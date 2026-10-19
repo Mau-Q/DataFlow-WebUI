@@ -49,6 +49,7 @@ import dataviz from '@/assets/nav/dataviz.svg'
 import analysis from '@/assets/nav/analysis.svg'
 
 export default {
+    name: 'ManageShell',
     data() {
         return {
             currentNav: {
@@ -57,7 +58,7 @@ export default {
                 icon: 'World',
                 route: '/m/'
             },
-            isExpand: true,
+            isExpand: window.innerWidth >= 1368,
             navList: [
                 {
                     key: -1,
@@ -79,13 +80,6 @@ export default {
                     icon: 'World',
                     img: serving,
                     route: '/m/serving'
-                },
-                {
-                    key: 1,
-                    name: () => this.local('DB Manager'),
-                    icon: 'World',
-                    img: dbManager,
-                    route: '/m/dm'
                 },
                 {
                     key: 2,

@@ -49,9 +49,9 @@ class UserPromptRegistry:
         if re.search(r'\{[A-Za-z_][A-Za-z0-9_]*(?:[.!\[]|:[^{}]*\})', rec['template']):
             raise ValueError('只支持 {变量名}，不支持属性访问、转换或格式说明')
 
-    def create(self, name, description, template, allowed_operators=None, example_variables=None):
+    def create(self, name, description, template, allowed_operators=None, example_variables=None, usage='通用', purpose='通用'):
         now = datetime.now(timezone.utc).isoformat()
-        rec = dict(id=f'tpl_{uuid.uuid4().hex[:8]}', name=name, description=description or '',
+        rec = dict(id=f'tpl_{uuid.uuid4().hex[:8]}', name=name, description=description or '', usage=usage, purpose=purpose,
                    template=template, allowed_operators=list(allowed_operators or []),
                    example_variables=dict(example_variables or {}), created_at=now, updated_at=now)
         self._validate(rec)
@@ -70,7 +70,7 @@ class UserPromptRegistry:
             if tpl_id not in data:
                 return None
             rec = data[tpl_id]
-            for key in ('name', 'description', 'template', 'allowed_operators', 'example_variables'):
+            for key in ('name', 'description', 'template', 'allowed_operators', 'example_variables', 'usage', 'purpose'):
                 if fields.get(key) is not None:
                     rec[key] = fields[key]
             self._validate(rec)
