@@ -134,3 +134,38 @@ def test_repeated_file_in_one_selection_is_rejected(source_app):
     response = client.post('/api/v1/library/inputs/upload', data={'name': 'repeat'}, files=[('files', ('a.pdf', pdf())), ('files', ('b.pdf', pdf()))]).json()
     assert not response['success'] and '重复内容' in response['message']
     assert registry.list() == [] and library.list_materials() == []
+
+
+@pytest.mark.parametrize('rows,content_type,file_count', [
+    ([{'source': '/papers/a.pdf'}, {'source': '/papers/b.PDF'}], 'pdf', 2),
+    ([{'source': '/images/a.png', 'material_id': 'mat_a'}], 'image', 1),
+    ([{'source': '/papers/a.pdf'}, {'source': '/images/a.jpg'}], 'pdf_image', 2),
+    ([{'instruction': 'question', 'output': 'answer', 'source': '/papers/a.pdf'}], None, None),
+    ([{'source': '/papers/a.pdf'}, {'text': 'ordinary record'}], None, None),
+    ([{'source': '/docs/a.txt', 'source_name': 'a.pdf'}], None, None),
+    ([], None, None),
+])
+def test_catalog_content_type_is_distinct_from_storage(source_app, tmp_path, rows, content_type, file_count):
+    client, registry, _ = source_app
+    path = tmp_path / 'manifest.jsonl'
+    path.write_text(''.join(json.dumps(row) + '\n' for row in rows))
+    record = registry.add_or_update({'name': 'Dataset name is not evidence', 'root': str(path), 'pipeline': 'test', 'meta': {}})
+    listing = client.get('/api/v1/datasets/?visible_only=true').json()['data'][0]
+    detail = client.get('/api/v1/datasets/' + record['id']).json()['data']
+    for result in [listing, detail]:
+        assert result['type'] == 'jsonl'
+        assert result['content_type'] == content_type
+        assert result['file_count'] == file_count
+    assert 'content_type' not in registry.get(record['id'])
+
+
+def test_catalog_content_cache_refreshes_after_file_change(source_app, tmp_path):
+    client, registry, _ = source_app
+    path = tmp_path / 'manifest.jsonl'
+    path.write_text('{"source":"a.pdf"}\n')
+    registry.add_or_update({'name': 'files', 'root': str(path), 'pipeline': 'test', 'meta': {}})
+    assert client.get('/api/v1/datasets/').json()['data'][0]['content_type'] == 'pdf'
+    path.write_text('{"source":"image.png"}\n')
+    assert client.get('/api/v1/datasets/').json()['data'][0]['content_type'] == 'image'
+    path.unlink()
+    assert client.get('/api/v1/datasets/').json()['data'][0]['content_type'] is None
