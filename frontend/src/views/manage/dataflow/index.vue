@@ -988,7 +988,8 @@ export default {
                     if (revealResult) {
                         this.historyTaskId = taskId
                         this.show.taskPanel = true
-                        this.$barWarning('运行完成，最终结果已打开。可预览、下载或收录到生成数据集。', {status: 'correct'})
+                        const collection = this.execution.auto_collection
+                        this.$barWarning(collection?.status === 'collected' ? '运行完成，已自动收录到生成数据集。' : '运行完成，最终结果已打开；自动收录状态见结果面板。', {status: collection?.status === 'failed' ? 'warning' : 'correct'})
                     }
                 } else if (this.execution.status === "cancelled") {
                     clearInterval(this.timer.exec)

@@ -14,11 +14,13 @@
                 <details v-for="(row, index) in result.sample_data" :key="index" class="sample"><summary>样本 {{ index + 1 }} · {{ excerpt(row) }}</summary><pre>{{ JSON.stringify(row, null, 2) }}</pre></details>
                 <p v-if="result.artifact.row_count > result.sample_data.length" class="help">预览前 {{ result.sample_data.length }} 条；下载可查看全部内容。</p>
             </template>
-            <p v-if="result.collectable && !result.collections.length" class="help" role="status">结果已生成并保存，尚未收录到生成数据集。可在下方新建数据集或追加到已有数据集。</p>
+            <p v-if="result.collectable && !result.collections.length" class="help" role="status">结果已生成，但自动收录尚未完成。可在下方重新收录。</p>
+            <p v-if="result.auto_collection?.status === 'failed'" role="alert" class="error">自动收录失败：{{ result.auto_collection.reason }}</p>
+            <p v-if="result.auto_collection?.status === 'skipped'" class="help">未自动收录：{{ result.auto_collection.reason }}</p>
             <template v-if="result.collections.length">
-                <h4>已收录到</h4><ul><li v-for="d in result.collections" :key="d.id"><router-link :to="{ path: '/m/training-datasets', query: { dataset: d.id } }" @click="$emit('navigate')">{{ d.name }} · 当前 {{ d.row_count }} 条 →</router-link></li></ul>
+                <h4>已收录到生成数据集</h4><ul><li v-for="d in result.collections" :key="d.id"><router-link :to="{ path: '/m/training-datasets', query: { dataset: d.id } }" @click="$emit('navigate')">{{ d.name }} · 当前 {{ d.row_count }} 条 →</router-link></li></ul>
             </template>
-            <form v-if="result.collectable" @submit.prevent="collect">
+            <form v-if="result.collectable && !result.collections.length" @submit.prevent="collect">
                 <h4>收录到生成数据集</h4>
                 <p class="help">{{ result.modality === 'image_text' ? '图文' : '文本' }} {{ result.training_type.toUpperCase() }} · 相同样本只保留一条，来源任务仍会记录。</p>
                 <div class="form-field">收录方式<fv-combobox v-model="modeModel" :theme="theme" :options="modeOptions" :disabled="busy" aria-label="收录方式" style="width:100%" /></div>

@@ -100,5 +100,7 @@ def with_task_artifacts(function):
             result.setdefault('output', {})['artifact_error'] = str(exc)
             result['logs'].append(f'Artifact finalization failed: {exc}')
         from app.services.result_storage import persist
-        return persist(config, result)
+        result = persist(config, result)
+        from app.services.auto_collection import collect_completed_result
+        return collect_completed_result(config, result, bound.get('execution_path'))
     return wrapped

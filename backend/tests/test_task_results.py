@@ -185,3 +185,77 @@ def test_real_endpoints_use_only_isolated_library(setup, monkeypatch):
         assert client.get('/api/v1/library/drafts/'+did).json()['data']['rows']==[row()]
         invalid=client.post(base+'/collect',json={'expected_sha256':detail['artifact']['sha256'],'name':'new','draft_id':did}).json()
         assert not invalid['success'] and invalid['meta']['http_status']==422
+
+
+def auto_result(setup, rows=None, status='completed', task_id='auto-task'):
+    from app.services.auto_collection import collect_completed_result
+    service, records, root = setup
+    rec, path = task(setup, rows, task_id=task_id, status=status)
+    rec['pipeline_config']['execution_options']={'collection_library_root':str(service.lib.root)}
+    registry=root/'auto-tasks.json'
+    registry.write_bytes(_json_bytes({'tasks':records}))
+    result=collect_completed_result(rec['pipeline_config'],rec,registry)
+    records[task_id]=result
+    return result,registry
+
+
+@pytest.mark.parametrize('sample', [row(), {'prompt':'Q','chosen':'right','rejected':'wrong'}])
+def test_any_completed_training_pipeline_auto_collects_without_ui_and_replays_once(setup,sample):
+    from app.services.auto_collection import collect_completed_result
+    service,records,_=setup
+    result,registry=auto_result(setup,[sample])
+    assert result['output']['auto_collection']['status']=='collected'
+    did=result['output']['auto_collection']['dataset_id']
+    assert service.detail('auto-task')['collections'][0]['id']==did
+    repeated=collect_completed_result(result['pipeline_config'],result,registry)
+    assert repeated['output']['auto_collection']['reused']
+    assert len(service.lib.list_drafts())==1
+    assert service.lib._get('drafts',did)['rows']==[sample]
+
+
+@pytest.mark.parametrize('status',['running','queued','failed','cancelled'])
+def test_auto_collection_never_imports_unfinished_outputs(setup,status):
+    result,_=auto_result(setup,status=status)
+    assert 'auto_collection' not in result['output']
+    assert not setup[0].lib.list_drafts()
+
+
+@pytest.mark.parametrize('rows',[[],[{'text':'not a training sample'}]])
+def test_empty_and_nontraining_outputs_are_skipped_with_reason(setup,rows):
+    result,_=auto_result(setup,rows)
+    assert result['status']=='completed'
+    assert result['output']['auto_collection']['status']=='skipped'
+    assert result['output']['auto_collection']['reason']
+    assert not setup[0].lib.list_drafts()
+
+
+def test_auto_collection_failure_preserves_generated_file_and_is_visible(setup,monkeypatch):
+    monkeypatch.setattr(TaskResults,'collect',lambda *args,**kwargs: (_ for _ in ()).throw(OSError('fixture database unavailable')))
+    result,_=auto_result(setup)
+    assert result['status']=='completed'
+    assert result['output']['auto_collection']['status']=='failed'
+    assert 'fixture database unavailable' in result['output']['auto_collection']['reason']
+    assert setup[0].detail('auto-task')['available']
+    assert not setup[0].lib.list_drafts()
+
+
+def test_concurrent_completion_callbacks_auto_collect_only_once(setup):
+    import copy
+    from app.services.auto_collection import collect_completed_result
+    result,registry=auto_result(setup)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results=list(pool.map(lambda _:collect_completed_result(result['pipeline_config'],copy.deepcopy(result),registry),range(8)))
+    assert all(r['output']['auto_collection']['status']=='collected' for r in results)
+    assert len(setup[0].lib.list_drafts())==1
+    assert setup[0].lib.list_drafts()[0]['row_count']==1
+
+
+def test_polling_status_exposes_auto_collection_without_full_output(setup):
+    from app.services.task_registry import TaskRegistry
+    from app.services.task_store import patch_task
+    result,_=auto_result(setup)
+    registry=TaskRegistry(str(setup[2]/'polling-tasks.json'))
+    patch_task(registry.path,result['task_id'],result,create=True)
+    status=registry.get_execution_status(result['task_id'])
+    assert status['auto_collection']['status']=='collected'
+    assert 'output' not in status

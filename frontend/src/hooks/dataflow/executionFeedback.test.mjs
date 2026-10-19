@@ -30,3 +30,12 @@ for(const status of ['running','failed','cancelled'])test(`${status} does not sh
     const h=harness(status);h.watch();await h.tick();assert.equal(h.state.show.taskPanel,false)
     assert.equal(h.notices.some(([message])=>message.includes('运行完成')),false)
 })
+
+test('completion reports automatic collection from the lightweight status response',async()=>{
+    const h=harness('completed');h.state.execution.auto_collection={status:'collected'}
+    h.watch();await h.tick();assert(h.notices[0][0].includes('已自动收录'));assert.equal(h.notices[0][1].status,'correct')
+})
+test('database errors show a warning while still opening the generated result',async()=>{
+    const h=harness('completed');h.state.execution.auto_collection={status:'failed'}
+    h.watch();await h.tick();assert.equal(h.notices[0][1].status,'warning');assert.equal(h.state.show.taskPanel,true)
+})

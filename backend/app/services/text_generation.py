@@ -210,6 +210,8 @@ class TextGeneration:
         if not check['ready']:
             raise LibraryError('；'.join(check['errors']), 422)
         options = config.setdefault('execution_options', {})
+        from app.services.auto_collection import freeze_collection_target
+        freeze_collection_target(config, self.c.data_library)
         options['input_snapshot'] = self._freeze_input(config)
         options.update(capture_responses=True, training_output=True, max_attempts=options.get('additional_retries', 0)+1,
                        serving_snapshots=check['serving_snapshots'])

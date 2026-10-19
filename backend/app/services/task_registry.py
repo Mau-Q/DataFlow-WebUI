@@ -185,6 +185,9 @@ class TaskRegistry:
         import copy
         pipeline_source_config = copy.deepcopy(pipeline_config)
         pipeline_config, resource_snapshots = resolve_pipeline_resources(pipeline_config)
+        from app.services.auto_collection import freeze_collection_target
+        if container.data_library is not None:
+            freeze_collection_target(pipeline_config, container.data_library)
 
         # 生成执行ID
         task_id = self._generate_task_id()
@@ -250,6 +253,7 @@ class TaskRegistry:
             "operators_detail": output.get("operators_detail", {}),
             "operator_logs": output.get("operator_logs", {}),
             "logs": execution_data.get("logs", []),
+            "auto_collection": output.get("auto_collection"),
             # "output": output, # Output removed as requested to avoid duplication
             "started_at": execution_data.get("started_at"),
             "completed_at": execution_data.get("completed_at"),

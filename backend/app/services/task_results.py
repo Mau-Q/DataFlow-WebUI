@@ -1,4 +1,4 @@
-"""Explicit task-result collection. Viewing never creates drafts or artifacts."""
+"""Task-result collection shared by automatic completion and explicit imports."""
 import copy
 from pathlib import Path
 from app.core.config import settings
@@ -96,6 +96,7 @@ class TaskResults:
         task = self.task(task_id)
         result = {k: task.get(k) for k in ('task_id', 'pipeline_id', 'name', 'status', 'created_at', 'completed_at')}
         result.update(available=False, collectable=False, collections=[], sample_data=[],
+                      auto_collection=(task.get('output') or {}).get('auto_collection'),
                       result_directory=task.get('output', {}).get('result_directory') or task.get('pipeline_config', {}).get('execution_options', {}).get('result_directory'),
                       storage_error=task.get('output', {}).get('storage_error'))
         try:
@@ -139,7 +140,10 @@ class TaskResults:
             if not collected['reused']:
                 target = self.lib.root / 'task_results' / task_id / (item['id'] + '.jsonl')
                 atomic_write(target, content)
-                saved_item = dict(item, path=str(target.resolve()))
+                # Durable outputs keep their original directory so relative images
+                # remain readable. Legacy cache outputs use the owned copy.
+                saved_path = item['path'] if task.get('output', {}).get('final_file') else str(target.resolve())
+                saved_item = dict(item, path=saved_path)
                 atomic_write(target.parent / 'manifest.json', _json_bytes(saved_item))
         return collected
 

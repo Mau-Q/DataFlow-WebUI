@@ -223,7 +223,9 @@ def test_full_workflows_use_native_operators_and_collect(platform,monkeypatch,de
         assert (final.parent/row['images'][0]).is_file()
         assert detail['artifact']['media_bindings'][row['images'][0]]==material['id']
     result=TaskResults(c).collect(task['task_id'],detail['artifact']['sha256'],name='隔离测试收录')
-    assert result['added']==1
+    assert task['output']['auto_collection']['status']=='collected'
+    assert detail['collections']
+    assert result['reused'] and result['added']==0
     assert TaskResults(c).collect(task['task_id'],detail['artifact']['sha256'],name='隔离测试收录')['reused']
     assert all('CHANGED AFTER' not in p for p in calls)
     counts=[s['sample_count'] for s in task['output']['operators_detail'].values() if s.get('status')=='completed']
@@ -236,6 +238,8 @@ def test_full_workflows_use_native_operators_and_collect(platform,monkeypatch,de
 def test_cold_worker_executes_frozen_workflow_without_app_initialization(platform,monkeypatch,definition,cold_worker):
     task,detail,calls=run_pipeline(platform,monkeypatch,definition,cold_worker=cold_worker)
     assert task['status']=='completed'
+    assert task['output']['auto_collection']['status']=='collected'
+    assert detail['collections']
     assert detail['collectable'] and detail['artifact']['row_count']==1
     assert calls
     assert len(task['output']['execution_results'])==len(definition['config']['operators'])
