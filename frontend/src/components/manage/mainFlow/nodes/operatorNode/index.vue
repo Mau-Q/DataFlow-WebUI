@@ -119,7 +119,7 @@ const stepLabel = computed(() => thisData.value.pipeline_idx ? `Step ${thisData.
 const loading = ref(false) // for data loading display
 const paramsWrapper = (objs) => {
     for (let item of objs) {
-        if (!item.value) item.value = item.default_value || ''
+        if (item.value === undefined) item.value = item.default_value ?? null
         item.show = true
         if (item.name === 'prompt_template') {
             let val = item.value
@@ -139,7 +139,7 @@ const paramsWrapper = (objs) => {
                 if (promptInfo && promptInfo.parameter.init)
                     promptParams = promptInfo.parameter.init
                 promptParams.forEach((param) => {
-                    param.value = param.default_value || ''
+                    param.value = param.default_value ?? null
                 })
                 item.value = {
                     cls_name: val,

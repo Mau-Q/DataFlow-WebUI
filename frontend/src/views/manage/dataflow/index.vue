@@ -826,7 +826,12 @@ export default {
                             status: 'correct'
                         })
                         this.show.pipelinePanel = false
+                    } else {
+                        this.$barWarning(res.message || this.local('Pipeline update failed'), {status: 'error'})
                     }
+                })
+                .catch((err) => {
+                    this.$barWarning(err?.message || this.local('Pipeline update failed'), {status: 'error'})
                 })
         },
         async executePipeline(outputRoot) {
