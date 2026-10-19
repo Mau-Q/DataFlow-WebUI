@@ -1,5 +1,6 @@
 import yaml, os, hashlib
 import json
+import csv
 from typing import Dict, List
 from pathlib import Path
 from app.core.config import settings
@@ -138,10 +139,18 @@ class DatasetRegistry:
         file_ext = file_path.split('.')[-1].lower()
         
         try:
-            if file_ext in ['csv', 'jsonl', 'txt', 'log']:
+            if file_ext == 'csv':
+                with open(file_path, newline='', encoding='utf-8-sig') as f:
+                    return sum(1 for _ in csv.DictReader(f))
+            elif file_ext == 'parquet':
+                import pyarrow.parquet as pq
+                return pq.ParquetFile(file_path).metadata.num_rows
+            elif file_ext in ['txt', 'md']:
+                return 1
+            elif file_ext in ['jsonl', 'log']:
                 # 对于文本类文件，按行计数
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    return sum(1 for _ in f)
+                    return sum(1 for line in f if line.strip())
             elif file_ext == 'json':
                 # 对于JSON文件，尝试加载并计算
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
@@ -196,7 +205,11 @@ class DatasetRegistry:
             raise FileNotFoundError(f"Cannot read file at {ds['root']}")
         
         ds['type'] = ds.get('root','').split('.')[-1].lower()
-        ds["added_at"] = pd.Timestamp.now().isoformat()
+        now = pd.Timestamp.now(tz='UTC').isoformat()
+        previous = data['datasets'].get(ds_id, {})
+        ds['created_at'] = previous.get('created_at') or previous.get('added_at') or now
+        ds['updated_at'] = now
+        ds['added_at'] = previous.get('added_at') or now
         
         # 覆盖或新增
         datasets = data.get("datasets",{})

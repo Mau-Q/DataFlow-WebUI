@@ -208,7 +208,7 @@ class DatasetDatabase:
                     continue
                 if not rows or any(not isinstance(row,dict) or set(row)-{'source','source_name','material_id'}
                                    or not isinstance(row.get('source'),str)
-                                   or Path(row['source']).suffix.lower() not in {'.pdf',*IMAGE_TYPES} for row in rows):
+                                   or Path(row['source']).suffix.lower() not in {'.pdf', '.txt', '.md', '.json', '.jsonl', '.csv', '.parquet', *IMAGE_TYPES} for row in rows):
                     continue
                 for i,row in enumerate(rows):
                     mid = row.get('material_id')

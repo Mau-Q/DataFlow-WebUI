@@ -208,3 +208,28 @@ def test_invalid_dpo_import_preserves_draft(setup, row):
     with pytest.raises(LibraryError, match='DPO'):
         lib.import_rows(created['id'], 'bad.jsonl', _json_bytes(row) + b'\n', {})
     assert lib.get_draft(created['id'])['row_count'] == 0
+
+
+def test_catalog_latest_release_tracks_versions_without_marking_draft_published(setup, monkeypatch):
+    lib, life = setup
+    did = draft(lib, [text_row()])
+    other = draft(lib, [text_row('other dataset')])
+    monkeypatch.setattr(container, 'data_library', lib)
+    app = FastAPI(); app.include_router(data_library.router, prefix='/api/v1/library')
+    with TestClient(app) as client:
+        def summary(record_id):
+            return next(r for r in client.get('/api/v1/library/drafts').json()['data'] if r['id'] == record_id)
+        assert summary(did)['latest_release_version'] is None
+        life.publish(other)
+        assert summary(did)['latest_release_version'] is None
+        life.publish(did)
+        assert summary(did)['latest_release_version'] == 1
+        sid = lib.get_draft(did)['sample_ids'][0]
+        life.edit(did, sid, text_row('edited after publication'))
+        row = summary(did)
+        assert row['status'] == 'draft' and row['latest_release_version'] == 1
+        assert 'rows' not in row
+        assert row['updated_at'] == lib.get_draft(did)['updated_at']
+        life.publish(did)
+        assert summary(did)['latest_release_version'] == 2
+        assert summary(other)['latest_release_version'] == 1

@@ -9,21 +9,29 @@
         <section v-if="!detailId && (records.length || loading)" class="dataset-catalog">
             <div class="list-toolbar"><input v-model="search" aria-label="搜索数据集" placeholder="搜索数据集名称" type="search" /><span>{{ filtered.length }} 个数据集</span></div>
             <div class="table-scroll"><table class="dataset-table">
-                <thead><tr><th scope="col">数据集名称</th><th scope="col">类型</th><th scope="col">{{ isSources ? '文件 / 记录数' : '样本数' }}</th><th scope="col"><span class="sr-only">查看</span></th></tr></thead>
-                <tbody><tr v-for="item in filtered" :key="item.id"><td><router-link :to="detailLocation(item.id)" @click="rememberListPosition"><span class="record-icon">{{ isSources ? '▤' : '◫' }}</span>{{ item.name }}</router-link></td><td>{{ isSources ? sourceType(item) : `${modalityLabel(item.modality)} ${(item.training_type || 'sft').toUpperCase()}` }}</td><td>{{ isSources ? sourceCount(item) : `${item.row_count || 0} 条样本` }}</td><td class="open-cell"><router-link :to="detailLocation(item.id)" :aria-label="`查看 ${item.name}`" @click="rememberListPosition">查看 →</router-link></td></tr></tbody>
+                <thead><tr><th scope="col">数据集名称</th><th scope="col">{{ isSources ? '数据形式' : '数据类型' }}</th><th scope="col">{{ isSources ? '数量' : '样本数' }}</th><th v-if="!isSources" scope="col">发布版本</th><th scope="col">更新时间</th><th scope="col"><span class="sr-only">操作</span></th></tr></thead>
+                <tbody><tr v-for="item in filtered" :key="item.id">
+                    <td><router-link :to="detailLocation(item.id)" @click="rememberListPosition"><span class="record-icon" aria-hidden="true">{{ isSources ? '▤' : '◫' }}</span>{{ item.name }}</router-link></td>
+                    <td>{{ isSources ? sourceType(item) : `${modalityLabel(item.modality)} ${(item.training_type || 'sft').toUpperCase()}` }}</td>
+                    <td>{{ isSources ? sourceCount(item) : `${(item.row_count || 0).toLocaleString('zh-CN')} 条` }}</td>
+                    <td v-if="!isSources">{{ releaseLabel(item) }}</td>
+                    <td class="time-cell" :title="timeTitle(item)">{{ formatTime(item.updated_at) }}</td>
+                    <td class="open-cell"><router-link :to="detailLocation(item.id)" :aria-label="`查看 ${item.name}`" @click="rememberListPosition">查看 →</router-link></td>
+                </tr></tbody>
             </table></div>
             <p v-if="!filtered.length" class="empty-small">{{ loading ? '正在加载…' : '没有匹配的数据集' }}</p>
         </section>
         <div v-else-if="detailId" class="dataset-detail">
             <section class="detail" v-if="selected && !loading">
-                <div class="detail-heading"><div><h2>{{ selected.name }}</h2><p>{{ isSources ? `${selected.num_samples || 0} ${hasSourceFiles ? '个文件' : '条记录'} · ${fileType}` : `${modalityLabel(selected.modality)} · ${(selected.training_type || 'sft').toUpperCase()} · ${selected.row_count} 条` }}</p></div><button v-if="!isSources" @click="openImport">导入数据</button></div>
+                <div class="detail-heading"><div><h2>{{ selected.name }}</h2><p>{{ isSources ? `${sourceType(selected)} · ${sourceCount(selected)}` : `${modalityLabel(selected.modality)} · ${(selected.training_type || 'sft').toUpperCase()} · ${selected.row_count} 条` }}</p></div><button v-if="!isSources" @click="openImport">导入数据</button></div>
                 <template v-if="isSources && hasSourceFiles">
                     <div class="source-layout">
                         <div class="file-list"><button v-for="(row, i) in sourceRows" :key="i" :class="{ active: sourceIndex === i }" @click="sourceIndex = i"><span>{{ offset + i + 1 }}</span><strong :title="row.source_name || row.source">{{ sourceName(row) }}</strong></button></div>
                         <div class="file-preview">
                             <div class="preview-heading"><span>{{ sourceName(sourceRows[sourceIndex]) }}</span><a :href="sourceFileUrl" target="_blank" rel="noopener">打开原文件 ↗</a></div>
                             <img v-if="isImage(sourceRows[sourceIndex])" :src="sourceFileUrl" :alt="sourceName(sourceRows[sourceIndex])" class="image-preview" />
-                            <object v-else :key="sourceFileUrl" :data="`${sourceFileUrl}#view=FitH&zoom=page-width&pagemode=none&navpanes=0`" type="application/pdf" class="pdf-preview"><p>无法显示此文件，请点击上方链接检查原文件。</p></object>
+                            <object v-else-if="isPdf(sourceRows[sourceIndex])" :key="sourceFileUrl" :data="`${sourceFileUrl}#view=FitH&zoom=page-width&pagemode=none&navpanes=0`" type="application/pdf" class="pdf-preview"><p>无法显示此文件，请点击上方链接检查原文件。</p></object>
+                            <div v-else class="member-preview"><p v-if="memberLoading">正在加载文件内容…</p><p v-else-if="memberError" role="alert">{{ memberError }}</p><template v-else><p class="help">{{ isText(sourceRows[sourceIndex]) ? '文本内容' : '前 20 条记录；完整内容可打开原文件查看' }}</p><pre v-if="isText(sourceRows[sourceIndex])">{{ memberRows[0]?.text || '' }}</pre><div v-else v-for="(row, index) in memberRows" :key="index" class="member-row"><strong>记录 {{ index + 1 }}</strong><dl><template v-for="(value, key) in row" :key="key"><dt>{{ key }}</dt><dd>{{ displayValue(value) }}</dd></template></dl></div></template></div>
                         </div>
                     </div>
                 </template>
@@ -62,7 +70,32 @@
                         <button :disabled="busy">保存文件信息</button>
                     </form>
                 </details>
-                <details class="advanced"><summary>数据集详情</summary><dl><dt>ID</dt><dd>{{ selected.id }}</dd><dt>字段</dt><dd>{{ (selected.fields || Object.keys(sourceRows[0] || {})).join(' · ') }}</dd><template v-if="selected.root"><dt>位置</dt><dd>{{ selected.root }}</dd></template><template v-if="selected.hash"><dt>哈希</dt><dd>{{ selected.hash }}</dd></template></dl><p v-if="selected.description">{{ selected.description }}</p><ul v-if="!isSources"><li v-for="(record, i) in selected.imports" :key="i">{{ record.filename }}：新增 {{ record.added }} 条，跳过 {{ record.duplicates_skipped }} 条</li></ul></details>
+                <details class="advanced"><summary>数据集详情</summary>
+                    <h3>基本信息</h3><dl>
+                        <dt>名称</dt><dd>{{ selected.name }}</dd>
+                        <dt>描述</dt><dd>{{ selected.description || selected.meta?.description || '未填写' }}</dd>
+                        <template v-if="isSources"><dt>数据形式</dt><dd>{{ sourceType(selected) }}</dd><dt>数量</dt><dd>{{ sourceCount(selected) }}</dd></template>
+                        <template v-else><dt>模态</dt><dd>{{ modalityLabel(selected.modality) }}</dd><dt>训练类型</dt><dd>{{ (selected.training_type || 'sft').toUpperCase() }}</dd><dt>样本数</dt><dd>{{ selected.row_count }} 条</dd></template>
+                        <dt>创建时间</dt><dd>{{ formatTime(selected.created_at, true) }}</dd>
+                        <dt>更新时间</dt><dd>{{ formatTime(selected.updated_at, true) }}</dd>
+                        <template v-if="selected.added_at"><dt>登记时间</dt><dd>{{ formatTime(selected.added_at, true) }}</dd></template>
+                    </dl>
+                    <h3>结构与来源</h3><dl>
+                        <dt>字段</dt><dd>{{ detailFields.join(' · ') || '暂无字段' }}</dd>
+                        <template v-if="isSources"><dt>存储格式</dt><dd>{{ (selected.type || '未记录').toUpperCase() }}</dd><dt>登记入口</dt><dd>{{ selected.meta?.import_kind === 'folder' ? '文件夹导入' : selected.pipeline === 'uploaded' ? '文件导入' : selected.pipeline || '未记录' }}</dd><dt>{{ hasSourceFiles && selected.type === 'jsonl' ? '文件清单大小' : '文件大小' }}</dt><dd>{{ formatBytes(selected.file_size) }}</dd></template>
+                        <template v-else><dt>样本结构</dt><dd>{{ selected.training_type === 'dpo' ? '共同输入 prompt · 优选回答 chosen · 非优选回答 rejected' : detailFields.includes('messages') ? '对话 messages（含角色与内容）' : '指令 instruction · 上下文 input · 回答 output' }}</dd><dt>来源任务</dt><dd><template v-if="sourceTaskIds.length"><span v-for="id in sourceTaskIds" :key="id">{{ id }} </span></template><template v-else>未记录</template></dd><template v-if="selected.parent_release"><dt>源发布版本</dt><dd>{{ selected.parent_release }}</dd></template><dt>图片关联</dt><dd>{{ Object.keys(selected.media_bindings || {}).length }} 个引用</dd></template>
+                    </dl>
+                    <template v-if="!isSources && selected.imports?.length"><h3>导入记录</h3><ul class="import-records"><li v-for="(record, i) in selected.imports" :key="i">{{ record.filename }} · 新增 {{ record.added }} 条 · 跳过重复 {{ record.duplicates_skipped }} 条 · {{ formatTime(record.created_at, true) }}</li></ul></template>
+                    <h3>存储信息</h3><dl><dt>数据集 ID</dt><dd>{{ selected.id }}</dd><template v-if="selected.root"><dt>文件位置</dt><dd>{{ selected.root }}<br /><a :href="`/api/v1/datasets/file_type_sample/${selected.id}`" download>{{ hasSourceFiles && selected.type === 'jsonl' ? '下载文件清单' : '下载原始文件' }}</a></dd></template><template v-if="selected.hash"><dt>文件 MD5</dt><dd>{{ selected.hash }}</dd></template></dl>
+                </details>
+                <details v-if="isSources && sourceRows[sourceIndex]?.material_id" :key="`info-${sourceRows[sourceIndex].material_id}`" class="advanced" @toggle="loadMaterialDetails">
+                    <summary>当前文件属性与来源</summary><dl v-if="materialDetails">
+                        <dt>原文件名</dt><dd>{{ materialDetails.filename }}</dd><dt>文件格式</dt><dd>{{ materialDetails.mime_type }}</dd><dt>文件大小</dt><dd>{{ formatBytes(materialDetails.size_bytes) }}</dd>
+                        <template v-if="materialDetails.pages != null"><dt>页数</dt><dd>{{ materialDetails.pages }}</dd></template><template v-if="materialDetails.width"><dt>图片尺寸</dt><dd>{{ materialDetails.width }} × {{ materialDetails.height }}</dd></template>
+                        <dt>材料关系</dt><dd>{{ relationLabel(materialDetails.relation) }}</dd><dt>来源</dt><dd>{{ materialDetails.source || materialDetails.registered_path || '未记录' }}</dd><dt>说明</dt><dd>{{ materialDetails.description || '未填写' }}</dd>
+                        <dt>创建时间</dt><dd>{{ formatTime(materialDetails.created_at, true) }}</dd><dt>更新时间</dt><dd>{{ formatTime(materialDetails.updated_at, true) }}</dd><dt>材料 ID</dt><dd>{{ materialDetails.id }}</dd><dt>父材料 ID</dt><dd>{{ materialDetails.parent_material_id || '无' }}</dd><dt>受管文件名</dt><dd>{{ materialDetails.blob_name }}</dd><dt>SHA-256</dt><dd>{{ materialDetails.sha256 }}</dd>
+                    </dl>
+                </details>
                 <dataset-lifecycle v-if="!isSources" :key="selected.id" :draft="selected" @updated="reload" @forked="draftForked" />
             </section>
             <section v-else class="empty"><h2>{{ loading ? '正在加载数据集…' : '无法打开数据集' }}</h2><p v-if="!loading">请返回列表选择数据集，或刷新重试。</p><button v-if="!loading" @click="backToList">返回列表</button></section>
@@ -99,40 +132,55 @@ import { mapState } from 'pinia'
 import { useTheme } from '@/stores/theme'
 import DatasetLifecycle from '@/components/manage/library/DatasetLifecycle.vue'
 import SourceDatasetImport from '@/components/manage/library/SourceDatasetImport.vue'
+import { sourceType, sourceCount, recordTime, recentFirst, formatTime, releaseLabel } from './catalog.js'
 export default {
     name: 'DatasetLibrary',
     components: { SourceDatasetImport, DatasetLifecycle },
     props: { mode: { type: String, required: true } },
-    data: () => ({ records: [], materials: [], selected: null, sourceRows: [], sourceIndex: 0, offset: 0, search: '', busy: false, loading: false, error: '', notice: '', dialogError: '', showCreate: false, showImport: false, mediaBindings: '{}', mediaRefs: [], mediaChoices: {}, draftForm: { name: '', modality: 'text', training_type: 'sft', description: '' }, loadVersion: 0, pendingReload: false, fileMetadata: null, listPositions: {}, listSearches: {}, importAfterLoad: false }),
+    data: () => ({ records: [], materials: [], selected: null, sourceRows: [], sourceIndex: 0, offset: 0, search: '', busy: false, loading: false, error: '', notice: '', dialogError: '', showCreate: false, showImport: false, mediaBindings: '{}', mediaRefs: [], mediaChoices: {}, draftForm: { name: '', modality: 'text', training_type: 'sft', description: '' }, loadVersion: 0, pendingReload: false, fileMetadata: null, materialDetails: null, memberRows: [], memberLoading: false, memberError: '', memberVersion: 0, listPositions: {}, listSearches: {}, importAfterLoad: false }),
     computed: {
         ...mapState(useTheme, ['theme']),
         detailId() { return typeof this.$route.query.dataset === 'string' ? this.$route.query.dataset : '' },
         isSources() { return this.mode === 'materials' },
-        filtered() { return this.records.filter(r => r.name.toLowerCase().includes(this.search.toLowerCase())) },
+        filtered() { return recentFirst(this.records.filter(r => r.name.toLowerCase().includes(this.search.toLowerCase()))) },
+        detailFields() { return this.selected?.fields || [...new Set(this.sourceRows.flatMap(row => row && typeof row === 'object' ? Object.keys(row) : []))] },
+        sourceTaskIds() { return [...new Set(Object.values(this.selected?.sample_sources || {}).flat().map(s => s.task_id).filter(Boolean))] },
         imageMaterials() { return this.materials.filter(m => m.kind === 'image') },
         total() { return this.isSources ? this.selected?.num_samples || 0 : this.selected?.row_count || 0 },
-        hasSourceFiles() { return this.sourceRows.length > 0 && this.sourceRows.every(r => r && typeof r.source === 'string' && /\.(pdf|png|jpe?g|webp|gif|bmp)$/i.test(r.source_name || r.source)) },
+        hasSourceFiles() { return this.sourceRows.length > 0 && this.sourceRows.every(r => r && Object.keys(r).every(k => ['source', 'source_name', 'material_id'].includes(k)) && typeof r.source === 'string' && /\.(pdf|png|jpe?g|webp|gif|bmp|txt|md|json|jsonl|csv|parquet)$/i.test(r.source)) },
         sourceFileUrl() { return `/api/v1/library/inputs/${this.selected.id}/file?row=${this.offset + this.sourceIndex}` },
         sampleRows() { return (this.isSources ? this.sourceRows : this.selected.rows || []).map(row => row && typeof row === 'object' ? row : { value: row }) },
-        fileType() { return this.hasSourceFiles ? 'PDF / 图片' : (this.selected?.type || '').toUpperCase() },
         dialogTitle() { return this.isSources ? '添加原始数据集' : this.showCreate ? '新建生成数据集' : '导入训练数据' }
     },
-    watch: { detailId() { this.loadVersion++; this.selected = null; this.sourceRows = []; this.offset = 0; this.showCreate = false; this.showImport = false; this.dialogError = ''; if (this.detailId) this.$nextTick(() => { if (this.$refs.libraryPane) this.$refs.libraryPane.scrollTop = 0 }); if (this.busy) this.pendingReload = true; else this.reload() }, sourceIndex() { this.fileMetadata = null }, mode(value, previous) { this.listSearches[previous] = this.search; this.loadVersion++; this.selected = null; this.sourceRows = []; this.search = this.listSearches[value] || ''; this.error = ''; this.notice = ''; this.showCreate = false; this.showImport = false; if (this.busy) this.pendingReload = true; else this.reload() } },
+    watch: { detailId() { this.loadVersion++; this.selected = null; this.materialDetails = null; this.sourceRows = []; this.offset = 0; this.showCreate = false; this.showImport = false; this.dialogError = ''; if (this.detailId) this.$nextTick(() => { if (this.$refs.libraryPane) this.$refs.libraryPane.scrollTop = 0 }); if (this.busy) this.pendingReload = true; else this.reload() }, sourceIndex() { this.fileMetadata = null; this.materialDetails = null; this.loadMemberPreview() }, mode(value, previous) { this.listSearches[previous] = this.search; this.loadVersion++; this.selected = null; this.materialDetails = null; this.sourceRows = []; this.search = this.listSearches[value] || ''; this.error = ''; this.notice = ''; this.showCreate = false; this.showImport = false; if (this.busy) this.pendingReload = true; else this.reload() } },
     mounted() { this.reload() },
     activated() { if (!this.loading && !this.busy) this.reload() },
     methods: {
         detailLocation(id) { return { path: this.isSources ? '/m/materials' : '/m/training-datasets', query: { dataset: id } } },
         rememberListPosition() { this.listPositions[this.mode] = this.$refs.libraryPane?.scrollTop || 0 },
         backToList() { this.$router.push({ path: this.isSources ? '/m/materials' : '/m/training-datasets' }) },
-        sourceType(item) { return { pdf: 'PDF', image: '图片', pdf_image: 'PDF / 图片' }[item.content_type] || (item.type || '结构化数据').toUpperCase() },
-        sourceCount(item) { return item.file_count != null ? `${item.file_count} 个文件` : `${item.num_samples || 0} 条记录` },
+        sourceType, sourceCount, recordTime, formatTime, releaseLabel,
+        timeTitle(item) { return item.updated_at ? `更新时间：${formatTime(item.updated_at, true)}` : `未记录更新时间；${item.created_at ? '创建时间' : '登记时间'}：${formatTime(recordTime(item), true)}` },
+        formatBytes(value) { if (value == null) return '未记录'; if (value < 1024) return `${value} B`; if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KiB`; return `${(value / 1024 / 1024).toFixed(1)} MiB` },
+        relationLabel(value) { return { source: '原始材料', page_image: 'PDF 页面图', parsed_image: '解析图片', parsed_table: '表格', parsed_formula: '公式' }[value] || '未填写' },
+        async loadMaterialDetails(event) {
+            if (!event.target.open) return
+            const id = this.sourceRows[this.sourceIndex]?.material_id
+            if (!id) return
+            await this.action(async () => {
+                const record = await this.request('get', `/library/materials/${id}`)
+                if (id === this.sourceRows[this.sourceIndex]?.material_id) this.materialDetails = record
+            })
+        },
         sampleExcerpt(row) { const message = Array.isArray(row.messages) ? row.messages.find(m => m.role === 'user') : null; const text = message ? this.messageText(message.content) : row.prompt || row.instruction || row.question || Object.values(row).map(this.displayValue).join(' · '); return String(text || '查看样本内容').replace(/\s+/g, ' ').slice(0, 140) },
         async draftForked(draft) { await this.$router.push(this.detailLocation(draft.id)) },
         modalityLabel(value) { return value === 'image_text' ? '图文' : '文本' },
         roleLabel(role) { return { user: '用户', assistant: '回答', system: '系统', tool: '工具' }[role] || role },
         messageText(content) { return typeof content === 'string' ? content : (content || []).filter(b => b.type === 'text').map(b => b.text).join('\n') },
         displayValue(value) { return typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value ?? '') },
-        sourceName(row) { return (row?.source_name || row?.source || '').split(/[\\/]/).pop().replace(/^\d+_/, '').replace(/_/g, ' ') },
+        sourceName(row) { return row?.source_name || (row?.source || '').split(/[\\/]/).pop() || '' },
+        isPdf(row) { return /\.pdf$/i.test(row?.source || '') },
+        isText(row) { return /\.(txt|md)$/i.test(row?.source || '') },
         isImage(row) { return /\.(png|jpe?g|webp|gif|bmp)$/i.test(row?.source_name || row?.source || '') },
         materialUrl(id) { return `/api/v1/library/materials/${id}/file` },
         async request(method, path, data) { const r = await axios({ method, url: `/api/v1${path}`, data }); if (!r.data.success) throw new Error(r.data.message); return r.data.data },
@@ -146,12 +194,24 @@ export default {
                 if (!selected) throw new Error('未找到此数据集，请返回列表重新选择')
                 const rows = await this.request('get', `/library/inputs/${id}/preview?offset=${this.offset}&limit=20`)
                 if (version !== this.loadVersion) return
-                this.selected = selected; this.sourceRows = rows; this.sourceIndex = 0
+                this.selected = selected; this.sourceRows = rows; this.sourceIndex = 0; await this.loadMemberPreview()
             } else {
                 const selected = await this.request('get', `/library/drafts/${id}?offset=${this.offset}`)
                 if (version !== this.loadVersion) return
                 this.selected = selected
             }
+        },
+        async loadMemberPreview() {
+            const version = ++this.memberVersion
+            this.memberRows = []; this.memberError = ''; this.memberLoading = false
+            const row = this.sourceRows[this.sourceIndex]
+            if (!this.isSources || !this.selected || !this.hasSourceFiles || this.isImage(row) || this.isPdf(row)) return
+            this.memberLoading = true
+            try {
+                const rows = await this.request('get', `/library/inputs/${this.selected.id}/member-preview?row=${this.offset + this.sourceIndex}`)
+                if (version === this.memberVersion) this.memberRows = rows
+            } catch (e) { if (version === this.memberVersion) this.memberError = e.response?.data?.message || e.message }
+            finally { if (version === this.memberVersion) this.memberLoading = false }
         },
         page(delta) { this.action(async () => { this.offset += delta; await this.loadSelected(this.selected.id) }) },
         async loadFileMetadata(event) {
@@ -163,11 +223,11 @@ export default {
                 this.materials = await this.request('get', '/library/materials')
             })
         },
-        saveFileMetadata() { this.action(async () => { await this.request('put', `/library/materials/${this.sourceRows[this.sourceIndex].material_id}`, this.fileMetadata); this.notice = '文件信息已保存' }) },
+        saveFileMetadata() { this.action(async () => { this.materialDetails = await this.request('put', `/library/materials/${this.sourceRows[this.sourceIndex].material_id}`, this.fileMetadata); this.notice = '文件信息已保存' }) },
         openImport() { this.dialogError = ''; this.mediaRefs = []; this.mediaChoices = {}; this.mediaBindings = '{}'; this.showCreate = false; this.showImport = true },
         openCreate() { this.dialogError = ''; this.showImport = false; this.showCreate = true },
         closeDialog() { if (this.busy) return; this.showCreate = false; this.showImport = false; this.dialogError = '' },
-        async sourceCreated(record) { this.showCreate = false; this.offset = 0; await this.action(async () => { await this.loadLists(); await this.$router.push(this.detailLocation(record.id)); this.notice = `已添加「${record.name}」` }) },
+        async sourceCreated(record, result = {}) { this.showCreate = false; this.offset = 0; await this.action(async () => { await this.loadLists(); await this.$router.push(this.detailLocation(record.id)); this.notice = `已添加「${record.name}」${result.skipped?.length ? `，跳过 ${result.skipped.length} 个隐藏或不支持的文件` : ''}` }) },
         createDraft() { this.action(async () => { const saved = await this.request('post', '/library/drafts', this.draftForm); this.showCreate = false; this.offset = 0; this.draftForm.name = ''; await this.loadLists(); this.importAfterLoad = true; await this.$router.push(this.detailLocation(saved.id)) }) },
         async inspectMedia(event) {
             this.dialogError = ''; this.mediaRefs = []; this.mediaChoices = {}; this.mediaBindings = '{}'
@@ -203,9 +263,10 @@ export default {
 .library { container: library / inline-size; flex: 1; min-width: 0; height: 100%; overflow: auto; box-sizing: border-box; padding: 28px; color: #25334c; background: #f7f8fb; font-size: 14px; }
 header, .detail-heading, .toolbar, .dialog-heading, .actions, .preview-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; } header { margin-bottom: 24px; flex-wrap: wrap; } header > div:first-child { min-width: 0; } .toolbar { flex-shrink: 0; flex-wrap: wrap; } h1 { margin: 0 0 8px; font-size: 26px; } h2 { margin: 0 0 8px; font-size: 18px; } p { margin: 0; line-height: 1.7; } header p, .detail-heading p { color: #78849a; font-size: 13px; } .count { font-size: 14px; background: #e9edf6; padding: 3px 9px; border-radius: 20px; vertical-align: middle; font-weight: normal; }
 button { font: inherit; cursor: pointer; border: 1px solid #d9dfeb; border-radius: 8px; padding: 9px 16px; background: #fff; color: inherit; } button:hover { border-color: #6877dd; } button:disabled { opacity: .5; cursor: default; } button.primary { color: white; background: #4e5bd5; border-color: #4e5bd5; } input, select, textarea { display: block; box-sizing: border-box; width: 100%; font: inherit; color: inherit; background: transparent; border: 1px solid #d9dfeb; border-radius: 8px; padding: 10px 12px; } input:focus, select:focus, textarea:focus { outline: 2px solid #9aa8f6; outline-offset: 1px; }
+.member-preview { padding:18px; max-height:650px; overflow:auto; }.member-preview .help { margin:0 0 12px; }.member-row { border-bottom:1px solid #e2e7f0; padding:12px 0; font-size:12px; }
 .record-icon { font-size:20px; color:#6978d0; }
 .detail, .empty { background: white; border: 1px solid #e2e7f0; border-radius: 12px; padding: 24px; min-width: 0; } .detail-heading { margin-bottom: 24px; } .source-layout { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 18px; } .file-list { max-height: 680px; overflow: auto; } .file-list button { display: flex; gap: 9px; width: 100%; padding: 11px 8px; text-align: left; border: 0; border-radius: 6px; background: transparent; margin-bottom: 4px; } .file-list span { font-size: 11px; opacity: .5; padding-top: 3px; } .file-list strong { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: 12px; line-height: 1.6; font-weight: 500; overflow-wrap: anywhere; } .file-list .active { color: #4e5bd5; background: #f0f2ff; } .file-preview { min-width: 0; border: 1px solid #e5e8ef; border-radius: 8px; overflow: hidden; } .preview-heading { padding: 12px; font-size: 12px; border-bottom: 1px solid #e5e8ef; } .preview-heading span { min-width: 0; overflow-wrap: anywhere; } .preview-heading a { flex-shrink: 0; } a { color: #4e5bd5; white-space: nowrap; text-decoration: none; } .pdf-preview { display: block; width: 100%; height: clamp(420px, calc(100dvh - 260px), 840px); border: 0; } .image-preview { display: block; max-width: 100%; max-height: 620px; margin: 20px auto; object-fit: contain; }
-.sample { border: 1px solid #e8ecf3; border-radius: 10px; padding: 18px; margin: 14px 0; } .sample-heading { font-size: 11px; color: #8b95a8; margin-bottom: 16px; } .message { margin-bottom: 14px; } .field-label { display: block; color: #748098; font-size: 12px; margin-bottom: 6px; } .message p, dd { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.8; } .sample-media img { max-width: 260px; max-height: 200px; margin: 10px; } details { font-size: 12px; color: #7a869b; } summary { cursor: pointer; padding: 9px 0; } .advanced { border-top: 1px solid #edf0f5; margin-top: 24px; padding-top: 12px; } pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #f7f8fb; padding: 14px; line-height: 1.7; max-height: 400px; overflow: auto; } dl { display: grid; grid-template-columns: 65px minmax(0, 1fr); gap: 10px; margin: 16px 0; } dd { margin: 0; } dt { color: #7a869b; } .pagination { display: flex; justify-content: center; align-items: center; gap: 16px; padding-top: 14px; font-size: 12px; }
+.sample { border: 1px solid #e8ecf3; border-radius: 10px; padding: 18px; margin: 14px 0; } .sample-heading { font-size: 11px; color: #8b95a8; margin-bottom: 16px; } .message { margin-bottom: 14px; } .field-label { display: block; color: #748098; font-size: 12px; margin-bottom: 6px; } .message p, dd { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.8; } .sample-media img { max-width: 260px; max-height: 200px; margin: 10px; } details { font-size: 12px; color: #7a869b; } summary { cursor: pointer; padding: 9px 0; } .advanced { border-top: 1px solid #edf0f5; margin-top: 24px; padding-top: 12px; } pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #f7f8fb; padding: 14px; line-height: 1.7; max-height: 400px; overflow: auto; } dl { display: grid; grid-template-columns: 100px minmax(0, 1fr); gap: 10px; margin: 16px 0; } dd { margin: 0; } dt { color: #7a869b; } .pagination { display: flex; justify-content: center; align-items: center; gap: 16px; padding-top: 14px; font-size: 12px; }
 .notice { padding: 12px 16px; border-radius: 8px; background: #e9f4ed; color: #306448; margin-bottom: 18px; } .error { color: #ae342b; background: #fff0ed; padding: 12px; border-radius: 7px; } .empty { text-align: center; padding: 80px 24px; } .full-empty { margin-top: 80px; border: 0; background: transparent; } .empty p { color: #8993a5; margin: 12px 0 24px; } .empty-icon { font-size: 46px; color: #a4aec4; margin-bottom: 20px; } .empty-small { padding: 28px 8px; color: #8993a5; font-size: 13px; }
 .file-metadata { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 12px 0; }
 .dialog-backdrop { position: fixed; inset: 0; z-index: 1000; background: #17213955; display: flex; justify-content: center; align-items: center; padding: 24px; } .dialog { width: 510px; max-width: 100%; max-height: 85vh; overflow: auto; background: white; color: #25334c; border-radius: 14px; box-shadow: 0 18px 70px #0003; } .dialog-heading { padding: 20px 24px 0; } .dialog-heading h2 { margin: 0; } .dialog-heading button { border: 0; font-size: 22px; padding: 4px 10px; } .dialog-body { padding: 24px; } label { display: block; line-height: 2; margin-bottom: 18px; } .actions { justify-content: flex-end; margin-top: 24px; } .help { color: #8993a5; font-size: 12px; margin: -6px 0 20px; }
@@ -237,7 +298,11 @@ button { font: inherit; cursor: pointer; border: 1px solid #d9dfeb; border-radiu
 .dataset-table { width:100%; border-collapse:collapse; text-align:left; }
 .dataset-table th { padding:14px 22px; color:#78849a; font-weight:500; font-size:12px; background:#fafbfe; }
 .dataset-table td { padding:22px; border-top:1px solid #edf0f5; }
-.dataset-table td:first-child { width:60%; }
+.dataset-table td:first-child { width:44%; min-width:220px; }
+.dataset-table th:not(:first-child), .dataset-table td:not(:first-child) { white-space:nowrap; }
+.time-cell { font-size:12px; color:#78849a; font-variant-numeric:tabular-nums; }
+.advanced h3 { font-size:13px; color:inherit; margin:20px 0 8px; }
+.import-records { padding-left:18px; line-height:2; overflow-wrap:anywhere; }
 .dataset-table td:first-child a { display:flex; align-items:center; gap:12px; white-space:normal; overflow-wrap:anywhere; color:inherit; font-weight:600; }
 .dataset-table tr:hover td { background:#f7f8fd; }
 .dataset-table .open-cell { text-align:right; }
@@ -255,5 +320,5 @@ button { font: inherit; cursor: pointer; border: 1px solid #d9dfeb; border-radiu
 .dark .dataset-table th { background:#252a35; }
 .dark .dataset-table td, .dark .list-toolbar, .dark .sample-body { border-color:#424b5b; }
 .dark .dataset-table tr:hover td { background:#343c4b; }
-@container library (max-width:800px) { .dataset-table th,.dataset-table td { padding:14px 12px; } .dataset-table td:first-child { width:50%; } .list-toolbar { padding:14px 12px; } .sample-heading { gap:10px; padding:14px; } }
+@container library (max-width:800px) { .dataset-table th,.dataset-table td { padding:14px 12px; } .dataset-table td:first-child { width:36%; min-width:180px; } .list-toolbar { padding:14px 12px; } .sample-heading { gap:10px; padding:14px; } }
 </style>

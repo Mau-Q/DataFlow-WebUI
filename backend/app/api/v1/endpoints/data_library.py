@@ -90,6 +90,32 @@ def upload_source_dataset(files: list[UploadFile] = File(...), name: str = Form(
     return ok(_call(service.upload, files, name))
 
 
+@router.post('/inputs/choose-local')
+def choose_local_source():
+    from app.services.local_source_picker import LocalSourcePicker
+    return ok(_call(LocalSourcePicker(container.data_library, container.dataset_registry).choose))
+
+
+@router.post('/inputs/import-local')
+def import_local_source(selection_id: str = Form(...), name: str = Form(...)):
+    from app.services.local_source_picker import LocalSourcePicker
+    return ok(_call(LocalSourcePicker(container.data_library, container.dataset_registry).import_selection, selection_id, name))
+
+
+@router.post('/inputs/upload-folder')
+def upload_source_folder(files: list[UploadFile] = File(...), name: str = Form(...), from_directory: bool = Form(True)):
+    from app.services.source_datasets import SourceDatasets
+    service = SourceDatasets(container.data_library, container.dataset_registry)
+    return ok(_call(service.upload_folder, files, name, 'folder' if from_directory else 'files'))
+
+
+@router.get('/inputs/{dataset_id}/member-preview')
+def source_member_preview(dataset_id: str, row: int = Query(0, ge=0), offset: int = Query(0, ge=0), limit: int = Query(20, ge=1, le=100)):
+    from app.services.source_datasets import SourceDatasets
+    service = SourceDatasets(container.data_library, container.dataset_registry)
+    return ok(_call(service.member_preview, dataset_id, row, offset, limit))
+
+
 @router.get('/inputs/{dataset_id}/file')
 def source_dataset_file(dataset_id: str, row: int = Query(0, ge=0)):
     from app.services.source_datasets import SourceDatasets

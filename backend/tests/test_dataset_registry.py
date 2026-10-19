@@ -74,8 +74,8 @@ def test_dataset_metadata(test_registry):
         # 验证文件大小大于0（因为我们创建了有内容的临时文件）
         assert dataset['file_size'] > 0
         
-        # 验证条目数为2（因为我们在临时文件中写入了2行）
-        assert dataset['num_samples'] == 2
+        # 表头不计为记录，文件包含 1 条数据。
+        assert dataset['num_samples'] == 1
 
 def test_count_file_entries_function(test_registry):
     """测试_count_file_entries方法对不同类型文件的处理"""
@@ -87,7 +87,7 @@ def test_count_file_entries_function(test_registry):
     try:
         # 测试CSV文件的条目计数
         entries = test_registry._count_file_entries(csv_file)
-        assert entries == 3  # 3行（1个表头+2个数据行）
+        assert entries == 2  # 两条数据，排除表头
     finally:
         # 清理临时文件
         if os.path.exists(csv_file):

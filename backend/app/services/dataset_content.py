@@ -12,7 +12,15 @@ def _file_kind(source):
     if not isinstance(source, str):
         return None
     suffix = Path(source).suffix.lower()
-    return 'pdf' if suffix == '.pdf' else 'image' if suffix in IMAGE_TYPES else None
+    if suffix == '.pdf':
+        return 'pdf'
+    if suffix in IMAGE_TYPES:
+        return 'image'
+    if suffix in {'.txt', '.md'}:
+        return 'text'
+    if suffix in {'.json', '.jsonl', '.csv', '.parquet'}:
+        return 'structured'
+    return None
 
 
 @lru_cache(maxsize=256)
@@ -39,7 +47,8 @@ def _manifest_summary(path, modified_ns, size):
         count += 1
     if not count:
         return None, None
-    return ('pdf_image' if len(kinds) > 1 else next(iter(kinds))), count
+    kind = 'pdf_image' if kinds == {'pdf', 'image'} else 'mixed' if len(kinds) > 1 else next(iter(kinds))
+    return kind, count
 
 
 def annotate_content(record):
@@ -48,7 +57,7 @@ def annotate_content(record):
     try:
         stat = path.stat()
         kind = _file_kind(str(path))
-        if kind:
+        if kind in {'pdf', 'image', 'text'}:
             result.update(content_type=kind, file_count=1)
         elif path.suffix.lower() == '.jsonl':
             kind, count = _manifest_summary(str(path), stat.st_mtime_ns, stat.st_size)

@@ -210,7 +210,14 @@ class DataLibrary:
         return summary
 
     def list_drafts(self):
-        return [self._summary(r) for r in self._list(self.drafts)]
+        # Serialize with dataset mutations while joining versions for the catalog.
+        with dataset_lock(self.root.parent):
+            latest = {}
+            for release in self.db.list('releases'):
+                key = release['draft_id']
+                latest[key] = max(latest.get(key, 0), release['version'])
+            return [dict(self._summary(r), latest_release_version=latest.get(r['id']))
+                    for r in self._list(self.drafts)]
 
     def get_draft(self, record_id, offset=0, limit=20):
         from app.services.training_lifecycle import TrainingLifecycle
