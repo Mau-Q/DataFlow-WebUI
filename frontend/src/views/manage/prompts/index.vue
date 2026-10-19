@@ -2,14 +2,14 @@
     <div class="df-prompts-page" :class="[{ dark: theme === 'dark' }]">
         <!-- Tab 切换 -->
         <div class="prompts-tabs">
-            <div class="prompts-tab" :class="{ active: tab === 'builtin' }" @click="tab = 'builtin'">
-                <i class="ms-Icon ms-Icon--Library" style="margin-right: 6px;"></i>
-                {{ local('Built-in Prompts') }}
-            </div>
             <div class="prompts-tab" :class="{ active: tab === 'user' }" @click="tab = 'user'">
                 <i class="ms-Icon ms-Icon--FavoriteStar" style="margin-right: 6px;"></i>
                 {{ local('My Templates') }}
                 <span v-if="userTemplates.length" class="prompts-tab-count">{{ userTemplates.length }}</span>
+            </div>
+            <div class="prompts-tab" :class="{ active: tab === 'builtin' }" @click="tab = 'builtin'">
+                <i class="ms-Icon ms-Icon--Library" style="margin-right: 6px;"></i>
+                {{ local('Built-in Prompts') }}
             </div>
         </div>
 
@@ -322,7 +322,7 @@ export default {
     data() {
         return {
             // 顶层 Tab
-            tab: 'builtin', // 'builtin' | 'user'
+            tab: 'user', // 'user' | 'builtin'
             // 数据
             operatorMap: {},      // { operatorName: [promptName, ...] }
             promptInfoMap: {},    // { promptName: PromptInfoOut }
