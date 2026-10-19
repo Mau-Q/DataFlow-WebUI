@@ -102,7 +102,7 @@
             <chatPanel></chatPanel>
         </div>
         <page-loading :model-value="!lock.loading" title="Loading..."></page-loading>
-        <datasetPanel v-model="show.dataset" :title="local('Dataset')" @confirm="confirmDataset"></datasetPanel>
+        <datasetPanel v-model="show.dataset" :title="local('原始数据集')" @confirm="confirmDataset"></datasetPanel>
         <operatorPanel v-model="show.operator" :title="local('Operator')"></operatorPanel>
         <fv-right-menu :theme="theme" v-model="show.serving" class="serving-menu" ref="servingMenu"
             :rightMenuWidth="250" :background="theme === 'dark' ? 'rgba(30, 30, 30, 1)' : 'rgba(255, 255, 255, 0.3)'"
@@ -205,7 +205,7 @@ export default {
             value: null,
             options: [
                 {
-                    name: () => this.local('Dataset'),
+                    name: () => this.local('原始数据集'),
                     icon: 'Play',
                     img: databaseIcon,
                     func: () => {

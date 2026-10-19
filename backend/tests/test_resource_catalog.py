@@ -207,3 +207,13 @@ def test_explicit_override_suppresses_default_and_keeps_per_flow_parameters(cata
     assert 'secret-value' not in json.dumps(result)
     builtin_qa = next(r for r in result['resources'] if r['id'] == 'Text2MultiHopQAGeneratorPrompt')
     assert not builtin_qa['personal']  # Only used by the system template.
+
+
+def test_hidden_prompts_leave_registry_and_pipeline_references_intact(catalog, monkeypatch):
+    from app.services import resource_catalog
+    service, own, _, prompt, _ = catalog
+    before = own.store.path.read_bytes()
+    monkeypatch.setattr(resource_catalog, 'visibility_settings', lambda: {'hidden_prompt_ids': [prompt['id']]})
+    assert all(r['id'] != prompt['id'] for r in service.prompts()['resources'])
+    assert own.get(prompt['id']) == prompt
+    assert own.store.path.read_bytes() == before

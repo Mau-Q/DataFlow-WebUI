@@ -2,6 +2,7 @@
 import copy
 from app.core.container import container
 from app.services.builtin_resources import builtin_schemas
+from app.services.dataset_visibility import visibility_settings
 from app.services.resource_store import ResourceStore
 from app.services.user_prompt_registry import _extract_placeholders
 
@@ -203,7 +204,8 @@ class ResourceCatalog:
                             'description': '图片 VQA 流程的内置文本 Prompt；复制后可在图片流程中绑定自己的模板。',
                             'usages': ['图文 SFT'], 'purpose': '生成', 'operators': ['PromptedVQAGenerator'],
                             'template': text, 'variables': _extract_placeholders(text), 'references': [], 'version': 'v1'})
-        return self._finish(records)
+        hidden = set(visibility_settings().get('hidden_prompt_ids', []))
+        return self._finish([r for r in records if r['id'] not in hidden])
 
     def schemas(self):
         records = []
