@@ -32,7 +32,7 @@ class TrainingLifecycle:
         refs = set()
         for i, row in enumerate(rec['rows'], 1):
             try:
-                refs.update(self.lib._validate_row(row, rec['modality']))
+                refs.update(self.lib._validate_row(row, rec['modality'], rec.get('training_type', 'sft')))
             except LibraryError as exc:
                 raise LibraryError(f'第 {i} 条样本: {exc}') from exc
         media = {}
@@ -69,6 +69,8 @@ class TrainingLifecycle:
             raise LibraryError('字段映射需要 instruction/input/output 到源字段名；input 可留空')
         with self.lib._writing():
             rec = self.lib._get('drafts', draft_id)
+            if rec.get('training_type', 'sft') != 'sft':
+                raise LibraryError('instruction/input/output 字段映射仅适用于 SFT')
             self._members(rec)
             for i, row in enumerate(rec['rows'], 1):
                 original = copy.deepcopy(row)
@@ -95,6 +97,8 @@ class TrainingLifecycle:
         key = task['task_id'] + ':' + artifact['id']
         with self.lib._writing():
             rec = self.lib._get('drafts', draft_id)
+            if rec.get('training_type', 'sft') != 'sft':
+                raise LibraryError('当前文本生成产物仅能收集到 SFT 草稿')
             ids = self._members(rec)
             if key in rec.get('collections', []):
                 raise LibraryError('该任务产物已经收集，未重复写入', 409)
@@ -102,7 +106,7 @@ class TrainingLifecycle:
             existing = {_hash(_json_bytes(r)): sid for r, sid in zip(rec['rows'], ids)}
             added = 0
             for index, row in enumerate(rows):
-                self.lib._validate_row(row, rec['modality'])
+                self.lib._validate_row(row, rec['modality'], rec.get('training_type', 'sft'))
                 digest = _hash(_json_bytes(row))
                 sid = existing.get(digest)
                 if sid is None:
@@ -157,7 +161,7 @@ class TrainingLifecycle:
             data = b''.join(_json_bytes(row) + b'\n' for row in rows)
             # Alpaca export is available only when every row has those fields.
             alpaca = None
-            if all(all(isinstance(r.get(k), str) and r[k].strip() for k in ('instruction', 'output')) and isinstance(r.get('input',''), str) for r in rows):
+            if rec['training_type'] == 'sft' and all(all(isinstance(r.get(k), str) and r[k].strip() for k in ('instruction', 'output')) and isinstance(r.get('input',''), str) for r in rows):
                 alpaca = b''.join(_json_bytes({k: row.get(k, '') for k in ('instruction', 'input', 'output')}) + b'\n' for row in rows)
             version = len(self.list_releases(draft_id)) + 1
             rid = f'{draft_id}_v{version}'
@@ -225,7 +229,7 @@ class TrainingLifecycle:
                 if material['sha256'] != item['sha256']:
                     raise LibraryError('原图片不可用，无法建立新草稿', 409)
                 bindings[item['path']] = material_id
-        created = self.lib.create_draft(DraftCreate(name=meta['name'] + ' · 新草稿', modality=meta['modality']))
+        created = self.lib.create_draft(DraftCreate(name=meta['name'] + ' · 新草稿', modality=meta['modality'], training_type=meta.get('training_type', 'sft')))
         with self.lib._writing():
             rec = self.lib._get('drafts', created['id'])
             rec.update(rows=rows, sample_ids=meta['sample_ids'], sample_sources=meta['sample_sources'],

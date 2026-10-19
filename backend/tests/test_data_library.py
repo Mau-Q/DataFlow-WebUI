@@ -171,7 +171,7 @@ def test_api_end_to_end_with_real_envelope(client, library):
     assert imported['success'] and imported['data']['row_count'] == 1
     assert client.get(f'{base}/drafts/{draft["id"]}?limit=1').json()['data']['rows'][0]['output'] == 'hello'
     assert client.get(f'{base}/drafts/{draft["id"]}?limit=0').json()['success'] is False
-    assert not client.post(base + '/drafts', json={'name': 'bad', 'training_type': 'dpo'}).json()['success']
+    assert not client.post(base + '/drafts', json={'name': 'bad', 'training_type': 'unsupported'}).json()['success']
     assert not client.get(base + '/materials/unknown/file').json()['success']
     assert client.get(base + '/materials').json()['data'][0]['group'] == 'research'
 

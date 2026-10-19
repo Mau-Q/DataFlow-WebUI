@@ -2,12 +2,12 @@
   <section class="lifecycle">
     <h3>整理与发布</h3><p v-if="error" role="alert" class="error">{{ error }}</p><p v-if="notice" role="status">{{ notice }}</p>
     <details><summary>编辑或删除当前页样本</summary><label>样本<select v-model.number="index" @change="loadRow"><option v-for="(id,i) in draft.sample_ids || []" :key="id" :value="i">样本 {{ draft.offset+i+1 }} · {{ id.slice(0,16) }}</option></select></label>
-      <template v-if="draft.rows?.[index]"><template v-if="!edited.messages"><label v-for="key in ['instruction','input','output']" :key="key">{{ fieldLabel(key) }}<textarea v-model="edited[key]" rows="3" /></label></template>
+      <template v-if="draft.rows?.[index]"><template v-if="draft.training_type === 'dpo'"><label v-for="key in ['prompt','chosen','rejected']" :key="key">{{ fieldLabel(key) }}<textarea v-model="edited[key]" rows="3" /></label></template><template v-else-if="!edited.messages"><label v-for="key in ['instruction','input','output']" :key="key">{{ fieldLabel(key) }}<textarea v-model="edited[key]" rows="3" /></label></template>
       <label v-else>对话样本<textarea v-model="messageJson" rows="10" /></label><details><summary>来源任务与样本标识</summary><pre>{{ draft.sample_ids?.[index] }}
 {{ JSON.stringify(draft.sample_sources?.[draft.sample_ids?.[index]] || [], null, 2) }}</pre></details>
       <div class="actions"><button :disabled="busy" @click="edit">保存样本</button><button :disabled="busy" @click="remove">删除样本</button></div></template>
     </details>
-    <details><summary>字段映射（应用于整个草稿）</summary><p>将已有字段复制到训练字段，原字段保留。</p><label v-for="target in ['instruction','input','output']" :key="target">{{ fieldLabel(target) }}<select v-model="mapping[target]"><option v-if="target==='input'" value="">空输入</option><option v-for="field in draft.fields" :key="field" :value="field">{{ field }}</option></select></label><button :disabled="busy" @click="mapFields">应用映射</button></details>
+    <details v-if="draft.training_type !== 'dpo'"><summary>字段映射（应用于整个草稿）</summary><p>将已有字段复制到训练字段，原字段保留。</p><label v-for="target in ['instruction','input','output']" :key="target">{{ fieldLabel(target) }}<select v-model="mapping[target]"><option v-if="target==='input'" value="">空输入</option><option v-for="field in draft.fields" :key="field" :value="field">{{ field }}</option></select></label><button :disabled="busy" @click="mapFields">应用映射</button></details>
     <div class="actions"><p>发布会固定当前样本、来源及图片。后续编辑不改变已有版本。</p><button class="primary" :disabled="busy || !draft.row_count" @click="publish">发布新版本</button></div>
     <h3>已发布版本</h3><p v-if="!releases.length">暂无版本。</p><article v-for="r in releases" :key="r.id"><div class="actions"><strong>v{{ r.version }} · {{ r.row_count }} 条</strong><span>{{ new Date(r.created_at).toLocaleString() }}</span></div><div class="actions"><a :href="url(r,'package')" download>下载数据与媒体包</a><a :href="url(r,'jsonl')" download>基础 JSONL</a><a v-if="r.formats.includes('alpaca')" :href="url(r,'alpaca')" download>instruction / input / output</a><button :disabled="busy" @click="fork(r)">从此版本建新草稿</button></div><details><summary>版本内容哈希与媒体清单</summary><pre>{{ JSON.stringify(r,null,2) }}</pre></details></article>
   </section>
@@ -19,7 +19,7 @@ export default{
  data:()=>({index:0,edited:{},messageJson:'',mapping:{instruction:'instruction',input:'input',output:'output'},releases:[],busy:false,error:'',notice:''}),
  watch:{draft:{immediate:true,handler(){this.index=0;this.loadRow();this.loadReleases()}}},
  methods:{
- fieldLabel(k){return {instruction:'指令（instruction）',input:'输入（input）',output:'回答（output）'}[k]},
+ fieldLabel(k){return {instruction:'指令（instruction）',input:'输入（input）',output:'回答（output）',prompt:'问题（prompt）',chosen:'优选回答（chosen）',rejected:'较差回答（rejected）'}[k]},
  async request(method,path,data){const r=await axios({method,url:'/api/v1/generation'+path,data});if(!r.data.success)throw new Error(r.data.message);return r.data.data},
  async action(fn){if(this.busy)return;this.busy=true;this.error='';this.notice='';try{await fn()}catch(e){this.error=e.response?.data?.message||e.message}finally{this.busy=false}},
  loadRow(){this.edited=JSON.parse(JSON.stringify(this.draft.rows?.[this.index]||{}));this.messageJson=JSON.stringify(this.edited,null,2)},

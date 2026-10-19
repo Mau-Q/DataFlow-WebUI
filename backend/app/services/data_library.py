@@ -215,11 +215,16 @@ class DataLibrary:
         from app.services.training_lifecycle import TrainingLifecycle
         return TrainingLifecycle(self).view(record_id, offset, limit)
 
-    def _validate_row(self, row, modality):
+    def _validate_row(self, row, modality, training_type='sft'):
         if not isinstance(row, dict):
             raise LibraryError('每条样本必须是 JSON 对象')
         refs = []
-        if 'messages' in row:
+        if training_type == 'dpo':
+            if not all(isinstance(row.get(key), str) and row[key].strip() for key in ('prompt', 'chosen', 'rejected')):
+                raise LibraryError('DPO 样本需要非空 prompt/chosen/rejected')
+            if row['chosen'].strip() == row['rejected'].strip():
+                raise LibraryError('DPO chosen 与 rejected 不能相同')
+        elif 'messages' in row:
             messages = row['messages']
             if not isinstance(messages, list) or not messages:
                 raise LibraryError('messages 必须是非空数组')
@@ -299,7 +304,7 @@ class DataLibrary:
             refs = set()
             for i, row in enumerate(rows, 1):
                 try:
-                    refs.update(self._validate_row(row, rec['modality']))
+                    refs.update(self._validate_row(row, rec['modality'], rec.get('training_type', 'sft')))
                 except LibraryError as exc:
                     raise LibraryError(f'第 {i} 条样本: {exc}') from exc
             bindings = copy.deepcopy(rec['media_bindings'])

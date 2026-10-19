@@ -16,7 +16,7 @@
         </section>
         <div v-else-if="detailId" class="dataset-detail">
             <section class="detail" v-if="selected && !loading">
-                <div class="detail-heading"><div><h2>{{ selected.name }}</h2><p>{{ isSources ? `${selected.num_samples || 0} ${hasSourceFiles ? '个文件' : '条记录'} · ${fileType}` : `${modalityLabel(selected.modality)} · ${(selected.training_type || 'sft').toUpperCase()} · ${selected.row_count} 条` }}</p></div><button v-if="!isSources && !selected.is_example" @click="openImport">导入数据</button></div>
+                <div class="detail-heading"><div><h2>{{ selected.name }}</h2><p>{{ isSources ? `${selected.num_samples || 0} ${hasSourceFiles ? '个文件' : '条记录'} · ${fileType}` : `${modalityLabel(selected.modality)} · ${(selected.training_type || 'sft').toUpperCase()} · ${selected.row_count} 条` }}</p></div><button v-if="!isSources" @click="openImport">导入数据</button></div>
                 <template v-if="isSources && hasSourceFiles">
                     <div class="source-layout">
                         <div class="file-list"><button v-for="(row, i) in sourceRows" :key="i" :class="{ active: sourceIndex === i }" @click="sourceIndex = i"><span>{{ offset + i + 1 }}</span><strong :title="row.source_name || row.source">{{ sourceName(row) }}</strong></button></div>
@@ -34,7 +34,6 @@
                         <div class="sample-body">
                         <template v-if="selected.training_type === 'dpo'">
                             <div class="message"><span class="field-label">问题 · prompt</span><p>{{ row.prompt }}</p></div>
-                            <div v-if="row.images?.length" class="sample-media"><img v-for="src in row.images" :key="src" :src="src" alt="DPO 示例图片：红色正方形、蓝色圆形、绿色三角形" /></div>
                             <div class="message preference chosen"><span class="field-label">优选回答 · chosen</span><p>{{ row.chosen }}</p></div>
                             <div class="message preference rejected"><span class="field-label">较差回答 · rejected</span><p>{{ row.rejected }}</p></div>
                         </template>
@@ -64,7 +63,7 @@
                     </form>
                 </details>
                 <details class="advanced"><summary>数据集详情</summary><dl><dt>ID</dt><dd>{{ selected.id }}</dd><dt>字段</dt><dd>{{ (selected.fields || Object.keys(sourceRows[0] || {})).join(' · ') }}</dd><template v-if="selected.root"><dt>位置</dt><dd>{{ selected.root }}</dd></template><template v-if="selected.hash"><dt>哈希</dt><dd>{{ selected.hash }}</dd></template></dl><p v-if="selected.description">{{ selected.description }}</p><ul v-if="!isSources"><li v-for="(record, i) in selected.imports" :key="i">{{ record.filename }}：新增 {{ record.added }} 条，跳过 {{ record.duplicates_skipped }} 条</li></ul></details>
-                <dataset-lifecycle v-if="!isSources && !selected.is_example" :key="selected.id" :draft="selected" @updated="reload" @forked="draftForked" />
+                <dataset-lifecycle v-if="!isSources" :key="selected.id" :draft="selected" @updated="reload" @forked="draftForked" />
             </section>
             <section v-else class="empty"><h2>{{ loading ? '正在加载数据集…' : '无法打开数据集' }}</h2><p v-if="!loading">请返回列表选择数据集，或刷新重试。</p><button v-if="!loading" @click="backToList">返回列表</button></section>
         </div>
@@ -77,7 +76,8 @@
                 <source-dataset-import v-if="isSources" @cancel="closeDialog" @created="sourceCreated" />
                 <form v-else-if="showCreate" @submit.prevent="createDraft" class="dialog-body">
                     <label>名称<input v-model="draftForm.name" required maxlength="240" placeholder="数据集名称" /></label>
-                    <label>数据类型<select v-model="draftForm.modality"><option value="text">文本 SFT</option><option value="image_text">图文 SFT</option></select></label>
+                    <label>数据类型<select v-model="draftForm.modality"><option value="text">文本</option><option value="image_text">图文</option></select></label>
+                    <label>训练类型<select v-model="draftForm.training_type"><option value="sft">SFT</option><option value="dpo">DPO</option></select></label>
                     <div class="actions"><button type="button" @click="closeDialog">取消</button><button class="primary" :disabled="busy">创建</button></div>
                 </form>
                 <form v-else @submit.prevent="importRows" class="dialog-body">
@@ -95,7 +95,6 @@
 </template>
 <script>
 import axios from 'axios'
-import { DPO_EXAMPLES } from '@/examples/dpoExamples'
 import { mapState } from 'pinia'
 import { useTheme } from '@/stores/theme'
 import DatasetLifecycle from '@/components/manage/library/DatasetLifecycle.vue'
@@ -138,12 +137,10 @@ export default {
         materialUrl(id) { return `/api/v1/library/materials/${id}/file` },
         async request(method, path, data) { const r = await axios({ method, url: `/api/v1${path}`, data }); if (!r.data.success) throw new Error(r.data.message); return r.data.data },
         async action(fn) { if (this.busy) return; this.busy = true; this.error = ''; this.notice = ''; try { await fn() } catch (e) { if (this.showCreate || this.showImport) this.dialogError = e.response?.data?.message || e.message; else this.error = e.response?.data?.message || e.message } finally { this.busy = false; if (this.pendingReload) { this.pendingReload = false; this.reload() } } },
-        async loadLists() { const mode = this.mode; const records = await this.request('get', this.isSources ? '/datasets/?visible_only=true' : '/library/drafts?visible_only=true'); if (mode === this.mode) this.records = this.isSources ? records : [...records, ...DPO_EXAMPLES] },
+        async loadLists() { const mode = this.mode; const records = await this.request('get', this.isSources ? '/datasets/?visible_only=true' : '/library/drafts?visible_only=true'); if (mode === this.mode) this.records = records },
         async reload() { this.loading = true; await this.action(async () => { await this.loadLists(); const id = this.detailId; if (id) await this.loadSelected(id); else this.selected = null }); this.loading = false; if (this.importAfterLoad && this.selected) { this.importAfterLoad = false; this.openImport() } if (!this.detailId) this.$nextTick(() => { if (this.$refs.libraryPane) this.$refs.libraryPane.scrollTop = this.listPositions[this.mode] || 0 }) },
         async loadSelected(id) {
             const version = ++this.loadVersion
-            const example = !this.isSources && DPO_EXAMPLES.find(record => record.id === id)
-            if (example) { this.selected = JSON.parse(JSON.stringify(example)); return }
             if (this.isSources) {
                 const selected = this.records.find(r => r.id === id)
                 if (!selected) throw new Error('未找到此数据集，请返回列表重新选择')

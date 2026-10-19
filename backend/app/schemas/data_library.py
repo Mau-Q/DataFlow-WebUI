@@ -21,5 +21,5 @@ class DraftCreate(BaseModel):
     model_config = ConfigDict(extra='forbid', str_strip_whitespace=True)
     name: str = Field(min_length=1, max_length=240)
     modality: Literal['text', 'image_text'] = 'text'
-    training_type: Literal['sft'] = 'sft'
+    training_type: Literal['sft', 'dpo'] = 'sft'
     description: str = Field(default='', max_length=4000)

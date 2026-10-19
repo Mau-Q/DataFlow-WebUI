@@ -164,3 +164,47 @@ def test_api_publish_download_edit_fork(setup,monkeypatch):
         assert client.get(f'/api/v1/generation/releases/{r["id"]}/download').content==blob
         assert client.post(f'/api/v1/generation/releases/{r["id"]}/fork').json()['data']['rows']==[text_row()]
         assert len(client.get(f'/api/v1/generation/drafts/{did}/releases').json()['data'])==1
+
+
+@pytest.mark.parametrize('modality', ['text', 'image_text'])
+def test_dpo_file_import_edit_publish_and_fork(setup, modality):
+    lib, life = setup
+    created = lib.create_draft(DraftCreate(name='DPO（示例）', modality=modality, training_type='dpo'))
+    row = {'prompt': '问题', 'chosen': '优选回答', 'rejected': '较差回答'}
+    bindings = {}
+    if modality == 'image_text':
+        material = image(lib)
+        row['images'] = ['images/example.png']
+        bindings['images/example.png'] = material['id']
+    lib.import_rows(created['id'], 'samples.jsonl', _json_bytes(row) + b'\n', bindings)
+    view = lib.get_draft(created['id'])
+    assert view['training_type'] == 'dpo' and view['rows'] == [row]
+    edited = dict(row, chosen='修改后的优选回答')
+    life.edit(created['id'], view['sample_ids'][0], edited)
+    release = life.publish(created['id'])
+    assert release['training_type'] == 'dpo'
+    assert 'alpaca' not in release['formats']
+    with zipfile.ZipFile(life.download(release['id'])) as bundle:
+        exported = json.loads(bundle.read('data.jsonl'))
+        assert exported['chosen'] == edited['chosen']
+        if modality == 'image_text':
+            assert exported['images'][0].startswith('media/')
+            assert bundle.read(exported['images'][0])
+    forked = life.fork(release['id'])
+    assert forked['training_type'] == 'dpo' and forked['modality'] == modality
+    life.publish(forked['id'])
+    with pytest.raises(LibraryError, match='仅适用于 SFT'):
+        life.map_fields(created['id'], {'instruction':'prompt','input':'','output':'chosen'})
+
+
+@pytest.mark.parametrize('row', [
+    {'prompt':'问题','chosen':'回答','rejected':''},
+    {'prompt':'问题','chosen':'相同','rejected':'相同'},
+    {'instruction':'问题','output':'回答'},
+])
+def test_invalid_dpo_import_preserves_draft(setup, row):
+    lib, _ = setup
+    created = lib.create_draft(DraftCreate(name='DPO', training_type='dpo'))
+    with pytest.raises(LibraryError, match='DPO'):
+        lib.import_rows(created['id'], 'bad.jsonl', _json_bytes(row) + b'\n', {})
+    assert lib.get_draft(created['id'])['row_count'] == 0
