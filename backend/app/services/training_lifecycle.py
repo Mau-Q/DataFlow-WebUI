@@ -125,7 +125,7 @@ class TrainingLifecycle:
 
     def list_releases(self, draft_id):
         self.lib._get('drafts', draft_id)
-        return sorted([json.loads(p.read_text('utf-8')) for p in self.releases.glob(f'{draft_id}_v*.json')], key=lambda x: x['version'])
+        return sorted([r for r in self.lib.db.list('releases') if r['draft_id'] == draft_id], key=lambda x: x['version'])
 
     def _path(self, release_id, suffix):
         if not re.fullmatch(r'ds_[0-9a-f]{32}_v[1-9][0-9]*', release_id):
@@ -204,9 +204,9 @@ class TrainingLifecycle:
 
     def download(self, release_id, format='package'):
         meta_path = self._path(release_id, '.json')
-        if not meta_path.is_file():
+        rec = self.lib.db.get('releases', release_id)
+        if rec is None:
             raise LibraryError('发布版本不存在', 404)
-        rec = json.loads(meta_path.read_text('utf-8'))
         if format not in rec['formats']:
             raise LibraryError('该版本不支持此导出格式')
         suffix = {'package': '.zip', 'jsonl': '.jsonl', 'alpaca': '.alpaca.jsonl'}[format]

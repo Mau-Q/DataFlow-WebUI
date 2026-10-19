@@ -146,10 +146,13 @@ def test_concurrent_imports_preserve_both_batches(library):
 
 def test_atomic_write_failure_preserves_previous_document(library, monkeypatch):
     draft = library.create_draft(DraftCreate(name='text'))
-    import app.services.data_library as module
     def fail(*args):
         raise OSError('disk write failed')
-    monkeypatch.setattr(module.os, 'replace', fail)
+    original = library.db.put
+    def fail_after_put(kind, record):
+        original(kind, record)
+        fail()
+    monkeypatch.setattr(library.db, 'put', fail_after_put)
     with pytest.raises(OSError):
         library.import_rows(draft['id'], 'data.json', b'[{"instruction":"x","output":"y"}]', {})
     assert library.get_draft(draft['id'])['row_count'] == 0
@@ -178,7 +181,9 @@ def test_api_end_to_end_with_real_envelope(client, library):
 
 def test_corrupt_metadata_fails_visibly(library):
     a = material(library)
-    (library.materials / (a['id'] + '.json')).write_text('{corrupt')
+    with library.db.transaction() as con:
+        con.execute('PRAGMA ignore_check_constraints=ON')
+        con.execute("UPDATE materials SET payload=? WHERE id=?", ('{corrupt',a['id']))
     with pytest.raises(json.JSONDecodeError):
         DataLibrary(library.root).list_materials()
 

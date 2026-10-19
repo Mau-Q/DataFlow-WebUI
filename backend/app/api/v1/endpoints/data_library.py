@@ -1,6 +1,6 @@
 """Source materials, compatible input manifests and training drafts."""
 import json
-from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile, Request
 from fastapi.responses import FileResponse
 from pydantic import ValidationError
 from app.api.v1.resp import ok
@@ -104,3 +104,19 @@ def source_dataset_preview(dataset_id: str, offset: int = Query(0, ge=0), limit:
     from app.services.source_datasets import SourceDatasets
     service = SourceDatasets(container.data_library, container.dataset_registry)
     return ok(_call(service.preview, dataset_id, offset, limit))
+
+
+@router.get('/storage/status')
+def storage_status(request: Request):
+    database = container.data_library.db
+    with database.reading() as con:
+        counts = {table: con.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0]
+                  for table in ('source_datasets','source_members','materials','drafts','samples','draft_media','releases')}
+    manager = getattr(request.app.state,'dataset_backups',None)
+    archives = manager.archives() if manager else []
+    return ok({'database':str(database.path),'schema_version':2,'counts':counts,
+               'backup':{'enabled':bool(manager and manager._thread and manager._thread.is_alive()),
+                         'interval_seconds':manager.interval if manager else None,
+                         'latest':str(archives[0]) if archives else None,
+                         'last_error':manager.last_error if manager else None,
+                         'last_recovery':manager.last_recovery if manager else None}})

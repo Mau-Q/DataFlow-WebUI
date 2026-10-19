@@ -7,6 +7,7 @@ import csv
 from itertools import islice
 from pathlib import Path
 from app.services.data_library import LibraryError, MAX_BYTES, IMAGE_TYPES
+from app.services.dataset_persistence import dataset_lock, defer_checkpoints
 
 
 class SourceDatasets:
@@ -15,6 +16,11 @@ class SourceDatasets:
         self.registry = registry
 
     def upload(self, files, name):
+        with dataset_lock(self.library.root.parent), defer_checkpoints(self.library.root.parent):
+            with self.library.db.transaction():
+                return self._upload(files, name)
+
+    def _upload(self, files, name):
         name = name.strip()
         if not name or len(name) > 240:
             raise LibraryError('请填写数据集名称（最多 240 字）')

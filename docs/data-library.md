@@ -50,16 +50,11 @@
 
 ## 存储、备份与 API
 
-默认路径为 `backend/data/library/`，可随现有 `BASE_DIR` / `RESOURCE_DIR` 配置改变：
+当前权威存储为 `backend/data/datasets.sqlite3`。原始数据集、材料、草稿、样本、媒体关联和发布元数据统一进入 SQLite；PDF、图片、清单和发布包继续作为本地文件保存。旧 YAML / JSON 元数据保留为一次性迁移来源，不再作为实时第二数据库。
 
-- `materials/<material_id>.json`：名称、分组、来源、关联材料、格式、哈希和存储文件名。
-- `materials/<material_id>.<suffix>`：平台保存的原文件副本。
-- `drafts/<dataset_id>.json`：模态、训练类型、草稿样本、媒体绑定和导入记录。
-- `.lock`：线程和进程之间的写入锁（当前支持 macOS / Linux）。
+数据库、自动备份、恢复命令和验证范围见 [数据集 SQLite 存储说明](dataset-storage.md)。
 
-写入通过临时文件、fsync 和原子替换完成；损坏的 JSON 元数据会报错，不会自动重建空库。备份时停止后端并复制完整 `library/`，不能只备份 JSON 而遗漏图片。M1 面向本地小批量数据，草稿按文件保存；分页只限制响应大小，不代表已具备大规模数据集数据库能力。
-
-旧 `DatasetRegistry` 不扫描材料目录；通过原始数据集导入表单添加 PDF / 图片时，由薄适配登记输入清单。已有注册记录保留，不做全量迁移。
+`DatasetRegistry` 保留原 API 和数据集 ID，不扫描材料目录；通过原始数据集导入表单添加 PDF / 图片时，由薄适配登记输入清单。已有注册记录保留，不做全量迁移。
 
 API 前缀为 `/api/v1/library`，使用现有 ApiResponse 封装。业务失败在应用中通常仍返回 HTTP 200，调用方需检查 `success` 及 `meta.http_status`：
 

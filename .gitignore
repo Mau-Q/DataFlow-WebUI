@@ -50,3 +50,8 @@ AGENTS.md
 # .mcp.json and .cursor/mcp.json are tracked. Codex MCP config is never written
 # here — Codex only reads ~/.codex/config.toml. (.codex/skills/ IS written, and
 # is ignored above as generated output.)
+
+# Local dataset backups contain private runtime data.
+/backend/backups/
+
+/backend/.*-datasets.lock

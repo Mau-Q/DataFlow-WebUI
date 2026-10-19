@@ -21,9 +21,17 @@ INDEX_FILE = DIST_DIR / "index.html"
 
 
 def create_app() -> FastAPI:
+    from app.services.dataset_backups import DatasetBackups
+    import os
+    backups = DatasetBackups(Path(settings.BASE_DIR) / settings.RESOURCE_DIR,
+                             os.environ.get('DATAFLOW_DATASET_BACKUP_DIR'))
+    backups.recover_if_needed()
     setup_dataflow_core()
     container.init()
     app = FastAPI(title="DataFlow Backend", version="1.0.0")
+    app.state.dataset_backups = backups
+    app.router.add_event_handler('startup', backups.start)
+    app.router.add_event_handler('shutdown', backups.stop)
     app.include_router(api_v1, prefix="/api/v1")
     app.add_middleware(
         CORSMiddleware,

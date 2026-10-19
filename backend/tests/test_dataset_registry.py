@@ -9,11 +9,12 @@ from app.core.config import settings
 TEST_REGISTRY_PATH = "tests/tmp_test_registry.yaml"
 
 @pytest.fixture
-def test_registry():
+def test_registry(tmp_path):
     """创建一个临时的DatasetRegistry实例用于测试"""
-    # 确保测试前删除临时文件
-    if os.path.exists(TEST_REGISTRY_PATH):
-        os.remove(TEST_REGISTRY_PATH)
+    registry_path = str(tmp_path / "registry.yaml")
+    # 每个测试使用独立 SQLite 存储目录。
+    if os.path.exists(registry_path):
+        os.remove(registry_path)
     
     # 创建临时文件目录
     temp_dir = tempfile.mkdtemp()
@@ -22,7 +23,7 @@ def test_registry():
     # 创建测试用的registry实例
     # Unit tests must not auto-import the repository's example datasets into
     # this temporary registry.
-    registry = DatasetRegistry(TEST_REGISTRY_PATH, scan=False)
+    registry = DatasetRegistry(registry_path, scan=False)
     
     # 创建临时数据集文件并添加到registry
     for i in range(5):
@@ -44,8 +45,8 @@ def test_registry():
     yield registry
     
     # 测试后清理
-    if os.path.exists(TEST_REGISTRY_PATH):
-        os.remove(TEST_REGISTRY_PATH)
+    if os.path.exists(registry_path):
+        os.remove(registry_path)
     
     # 清理临时文件
     for temp_file in temp_files:

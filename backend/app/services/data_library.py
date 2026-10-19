@@ -8,15 +8,15 @@ import fcntl
 import hashlib
 import io
 import json
-import os
 import re
-import tempfile
 import threading
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
+from app.services.dataset_persistence import dataset_lock, checkpoint, atomic_write
+from app.services.dataset_database import DatasetDatabase
 from PIL import Image
 from pypdf import PdfReader
 from app.core.config import settings
@@ -69,26 +69,27 @@ class DataLibrary:
         self.materials.mkdir(exist_ok=True)
         self.drafts.mkdir(exist_ok=True)
         self._lock = threading.RLock()
+        self.db = DatasetDatabase(self.root.parent)
+        self.db.import_library(self.root)
 
     @contextmanager
     def _writing(self):
-        with self._lock, (self.root / '.lock').open('a') as handle:
+        with dataset_lock(self.root.parent), self._lock, (self.root / '.lock').open('a') as handle:
             fcntl.flock(handle, fcntl.LOCK_EX)
             try:
-                yield
+                with self.db.transaction():
+                    yield
+                checkpoint(self.root.parent)
             finally:
                 fcntl.flock(handle, fcntl.LOCK_UN)
 
     def _atomic(self, path, data):
-        fd, temporary = tempfile.mkstemp(dir=path.parent, prefix='.pending-')
-        try:
-            with os.fdopen(fd, 'wb') as handle:
-                handle.write(data)
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temporary, path)
-        finally:
-            Path(temporary).unlink(missing_ok=True)
+        path = Path(path)
+        if path.suffix == '.json' and path.parent.name in {'materials', 'drafts', 'releases'}:
+            self.db.put(path.parent.name, json.loads(data))
+            return
+        with dataset_lock(self.root.parent):
+            atomic_write(path, data)
 
     def _path(self, kind, record_id):
         if not re.fullmatch(r'(mat|ds)_[0-9a-f]{32}', record_id):
@@ -96,17 +97,17 @@ class DataLibrary:
         return (self.materials if kind == 'materials' else self.drafts) / (record_id + '.json')
 
     def _get(self, kind, record_id):
-        path = self._path(kind, record_id)
-        if not path.exists():
+        self._path(kind, record_id)  # Keep the existing ID contract.
+        record = self.db.get(kind, record_id)
+        if record is None:
             raise LibraryError('记录不存在', 404)
-        # Corrupt metadata must fail visibly, never be silently reset.
-        return json.loads(path.read_text('utf-8'))
+        return record
 
     def list_materials(self):
         return self._list(self.materials)
 
     def _list(self, directory):
-        records = [json.loads(p.read_text('utf-8')) for p in directory.glob('*.json')]
+        records = self.db.list(directory.name)
         return sorted(records, key=lambda r: r['created_at'], reverse=True)
 
     def get_material(self, record_id):

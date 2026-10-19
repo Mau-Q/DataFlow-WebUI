@@ -1,9 +1,12 @@
 import yaml, os, hashlib
 import json
 from typing import Dict, List
+from pathlib import Path
 from app.core.config import settings
 from loguru import logger
 import pandas as pd
+from app.services.dataset_persistence import atomic_write, dataset_lock, registry_write
+from app.services.dataset_database import DatasetDatabase
 
 class VisualizeDatasetService:
     def __init__(self):
@@ -59,7 +62,9 @@ class VisualizeDatasetService:
 class DatasetRegistry:
     def __init__(self, path: str | None = None, scan: bool = True):
         self.path = path or settings.DATA_REGISTRY
+        self.db = DatasetDatabase(Path(self.path).parent)
         self._ensure()
+        self.db.import_registry(self.path)
         if scan:
             self.scan_all_datasets()
 
@@ -95,6 +100,10 @@ class DatasetRegistry:
                     }
 
                     try:
+                        existing = self.get(hashlib.md5(file_path.encode('utf-8')).hexdigest()[:10])
+                        if existing and existing.get('hash') == self._load_file_hash(file_path):
+                            cnt += 1
+                            continue
                         # 直接用 registry 的方法，避免依赖 API 层的 DatasetIn / register_dataset
                         self.add_or_update(ds_dict)
                         cnt += 1
@@ -113,18 +122,15 @@ class DatasetRegistry:
                 # logging.info(f"Registered dataset from {relative_path}.")
 
     def _ensure(self):
-        if not os.path.exists(self.path):
-            os.makedirs(os.path.dirname(self.path), exist_ok=True)
-            with open(self.path, "w", encoding="utf-8") as f:
-                yaml.safe_dump({"datasets": {}}, f, allow_unicode=True)
+        with dataset_lock(Path(self.path).parent):
+            if not os.path.exists(self.path):
+                atomic_write(self.path, b'datasets: {}\n')
 
     def _read(self) -> Dict:
-        with open(self.path, "r", encoding="utf-8") as f:
-            return yaml.safe_load(f) or {"datasets": {}}
+        return self.db.registry(self.path)
 
     def _write(self, data: Dict):
-        with open(self.path, "w", encoding="utf-8") as f:
-            yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False)
+        self.db.replace_registry(self.path, data['datasets'])
 
     def _count_file_entries(self, file_path: str) -> int:
         """统计文件中的条目数量"""
@@ -168,6 +174,7 @@ class DatasetRegistry:
                 hash_md5.update(chunk)
         return hash_md5.hexdigest()
 
+    @registry_write
     def add_or_update(self, ds: Dict):
         data = self._read()
         # 计算一个稳定 id（基于路径）
@@ -198,6 +205,7 @@ class DatasetRegistry:
     def get(self, ds_id: str) -> Dict | None:
         return self._read()["datasets"].get(ds_id)
     
+    @registry_write
     def remove(self, ds_id: str):
         data = self._read()
         datasets = data.get("datasets", {})

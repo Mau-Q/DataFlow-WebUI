@@ -51,15 +51,16 @@ Prompt / Schema 编辑影响未来提交；已固定任务继续使用旧内容�
 | 位置 | 内容 |
 | --- | --- |
 | `backend/data/` | Pipeline、输入、Serving、任务注册表、显示偏好、用户 Prompt、Schema、材料与数据集元数据 |
-| `backend/data/library/materials/` | 原文件副本、材料信息与哈希 |
+| `backend/data/datasets.sqlite3` | 原始数据集、材料、草稿、样本、媒体关联、发布版本的权威元数据 |
+| `backend/data/library/materials/` | 受管 PDF / 图片副本；旧 JSON 为迁移来源 |
 | `backend/data/library/inputs/`、`task_inputs/` | 材料清单、任务固定输入与 PDF 副本 |
-| `backend/data/library/drafts/`、`releases/` | 草稿、来源、已发布 JSONL / 媒体 / ZIP 与清单 |
+| `backend/data/library/releases/` | 已发布 JSONL / ZIP；版本元数据进入 SQLite |
 | `backend/data/library/multimodal_configs.json` | MM 配置草稿 |
 | `backend/cache_local/<task_id>_output/` | 步骤缓存、原始模型文本和任务固定产物 |
 
-备份前确认无 queued/running 任务，并停止会写这些目录的 API 和执行 worker。仅停止后台 API 不保证已派发的 Ray worker 停止。复制完整 `backend/data/` 与需要保留的 `backend/cache_local/` 到新的备份目录，记录并复核逐文件 SHA-256；不能只复制注册表或 JSON 而遗漏 PDF、图片和产物。Serving 配置和本地环境配置可能含凭据，备份按私有文件保存，不提交 Git。
+数据集自动备份和启动恢复已启用。备份使用 SQLite 一致性镜像与文件哈希清单；检查、隔离恢复和指定快照回退命令见 [SQLite 存储与备份](dataset-storage.md)。原地恢复前停止 API 和执行 worker，保留当前数据；不要直接复制一个打开的 SQLite 主库或单独的 WAL。备份可能含本地服务配置，应保持私有，不提交 Git。
 
-恢复时先停止写入，将当前数据另存，再还原一组完整备份，校验清单后启动。不要把新旧注册表、输入和缓存任意混合。旧注册路径与任务快照可能是绝对路径，完整本地恢复应使用原目录；跨机器迁移需逐项检查路径、解析环境和服务配置。导出的发布 ZIP 则使用相对媒体路径。仅恢复发布包不会恢复历史任务或服务。
+跨机器迁移需检查绝对路径、解析环境和服务配置。发布 ZIP 使用相对媒体路径；仅恢复发布包不会恢复完整历史任务或服务。
 
 显示偏好的隐藏列表不会删除记录。恢复可见性参见 [数据集精简视图](data-library.md)。损坏 JSON 会明确报错；先保留损坏文件并检查备份，不清空历史注册数据。
 

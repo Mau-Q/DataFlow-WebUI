@@ -1,9 +1,9 @@
 import os
-import shutil
 import uuid
 from pathlib import Path
 from app.services.dataset_visibility import annotate_datasets
 from app.services.dataset_content import annotate_content
+from app.services.dataset_persistence import atomic_write
 from fastapi import APIRouter, HTTPException, UploadFile, File
 from app.schemas.dataset import DatasetIn, DatasetOut
 from app.core.container import container
@@ -152,8 +152,11 @@ async def upload_dataset(file: UploadFile = File(...), name: str = None):
         target_dir = Path(upload_dir) / uuid.uuid4().hex
         target_dir.mkdir()
         file_path = str(target_dir / filename)
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+        from app.services.data_library import MAX_BYTES
+        content = file.file.read(MAX_BYTES + 1)
+        if not content or len(content) > MAX_BYTES:
+            raise ValueError('文件为空或超过 100 MiB 限制')
+        atomic_write(file_path, content)
         
         # 注册数据集
         ds_dict = {
