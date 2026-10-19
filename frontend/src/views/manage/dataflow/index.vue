@@ -972,17 +972,24 @@ export default {
             this.executionInfo.task_id = task_id
             await this.getExecution(this.executionInfo.task_id)
             await this.selectExecutionPipeline(this.execution.pipeline_config)
-            this.watchExecution()
+            this.watchExecution(false)
         },
-        watchExecution() {
+        watchExecution(revealResult = true) {
             if (!this.executionInfo.task_id) return
+            const taskId = this.executionInfo.task_id
             clearInterval(this.timer.exec)
             this.timer.exec = setInterval(async () => {
-                await this.getExecution(this.executionInfo.task_id)
+                await this.getExecution(taskId)
+                if (this.executionInfo.task_id !== taskId) return
                 this.lock.running = false
                 if (this.execution.status === 'completed') {
                     clearInterval(this.timer.exec)
                     this.lock.running = true
+                    if (revealResult) {
+                        this.historyTaskId = taskId
+                        this.show.taskPanel = true
+                        this.$barWarning('运行完成，最终结果已打开。可预览、下载或收录到生成数据集。', {status: 'correct'})
+                    }
                 } else if (this.execution.status === "cancelled") {
                     clearInterval(this.timer.exec)
                     this.lock.running = true
