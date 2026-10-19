@@ -18,6 +18,12 @@ router = APIRouter(tags=["prompts"])
 # 注：这些路由必须**放在** "/{operator_name}" 这类通配路由之前，
 # 否则 "/user" 会被当成算子名匹配到下面的只读接口。
 
+@router.get('/contracts')
+def managed_prompt_contracts():
+    from app.services.prompt_contracts import CONTRACTS
+    return ok(CONTRACTS)
+
+
 @router.get(
     "/user",
     response_model=ApiResponse[List[UserPromptTemplateOut]],

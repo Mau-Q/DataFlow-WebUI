@@ -5,6 +5,7 @@ from app.services.builtin_resources import builtin_schemas
 from app.services.dataset_visibility import visibility_settings
 from app.services.resource_store import ResourceStore
 from app.services.user_prompt_registry import _extract_placeholders
+from app.services.prompt_contracts import CONTRACTS, validate_managed_template
 
 TEXT_SFT = {'KnowledgeCleanerPrompt', 'Text2MultiHopQAGeneratorPrompt', 'Text2QAQuestionQualityPrompt',
             'Text2QAAnswerAlignmentPrompt', 'Text2QAAnswerVerifiabilityPrompt', 'Text2QADownstreamValuePrompt', 'AlpagasusPrompt'}
@@ -24,10 +25,10 @@ PROMPT_LABELS = {
 OPERATOR_PROMPTS = {
     'KBCTextCleaner': ('operator_default', ['KnowledgeCleanerPrompt'], {'lang': 'en'}),
     'Text2MultiHopQAGenerator': ('operator_default', ['Text2MultiHopQAGeneratorPrompt'], {'lang': 'en'}),
-    'Text2QASampleEvaluator': ('operator_fixed', [
+    'Text2QASampleEvaluator': ('operator_default', [
         'Text2QAQuestionQualityPrompt', 'Text2QAAnswerAlignmentPrompt',
         'Text2QAAnswerVerifiabilityPrompt', 'Text2QADownstreamValuePrompt'], {}),
-    'AlpagasusSampleEvaluator': ('operator_fixed', ['AlpagasusPrompt'], {'dimension': 'quality'}),
+    'AlpagasusSampleEvaluator': ('operator_default', ['AlpagasusPrompt'], {'dimension': 'quality'}),
 }
 
 
@@ -155,22 +156,14 @@ class ResourceCatalog:
                                 cls = cls.split("'")[1].split('.')[-1]
                             attach('builtin_prompt:' + cls, step_name, 'prompt_template',
                                    parameters={'constructor': _constructor(value), 'operator': _sections(op)})
-                contract = OPERATOR_PROMPTS.get(op['name'])
-                if contract:
-                    kind, names, defaults = contract
-                    prompt_value = next((_value(p) for p in params if p['name'] == 'prompt_template'), None)
-                    # A selected prompt replaces the constructor default. Fixed evaluators
-                    # construct their own prompts regardless of the allowed-prompts metadata.
-                    if kind == 'operator_fixed' or not prompt_value:
+                contracts = CONTRACTS.get(op['name'], {})
+                for field, contract in contracts.items():
+                    chosen = next((_value(p) for p in params if p['name']==field), None)
+                    if not chosen:
                         init = _sections(op).get('init', {})
-                        constructor = {key: init.get(key) if init.get(key) is not None else default
-                                       for key, default in defaults.items()}
-                        for name in names:
-                            attach('builtin_prompt:' + name, step_name,
-                                   'self.prompts' if op['name'] == 'Text2QASampleEvaluator' else
-                                   'self.prompt' if op['name'] == 'AlpagasusSampleEvaluator' else 'prompt_template', kind=kind,
-                                   parameters={'constructor': constructor, 'operator': _sections(op)},
-                                   evidence=op['name'] + ('._build_prompts' if op['name'] == 'Text2QASampleEvaluator' else '.__init__'))
+                        constructor = {key:init.get(key) or default for key,default in OPERATOR_PROMPTS.get(op['name'], ('',[],{}))[2].items()}
+                        attach('builtin_prompt:'+contract['builtin'], step_name, field, kind='operator_default',
+                               parameters={'constructor':constructor,'operator':_sections(op)}, evidence=op['name']+'.__init__ / _build_prompts')
             for step in steps:
                 attach(step.get('resource_ref'), step['id'], 'resource_ref', step.get('bindings'),
                        parameters={key: step[key] for key in ('inputs', 'output', 'bindings', 'resource_ref') if key in step})
@@ -183,7 +176,17 @@ class ResourceCatalog:
     def prompts(self):
         records = []
         for item in self.c.user_prompt_registry.list_all():
-            operators = ['FormatStrPromptedGenerator', 'PromptedVQAGenerator']
+            operators = []
+            for op, slots in CONTRACTS.items():
+                for field in slots:
+                    try:
+                        validate_managed_template(op, field, item['template'])
+                        operators.append(op)
+                        break
+                    except ValueError:
+                        pass
+            if set(_extract_placeholders(item['template'])) <= {'question'}:
+                operators.append('PromptedVQAGenerator')
             allowed = item.get('allowed_operators') or []
             if allowed:
                 operators = [op for op in operators if op in allowed]

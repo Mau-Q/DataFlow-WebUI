@@ -1009,7 +1009,7 @@ class PipelineRegistry:
                         ))
                 elif isinstance(prompt_template_value, dict):
                     cls_name = prompt_template_value.get("cls_name")
-                    if cls_name and allowed_prompts and cls_name not in allowed_prompts:
+                    if cls_name and allowed_prompts and cls_name not in allowed_prompts and not prompt_template_value.get("resource_template"):
                         errors.append(self._make_validation_issue(
                             level="error",
                             code="invalid_prompt_template_class",
@@ -1415,7 +1415,7 @@ class PipelineRegistry:
                         p_val = stored_params.get(p_name)
                     if p_val is None:
                         p_val = param_def.get("default_value")
-                    if p_val is None and param_def.get("name") == "prompt_template":
+                    if p_val is None and param_def.get("name") == "prompt_template" and op_name != "AlpagasusSampleEvaluator":
                         # Get @prompt_restrict decorator from operator class
                         if op_details.get("allowed_prompts"):
                             p_val = op_details["allowed_prompts"][0]

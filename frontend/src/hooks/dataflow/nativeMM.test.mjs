@@ -33,3 +33,14 @@ test('missing steps and out-of-range layouts cannot silently save',()=>{
  g.nodes[1].position.x=-500
  assert.throws(()=>readNativeMM(c,g.nodes),/超出/)
 })
+test('switching MM templates serializes the current binding set, including additions and removals',()=>{
+ const original=config(),graph=nativeMMGraph(original,'native',{})
+ const question=graph.nodes.find(n=>n.data.mmStepId==='question')
+ question.data.operatorParams.init[0].value='user_prompt:with-image'
+ question.data.operatorParams.run.push({name:'binding_image',value:'image',show:true})
+ assert.deepEqual(readNativeMM(original,graph.nodes).steps[0].bindings,{image:'image'})
+ const answer=graph.nodes.find(n=>n.data.mmStepId==='answer')
+ answer.data.operatorParams.run=answer.data.operatorParams.run.filter(p=>p.name!=='binding_question')
+ assert.deepEqual(readNativeMM(original,graph.nodes).steps[1].bindings,{})
+ assert.deepEqual(original.steps[1].bindings,{question:'question'})
+})

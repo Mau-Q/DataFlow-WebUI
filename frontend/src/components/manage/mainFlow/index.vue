@@ -36,7 +36,7 @@
 </template>
 
 <script setup>
-import { ref, watch, computed } from 'vue'
+import { ref, watch, computed, onDeactivated } from 'vue'
 import { VueFlow, useVueFlow } from '@vue-flow/core'
 import { useGlobal } from '@/hooks/general/useGlobal'
 import { useTheme } from '@/stores/theme'
@@ -145,6 +145,8 @@ const inspectOperator = (nodeId) => {
 const closeInspector = () => {
     showInspector.value = false
 }
+
+onDeactivated(closeInspector)
 
 const isDragOver = ref(false)
 const dragOver = (event) => {

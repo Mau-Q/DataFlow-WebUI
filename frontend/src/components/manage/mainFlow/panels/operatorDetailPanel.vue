@@ -20,10 +20,10 @@
                     <section class="parameter-section">
                         <div class="section-heading init">
                             <span>{{ appConfig.local('Init. Parameters') }}</span>
-                            <span class="count">{{ visibleInitParams.length }}</span>
+                            <span class="count">{{ visibleInitParams.length + promptTemplateItems.length }}</span>
                         </div>
 
-                        <prompt-resource-input v-if="promptTemplateItem" :item="promptTemplateItem" :data="data" @update-value="promptTemplateItem.value = $event" />
+                        <prompt-resource-input v-for="item in promptTemplateItems" :key="item.name" :item="item" :data="data" @update-value="item.value = $event" />
                         <div v-if="allowedPrompts.length > 0 && promptTemplateItem && !isResourcePrompt" class="parameter-field">
                             <span class="field-label">{{ appConfig.local('Prompt Template') }}</span>
                             <fv-combobox :theme="theme" v-model="promptTemplateModel"
@@ -113,10 +113,11 @@ const dataflow = useDataflow()
 const close = () => emits('update:modelValue', false)
 
 const visibleInitParams = computed(() => (props.data?.operatorParams?.init || [])
-    .filter((item) => item.show && item.name !== 'prompt_template'))
+    .filter((item) => item.show && !promptTemplateItems.value.includes(item)))
 const visibleRunParams = computed(() => (props.data?.operatorParams?.run || [])
-    .filter((item) => item.name !== 'storage'))
+    .filter((item) => item.name !== 'storage' && !(props.data?.externalTemplate && ['question','answer'].includes(props.data.mmStepId) && item.name.startsWith('binding_'))))
 const stepLabel = computed(() => props.data?.pipeline_idx ? `Step ${props.data.pipeline_idx}` : 'Operator')
+const promptTemplateItems = computed(() => (props.data?.operatorParams?.init || []).filter(item => item.name === 'prompt_template' || item.name.endsWith('_prompt_template') || (props.data?.externalTemplate && ['question','answer'].includes(props.data.mmStepId) && item.name==='resource_ref')))
 const promptTemplateItem = computed(() => (props.data?.operatorParams?.init || [])
     .find((item) => item.name === 'prompt_template'))
 const isResourcePrompt = computed(() => !!promptTemplateItem.value?.value?.ref || String(promptTemplateItem.value?.value || '').startsWith('user_prompt:'))
@@ -143,7 +144,7 @@ const promptTemplateModel = computed({
 const promptParamModel = computed({
     get() {
         const value = promptTemplateItem.value?.value
-        return typeof value === 'object' ? (value.params || []) : []
+        return value && typeof value === 'object' ? (value.params || []) : []
     },
     set(value) {
         if (promptTemplateItem.value?.value && typeof promptTemplateItem.value.value === 'object') {

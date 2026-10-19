@@ -131,7 +131,7 @@
                     <div class="native-field">描述<native-text v-model="editing.description" :theme="theme" :disabled="busy" label="描述" multiline :rows="2" /></div>
                     <template v-if="isPrompt">
                         <div class="native-field">模板内容<native-text v-model="editing.template" :theme="theme" :disabled="busy" label="模板内容" multiline code :rows="10" /></div>
-                        <p class="help">使用 {变量名}；JSON 花括号可直接书写。文本画布支持 FormatStrPromptedGenerator；图片流程支持 PromptedVQAGenerator。</p>
+                        <p class="help">使用 {变量名}；JSON 花括号可直接书写。文本清洗、QA、评分及图片问答按各自契约接入；必需变量和输出限制在算子参数中说明。</p>
                         <div class="native-field">允许的算子（可留空，不额外限制）<native-text v-model="allowedText" :theme="theme" :disabled="busy" label="允许的算子" placeholder="FormatStrPromptedGenerator, PromptedVQAGenerator" /></div>
                         <p class="help">检测到变量：{{ variablesOf(editing.template).join(' · ') || '无' }}</p>
                         <div class="native-field">预览变量（JSON 对象）<native-text v-model="exampleText" :theme="theme" :disabled="busy" label="预览变量" multiline code :rows="4" /></div>

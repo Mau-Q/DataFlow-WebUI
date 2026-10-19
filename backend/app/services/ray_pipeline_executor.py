@@ -429,7 +429,7 @@ def dataflow_pipeline_execute(pipeline_config: Dict[str, Any], dataflow_runtime:
                                     db_manager_instance_map[db_manager_id] = db_manager_instance
                                 param_value = db_manager_instance_map[db_manager_id]
                         
-                        elif param_name == "prompt_template":
+                        elif param_name == "prompt_template" or param_name.endswith("_prompt_template"):
                             param_value = instantiate_prompt(param_value)
                         elif param_name in ("process_fn", "filter_rules"):
                             normalized_items = _normalize_dynamic_code_param_value(

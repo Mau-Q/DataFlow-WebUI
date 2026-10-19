@@ -166,7 +166,7 @@ def test_shared_resource_references_freeze_and_survive_edit_delete(resources, tm
 @pytest.mark.parametrize('mutation,match', [
     (lambda c: c['operators'][0]['params']['init'][0]['value'].update(bindings={}), '缺少变量'),
     (lambda c: c['operators'][0]['params']['init'][0]['value'].update(bindings={'question':'text','output_key':'x'}), '不能使用'),
-    (lambda c: c['operators'][0].update(name='Text2MultiHopQAGenerator'), '不支持自定义'),
+    (lambda c: c['operators'][0].update(name='Text2MultiHopQAGenerator'), '必须包含变量'),
     (lambda c: c['operators'][0]['params']['init'][1].update(value='schema_ref:missing'), '不存在'),
     (lambda c: c['operators'][0]['params']['init'][1].update(name='system_prompt'), '不是声明'),
     (lambda c: c['operators'][0]['params']['init'][1].update(value='{"type":"invalid"}'), 'Schema'),

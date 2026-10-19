@@ -1,13 +1,13 @@
 """Shared resource resolution for validation, task freezing and both executors.
 
-Only FormatStrPromptedGenerator has the verified arbitrary-field template
-contract. Built-in prompt classes and inline values retain their old behavior.
+Managed slots declare fixed input/output protocols; built-in defaults remain compatible.
 """
 import copy
 import hashlib
 import json
 from app.core.container import container
 from app.services.json_schema_manager import validate_schema
+from app.services.prompt_contracts import CONTRACTS, validate_managed_template
 from app.services.user_prompt_registry import _extract_placeholders, render_template
 
 SCHEMA_PARAMS = {'schema', 'json_schema', 'output_schema', 'response_schema',
@@ -84,7 +84,37 @@ def resolve_pipeline_resources(config):
     result = copy.deepcopy(config)
     snapshots, captured = [], {}
     for index, op in enumerate(result.get('operators', [])):
-        # Avoid normalizing legacy configs that contain no resource references.
+        # Native text controls serialize untouched optional fields as empty strings.
+        # Normalize only verified SFT optional slots; required field names stay strict.
+        raw = op.get('params') or {}
+        if op['name'] in CONTRACTS and isinstance(raw, dict) and ('init' in raw or 'run' in raw):
+            normalized = {part:_items(raw.get(part)) for part in ('init','run')}
+            optional = {'init': {'llm_serving', *CONTRACTS[op['name']]}, 'run': set()}
+            if op['name'] == 'Text2QASampleEvaluator':
+                optional['run'] = {'input_context_key', 'input_supporting_facts_key'}
+            changed = False
+            for part, names in optional.items():
+                for param in normalized[part]:
+                    if param['name'] in names and param.get('value') == '':
+                        param['value'] = None
+                        changed = True
+            # Frozen/inline adapters obey the same slot contract as managed refs.
+            if op['name'] != 'FormatStrPromptedGenerator':
+                init_values = {p['name']: p.get('value', p.get('default_value')) for p in normalized['init']}
+                for part, params in normalized.items():
+                    for param in params:
+                        value = param.get('value')
+                        if isinstance(value, dict) and 'resource_template' in value:
+                            if part != 'init':
+                                raise ResourceReferenceError('Prompt 只能绑定到构造参数')
+                            try:
+                                validate_managed_template(op['name'], param['name'], value['resource_template'], value.get('bindings'))
+                            except ValueError as exc:
+                                raise ResourceReferenceError(str(exc)) from exc
+                            value.update(contract_operator=op['name'], contract_param=param['name'], lang=value.get('lang') or init_values.get('lang') or 'en')
+                            changed = True
+            if changed:
+                op['params'] = normalized
         raw = op.get('params') or {}
         candidates = _items(raw.get('init')) + _items(raw.get('run')) if isinstance(raw, dict) and ('init' in raw or 'run' in raw) else _items(raw)
         has_schema = any(p.get('name') in SCHEMA_PARAMS and p.get('value') not in (None, '') for p in candidates)
@@ -117,12 +147,16 @@ def resolve_pipeline_resources(config):
                     captured[ref] = copy.deepcopy(record)
                 record = captured[ref]
                 if prefix == 'user_prompt':
-                    if op['name'] != 'FormatStrPromptedGenerator' or name != 'prompt_template' or section != 'init':
-                        raise ResourceReferenceError(f"{op['name']}.{name}: 不支持自定义模板；保留内置 Prompt，或使用 FormatStrPromptedGenerator")
+                    if section != 'init':
+                        raise ResourceReferenceError('Prompt 只能绑定到构造参数')
+                    try:
+                        validate_managed_template(op['name'], name, record['template'], value.get('bindings') if isinstance(value, dict) else None)
+                    except ValueError as exc:
+                        raise ResourceReferenceError(str(exc)) from exc
                     allowed = record.get('allowed_operators') or []
                     if allowed and op['name'] not in allowed:
                         raise ResourceReferenceError(f"模板未允许算子 {op['name']}")
-                    if isinstance(value, dict) and 'bindings' in value:
+                    if op['name'] == 'FormatStrPromptedGenerator' and isinstance(value, dict) and 'bindings' in value:
                         binding = value['bindings']
                         if not isinstance(binding, dict) or not all(isinstance(k, str) and isinstance(v, str) and v.strip() for k, v in binding.items()):
                             raise ResourceReferenceError('模板绑定必须是 变量名 → 非空数据列名')
@@ -131,7 +165,7 @@ def resolve_pipeline_resources(config):
                         sections['run'] = [p for p in sections['run'] if p['name'] != 'input_keys']
                         sections['run'].append({'name': 'input_keys', 'kind': 'VAR_KEYWORD', 'value': _items(binding)})
                     binding = _bindings(sections['run'])
-                    required = _extract_placeholders(record['template'])
+                    required = _extract_placeholders(record['template']) if op['name'] == 'FormatStrPromptedGenerator' else []
                     missing = [p for p in required if not isinstance(binding.get(p), str) or not binding[p].strip()]
                     if missing:
                         raise ResourceReferenceError('模板缺少变量绑定: ' + ', '.join(missing))
@@ -140,8 +174,12 @@ def resolve_pipeline_resources(config):
                         raise ResourceReferenceError('模板变量不能使用 storage、output_key 或 input_keys')
                     if not record['template'].strip():
                         raise ResourceReferenceError('模板内容不能为空')
+                    init_values = {p['name']: p.get('value', p.get('default_value')) for p in sections['init']}
                     content = {'template': record['template']}
-                    item['value'] = {'cls_name': 'FormatStrPrompt', 'resource_template': record['template']}
+                    if op['name'] != 'FormatStrPromptedGenerator':
+                        content.update(contract_operator=op['name'], contract_param=name,
+                                       lang=init_values.get('lang') or 'en')
+                    item['value'] = {'cls_name': 'FormatStrPrompt', 'resource_template': record['template'], **{k:v for k,v in content.items() if k!='template'}}
                 else:
                     if name not in SCHEMA_PARAMS and not name.endswith('_schema'):
                         raise ResourceReferenceError(f'{name}: 不是声明结构输出的 Schema 参数')
@@ -162,6 +200,8 @@ def instantiate_prompt(value):
     """Common constructor, preserving built-in registry semantics."""
     from dataflow.utils.registry import PROMPT_REGISTRY
     if isinstance(value, dict) and 'resource_template' in value:
+        if value.get('contract_operator'):
+            return instantiate_contracted_prompt(value)
         from dataflow.core.prompt import DIYPromptABC
         class ResourceTemplatePrompt(DIYPromptABC):
             def build_prompt(self, need_fields, **kwargs):
@@ -182,3 +222,24 @@ def instantiate_prompt(value):
     if not cls:
         raise ResourceReferenceError(f'Prompt class not found: {cls_name}')
     return cls(**kwargs)
+
+
+def instantiate_contracted_prompt(value):
+    from dataflow.core.prompt import DIYPromptABC
+    operator, param = value['contract_operator'], value['contract_param']
+    validate_managed_template(operator, param, value['resource_template'])
+    class ContractPrompt(DIYPromptABC):
+        def build_prompt(self, text=None):
+            result = render_template(value['resource_template'], {'text': text} if text is not None else {})
+            if result['missing']:
+                raise ResourceReferenceError('模板缺少变量: ' + ', '.join(result['missing']))
+            rendered = result['rendered']
+            if operator == 'KBCTextCleaner':
+                rendered += '\nReturn only cleaned source text between <cleaned_start> and <cleaned_end>. Preserve facts; do not invent content.'
+            elif operator == 'Text2MultiHopQAGenerator':
+                rendered += '\nReturn a JSON object with nonempty question and answer strings, reasoning_steps array of step objects, supporting_facts array of source quotations, and type string. Use only the provided context.'
+            return rendered
+        def build_system_prompt(self):
+            from dataflow.prompts.text2qa import Text2MultiHopQAGeneratorPrompt
+            return Text2MultiHopQAGeneratorPrompt(lang=value.get('lang','en')).build_system_prompt()
+    return ContractPrompt()

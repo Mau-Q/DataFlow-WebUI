@@ -10,7 +10,7 @@ Prompt Manager 的 My Templates 与 JSON Schema Manager 可独立使用，无需
 
 “此流程使用”统计已保存配置中的显式引用，以及已核实的算子默认/固定 Prompt。“适用于此流程”按已接入算子和 Schema 参数匹配候选，不把可选项当成实际用法。用法代表当前保存配置，不代表流程已经运行。
 
-文本 SFT 显示清洗、多跳 QA、四维评分和 Alpagasus 评分共七类 Prompt。默认映射依据 KBCTextCleaner、Text2MultiHopQAGenerator 的构造函数，固定映射依据 Text2QASampleEvaluator._build_prompts 与 AlpagasusSampleEvaluator.__init__；显式替换可选 Prompt 后不再统计被替换的默认项。图片 SFT 显示问题/答案 Prompt，结构检查计入 Schema，格式整理不虚构 Prompt。
+文本 SFT 显示清洗、多跳 QA、四维评分和 Alpagasus 评分共七类 Prompt。默认映射依据 KBCTextCleaner、Text2MultiHopQAGenerator 的构造函数，默认映射依据 Text2QASampleEvaluator._build_prompts 与 AlpagasusSampleEvaluator.__init__；显式替换可选 Prompt 后不再统计被替换的默认项。图片 SFT 显示问题/答案 Prompt，结构检查计入 Schema，格式整理不虚构 Prompt。
 
 详情按流程和步骤列出显式/默认/固定用法、Prompt 构造参数、算子 init/run 参数或图片步骤输入/输出及绑定，凭据字段隐藏。共享资源只保留一行，参数不同的使用位置分别保留。“我的”详情默认只列自定义流程，选择 SFT 入口后只列这一类流程；内置页可查看全部配置中的用法，并可跳转到流程。
 
@@ -26,7 +26,7 @@ Prompt Manager 的 My Templates 与 JSON Schema Manager 可独立使用，无需
 2. `{question}` 是变量；JSON 对象可以直接写入。`{{literal}}` 预览和执行时显示为 `{literal}`。只支持简单变量名，不支持 Python 属性访问、下标、格式说明或表达式；替换不会递归处理变量值中的花括号。
 3. 示例变量用于预览，缺少变量会显示提示。示例值不会作为正式运行的字段默认值。
 4. 在画布中选中 `FormatStrPromptedGenerator`，打开参数面板，从“自定义模板”选择已保存的模板，为每个变量填写数据列名。可用“刷新”载入新建或修改的资源。
-5. 可选的 allowed operators 是额外限制；留空仍只支持已接入的算子契约。文本画布当前仅 `FormatStrPromptedGenerator.prompt_template` 支持任意字段模板；图片 VQA 配置支持 `PromptedVQAGenerator` 的问题/答案模板。其他步骤显示契约限制并保留内置提示词，不能用这项功能替换专用 QA 或评分协议。
+5. 可选的 allowed operators 是额外限制；留空仍只支持已接入的算子契约。`FormatStrPromptedGenerator.prompt_template` 支持任意字段绑定；文本 SFT 的清洗、多跳 QA、四维评分和 Alpagasus 已按位置接入，输入拼接和输出协议保留。图片 VQA 配置支持问题/答案模板。详细位置与限制见 [SFT Prompt 接入](sft-prompt-contracts.md)。
 
 Pipeline 保存的形状如下，两份配置可以引用同一个 ID：
 

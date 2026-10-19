@@ -35,7 +35,7 @@ export function readNativeMM(config,nodes) {
         }
         step.resource_ref=get('init','resource_ref')
         for(const k of Object.keys(step.inputs))step.inputs[k]=get('run',`input_${k}`)
-        for(const k of Object.keys(step.bindings))step.bindings[k]=get('run',`binding_${k}`)
+        step.bindings=Object.fromEntries(params.run.filter(p=>p.name.startsWith('binding_')).map(p=>[p.name.slice(8),p.value]))
         step.output=get('run','output')
         step.x=Math.round(node.position.x-350);step.y=Math.round(node.position.y-130)
         if(step.x<0||step.x>2000||step.y<0||step.y>1000)throw new Error('MM 节点超出可保存范围，请自动排版后重试')

@@ -173,7 +173,7 @@ def test_personal_scope_includes_actual_text_and_image_flow_resources(catalog):
     assert cleaner['parameters']['operator']['run']['input_key'] == 'raw_chunk'
     qa = reference('Text2MultiHopQAGeneratorPrompt')
     assert qa['kind'] == 'explicit' and qa['parameters']['constructor'] == {'lang': 'zh'}
-    assert reference('Text2QAAnswerAlignmentPrompt')['kind'] == 'operator_fixed'
+    assert reference('Text2QAAnswerAlignmentPrompt')['kind'] == 'operator_default'
     assert reference('AlpagasusPrompt')['parameters']['constructor'] == {'dimension': 'quality'}
     answer = next(r for r in personal if r['id'] == 'mm-answer-v1')
     use = next(ref for ref in answer['references'] if ref['pipeline_source'] == 'user')
