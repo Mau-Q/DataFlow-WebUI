@@ -37,8 +37,8 @@
                     </template>
                 </fv-command-bar>
                 <div class="command-bar-right-space" role="group" aria-label="画布与运行">
-                    <fv-toggle-switch v-if="!isMM" :theme="theme" v-model="isAutoConnectionModel" :width="75"
-                        :on="local('Auto')" :off="local('Manual')" :insideContent="true" :height="30"
+                    <fv-toggle-switch v-if="!isMM" :theme="theme" v-model="isAutoConnectionModel" :width="115"
+                        :on="local('Auto Connect')" :off="local('Manual Connect')" :insideContent="true" :height="30"
                         :off-foreground="theme === 'dark' ? 'rgba(255, 255, 255, 1)' : ''"
                         borderColor="rgba(235, 235, 235, 1)" ring-background="rgba(180, 180, 180, 1)"
                         :switch-on-background="gradient" :title="local('Whether Auto Connect Run Edges')">
@@ -971,7 +971,8 @@ export default {
                     `/api/v1/tasks/execution/${this.executionInfo.task_id}/download?step=${pipeline_idx - 1}`)
             window.open(url, '_blank')
         },
-        async selectPipelineCallback() {
+        async selectPipelineCallback(pipeline) {
+            if (pipeline?.id) this.currentPipeline = pipeline
             this.clearExecution()
             this.executionInfo.task_id = null
             this.show.pipeline = false

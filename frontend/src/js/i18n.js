@@ -1132,6 +1132,10 @@ export default {
         "en": "Template",
         "cn": "模板"
     },
+    "Preset Workflows": {"en": "Preset Workflows", "cn": "预设流程"},
+    "Auto Connect": {"en": "Auto connect", "cn": "自动连线"},
+    "Manual Connect": {"en": "Manual connect", "cn": "手动连线"},
+    "Load pipeline failed": {"en": "Load pipeline failed", "cn": "加载 Pipeline 失败"},
     "Custom Pipeline": {
         "en": "Custom Pipeline",
         "cn": "自定义Pipeline"

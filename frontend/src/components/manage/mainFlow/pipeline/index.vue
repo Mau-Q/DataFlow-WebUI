@@ -31,7 +31,7 @@
                     </div>
                 </div>
                 <hr />
-                <fv-button v-if="choosenPivot?.key !== 'custom'" :theme="theme" icon="Add"
+                <fv-button v-if="choosenPivot?.key === 'custom'" :theme="theme" icon="Add"
                     :background="theme === 'dark' ? 'rgba(40, 40, 40, 0.6)' : 'rgba(255, 255, 255, 0.6)'"
                     :foreground="theme === 'dark' ? 'rgba(255, 255, 255, 1)' : 'rgba(90, 90, 90, 1)'" border-radius="8"
                     :is-box-shadow="true" style="width: calc(100% - 20px); height: 40px; margin-left: 10px"
@@ -137,13 +137,14 @@ export default {
             thisValue: this.modelValue,
             thisLoading: this.loading,
             searchText: '',
-            thisPipeline: null,
+            thisPipeline: this.pipeline,
             currentContextItem: null,
             addPanelMode: 'add',
             choosenPivot: { key: 'custom', name: () => this.local('Custom Pipeline') },
             pivotItems: [
                 { key: 'custom', name: () => this.local('Custom Pipeline') },
-                { key: 'template', name: () => this.local('Template') }
+                { key: 'template', name: () => this.local('Template') },
+                { key: 'workflow', name: () => this.local('Preset Workflows') }
             ],
             show: {
                 add: false,
@@ -197,11 +198,10 @@ export default {
             return operators
         },
         filteredPipelines() {
-            let mode = this.choosenPivot ? this.choosenPivot.key : 'template'
-            if (mode === 'template')
-                return this.pipelines.filter((item) => item.tags && item.tags.includes('template'))
-            else
-                return PLATFORM_PIPELINES.map(item => ({...item, show: this.isSearchShowItem(item)}))
+            const mode = this.choosenPivot?.key || 'custom'
+            const items = mode === 'workflow' ? PLATFORM_PIPELINES : this.pipelines.filter(item =>
+                mode === 'template' ? item.tags?.includes('template') : !item.tags?.includes('template'))
+            return items.map(item => ({...item, show: this.isSearchShowItem(item)}))
         },
         totalNumVisible() {
             return this.filteredPipelines.filter((item) => item.show).length
@@ -260,19 +260,25 @@ export default {
             }
             if (!this.thisLoading) return
             this.thisLoading = false
-            this.thisPipeline = pipelineItem
-            await usePipelineOperation().renderPipeline(
-                pipelineItem.config,
-                this.flowId,
-                this.datasets,
-                this.flatFormatedOperators,
-                this,
-                this.$nextTick,
-                this.$emit,
-                this.$Guid
-            )
-            this.thisLoading = true
-            this.$emit('select-pipeline', pipelineItem)
+            try {
+                await usePipelineOperation().renderPipeline(
+                    pipelineItem.config,
+                    this.flowId,
+                    this.datasets,
+                    this.flatFormatedOperators,
+                    this,
+                    this.$nextTick,
+                    this.$emit,
+                    this.$Guid
+                )
+                this.thisPipeline = pipelineItem
+                this.$emit('update:pipeline', pipelineItem)
+                this.$emit('select-pipeline', pipelineItem)
+            } catch (error) {
+                this.$barWarning(error.message || this.local('Load pipeline failed'), {status: 'error'})
+            } finally {
+                this.thisLoading = true
+            }
         },
         delPipeline(item) {
             if (!item) return
@@ -282,7 +288,7 @@ export default {
                 confirm: () => {
                     this.$api.pipelines.delete_pipeline(item.id).then((res) => {
                         if (res.code === 200) {
-                            if (item.id === this.thisPipeline.id) {
+                            if (item.id === this.thisPipeline?.id) {
                                 this.thisPipeline = null
                             }
                             this.getPipelineList()
