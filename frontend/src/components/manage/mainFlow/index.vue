@@ -28,7 +28,7 @@
             </template>
         </VueFlow>
         <Teleport to="body">
-            <operator-detail-panel v-if="selectedOperator" v-model="showInspector"
+            <operator-detail-panel v-if="selectedOperator" :key="selectedOperator.id" v-model="showInspector"
                 :node-id="selectedOperator.id" :data="selectedOperator.data" :theme="theme"
                 @update-run-value="updateRunValue" @show-details="showDetails" @download-data="downloadData" />
         </Teleport>
@@ -85,13 +85,14 @@ const props = defineProps({
 
 const thisNodes = ref(props.nodes)
 const thisEdges = ref(props.edges)
-const selectedOperator = ref(null)
+const selectedOperatorId = ref(null)
+const selectedOperator = computed(() => thisNodes.value.find(n => n.id === selectedOperatorId.value) || null)
 const showInspector = ref(false)
 watch(
     () => props.nodes,
     (newNodes) => {
         thisNodes.value = newNodes
-        if (selectedOperator.value && !newNodes.some(n => n.id === selectedOperator.value.id)) closeInspector()
+        if (selectedOperatorId.value && !newNodes.some(n => n.id === selectedOperatorId.value)) { selectedOperatorId.value = null; closeInspector() }
     }
 )
 watch(
@@ -134,12 +135,12 @@ const selectOperator = ({ node }) => {
         closeInspector()
         return
     }
-    selectedOperator.value = node
+    selectedOperatorId.value = node.id
     showInspector.value = true
 }
 
 const inspectOperator = (nodeId) => {
-    selectOperator({ node: useVueFlow(props.id).findNode(nodeId) })
+    selectOperator({ node: thisNodes.value.find(n => n.id === nodeId) })
 }
 
 const closeInspector = () => {
@@ -193,7 +194,7 @@ const deleteNode = (nodeInfo) => {
             const flow = useVueFlow(props.id)
             flow.removeNodes(nodeInfo.id)
             if (selectedOperator.value?.id === nodeInfo.id) {
-                selectedOperator.value = null
+                selectedOperatorId.value = null
                 showInspector.value = false
             }
         }

@@ -9,7 +9,7 @@
                 <span class="step-pill">{{ stepLabel }}</span>
                 <span class="parameter-count">{{ initParamCount }} init · {{ runParamCount }} run</span>
             </div>
-            <button class="details-button nodrag" type="button" :aria-label="`${thisData.label} 参数详情`" @click.stop="emits('inspect-node', props.id)">
+            <button class="details-button nodrag" type="button" :aria-label="`${thisData.label} 参数详情`" @pointerdown.stop @dblclick.stop @click.stop="inspect">
                 <i class="ms-Icon ms-Icon--Info"></i>
                 {{ appConfig.local('参数详情') }}
             </button>
@@ -152,44 +152,35 @@ const paramsWrapper = (objs) => {
     }
     return objs
 }
+let detailRequest = 0
 const getNodeDetail = async () => {
-    if (props.data.externalTemplate) return // Already adapted; no core lookup or parameter coercion.
-    if (!props.data || !props.data.name || !props.data.flowId) return
-    if (!thisData.value._cache_parameter) {
-        loading.value = true
-        const res = await $api.operators.get_operator_detail_by_name(props.data.name).catch(() => {
-            loading.value = false
-        })
-        loading.value = false
-        if (res.code === 200) {
-            thisData.value._cache_parameter = res.data.parameter
-        } else {
-            loading.value = false
-            return
+    if (props.data.externalTemplate || !props.data?.name || !props.data?.flowId) return
+    const id = props.id, name = props.data.name, request = ++detailRequest
+    loading.value = true
+    emits('update-node-data', {id, data: {parameterLoading: true, parameterError: ''}})
+    try {
+        let parameter = props.data._cache_parameter
+        if (!parameter) {
+            const res = await $api.operators.get_operator_detail_by_name(name)
+            if (res?.code !== 200 || !res.data?.parameter) throw new Error(res?.message || '参数加载失败，请再次点击参数详情重试')
+            parameter = res.data.parameter
         }
-    }
-    let parameter = thisData.value._cache_parameter
-    let operatorParams = {
-        init: [],
-        run: []
-    }
-    operatorParams.init = paramsWrapper(parameter.init)
-    operatorParams.run = paramsWrapper(parameter.run)
-    emits('update-node-data', {
-        id: props.id,
-        data: {
-            ...props.data,
-            operatorParams
+        if (request !== detailRequest || props.id !== id || props.data.name !== name) return
+        const operatorParams = props.data.operatorParams || {
+            init: paramsWrapper(JSON.parse(JSON.stringify(parameter.init || []))),
+            run: paramsWrapper(JSON.parse(JSON.stringify(parameter.run || [])))
         }
-    })
+        emits('update-node-data', {id, data: {operatorParams, _cache_parameter: parameter, parameterLoading: false, parameterError: ''}})
+    } catch(e) {
+        if (request === detailRequest && props.id === id) emits('update-node-data', {id, data: {parameterLoading: false, parameterError: e.message || '参数加载失败，请再次点击参数详情重试'}})
+    } finally { if (request === detailRequest) loading.value = false }
+}
+const inspect = () => {
+    emits('inspect-node', props.id)
+    if (!props.data.operatorParams || props.data.parameterError) getNodeDetail()
 }
 
-watch(
-    () => props.id,
-    () => {
-        getNodeDetail()
-    }
-)
+watch([() => props.id, () => props.data.name], () => getNodeDetail())
 
 watch(
     () => dataflow.executionStep,

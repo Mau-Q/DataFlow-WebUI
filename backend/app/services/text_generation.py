@@ -186,7 +186,7 @@ class TextGeneration:
             shutil.rmtree(root)
             raise
 
-    async def submit(self, pipeline_id=None, previous_id=None, output_root=None):
+    async def submit(self, pipeline_id=None, previous_id=None, output_root=None, collection_target=None):
         previous = self.c.task_registry.get(previous_id) if previous_id else None
         if previous_id:
             if not previous:
@@ -211,6 +211,8 @@ class TextGeneration:
             raise LibraryError('；'.join(check['errors']), 422)
         options = config.setdefault('execution_options', {})
         from app.services.auto_collection import freeze_collection_target
+        if collection_target is not None:
+            options['collection_target'] = collection_target
         freeze_collection_target(config, self.c.data_library)
         options['input_snapshot'] = self._freeze_input(config)
         options.update(capture_responses=True, training_output=True, max_attempts=options.get('additional_retries', 0)+1,

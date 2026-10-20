@@ -17,6 +17,8 @@
                 </div>
 
                 <div class="operator-detail-scroll" @wheel.stop>
+                    <p v-if="data?.parameterLoading" role="status">正在加载参数…</p>
+                    <p v-if="data?.parameterError" role="alert">{{ data.parameterError }}</p>
                     <section class="parameter-section">
                         <div class="section-heading init">
                             <span>{{ appConfig.local('Init. Parameters') }}</span>

@@ -129,7 +129,7 @@ def serving_fixture(calls, reject=False, tie=False, malformed=False, failure=Fal
     return Serving
 
 
-def run_pipeline(platform, monkeypatch, definition, *, reject=False, tie=False, malformed=False, sync=False, change_resource=False, failure=False, cold_worker=False):
+def run_pipeline(platform, monkeypatch, definition, *, reject=False, tie=False, malformed=False, sync=False, change_resource=False, failure=False, cold_worker=False, collection_target=None):
     c,root,_=platform
     from app.services import ray_pipeline_executor as worker, dataflow_engine as engine
     calls=[]
@@ -199,7 +199,7 @@ Path(sys.argv[3]).write_text(json.dumps(dict(result=result,calls=calls)))
             result=engine.DataFlowEngine().run(frozen,tid,task_path) if sync else worker.dataflow_pipeline_execute(frozen,runtime,tid,task_path)
         patch_task(task_path,tid,result)
     monkeypatch.setattr(worker.ray_executor,'submit_execution',execute)
-    submitted=asyncio.run(TextGeneration().submit(pipeline_id=saved['id'],output_root=str(root/'chosen-results')))
+    submitted=asyncio.run(TextGeneration().submit(pipeline_id=saved['id'],output_root=str(root/'chosen-results'),collection_target=collection_target))
     task=c.task_registry.get(submitted['task_id'])
     assert task['status']==('failed' if failure else 'completed'),task.get('output')
     if not failure:
@@ -442,3 +442,18 @@ def test_scored_saved_copy_migrates_once_preserving_input_and_services(platform,
     before=c.pipeline_registry._read();install_templates(c);assert c.pipeline_registry._read()==before
     backups=list((root/'backups'/'removed-training-scoring').glob('*.json'))
     assert len(backups)==1 and json.loads(backups[0].read_text())['saved-copy']==record
+
+
+@pytest.mark.parametrize('definition',definitions(),ids=lambda d:d['id'])
+@pytest.mark.parametrize('mode',['new','append'])
+def test_all_workflows_honor_selected_collection_target(platform,monkeypatch,definition,mode):
+    from app.schemas.data_library import DraftCreate
+    c,_,_=platform
+    contract=definition['config']['execution_options']['simple_training']
+    draft=c.data_library.create_draft(DraftCreate(name='existing target',**contract))
+    target=dict(mode=mode,name='chosen new name' if mode=='new' else '',draft_id=draft['id'] if mode=='append' else None)
+    task,detail,_=run_pipeline(platform,monkeypatch,definition,collection_target=target)
+    assert detail['auto_collection']['status']=='collected'
+    assert detail['collections'][0]['name']==('chosen new name' if mode=='new' else 'existing target')
+    assert len(c.data_library.list_drafts())==(2 if mode=='new' else 1)
+    if mode=='append':assert detail['collections'][0]['id']==draft['id']

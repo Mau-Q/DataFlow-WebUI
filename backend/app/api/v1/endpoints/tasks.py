@@ -4,6 +4,7 @@ from fastapi.responses import FileResponse
 from typing import List, Dict
 from pydantic import BaseModel, Field
 from app.services.task_results import TaskResults
+from app.services.auto_collection import CollectionTarget, target_preferences
 from app.services.data_library import LibraryError
 from app.schemas.pipelines import (
     PipelineExecutionResult
@@ -26,6 +27,7 @@ router = APIRouter(tags=["tasks"])
 
 class RunOutput(BaseModel):
     output_root: str | None = Field(default=None, min_length=1, max_length=4000)
+    collection_target: CollectionTarget | None = None
 
 
 # CRUD操作API
@@ -213,7 +215,7 @@ def get_task_stats():
 
 # Pipeline执行API
 @router.post("/execute", response_model=ApiResponse[PipelineExecutionResult], operation_id="execute_pipeline", summary="执行Pipeline")
-async def execute_pipeline(request: Request, pipeline_id):
+async def execute_pipeline(request: Request, pipeline_id, body: RunOutput | None = Body(default=None)):
     task_id = None
     try:
         logger.info(f"Request: {request.method} {request.url.path}")
@@ -222,11 +224,15 @@ async def execute_pipeline(request: Request, pipeline_id):
         if not pipeline_config:
             raise HTTPException(404, f"Pipeline {pipeline_id} not found")
 
-        config = pipeline_config.get('config', {})
+        import copy
+        config = copy.deepcopy(pipeline_config.get('config', {}))
+        options = config.setdefault('execution_options', {})
+        if body and body.collection_target:
+            options['collection_target'] = body.collection_target.model_dump()
+        if body and body.output_root:
+            options.update(output_root=body.output_root, pipeline_name=pipeline_config.get('name', 'Pipeline'))
         if config.get('execution_options', {}).get('capture_responses'):
             from app.services.text_generation import TextGeneration
-            import copy
-            config = copy.deepcopy(config)
             platform = TextGeneration()
             check = platform.preflight(config)
             if not check['ready']:
@@ -248,9 +254,10 @@ async def execute_pipeline(request: Request, pipeline_id):
         else:
             # 调用服务层开始执行
             task_id, frozen_config, initial_result = container.task_registry.start_execution(
-                pipeline_id=pipeline_id,
-                config=pipeline_config
+                config=config
             )
+            initial_result.update(pipeline_id=pipeline_id, name=pipeline_config.get('name'), pipeline_source_config=pipeline_config['config'])
+            container.task_registry.update(task_id, initial_result)
         logger.info(f"Execution ID: {task_id}")
         
         # 执行 pipeline (run 方法内部已经处理所有异常，总是返回结果)
@@ -266,6 +273,8 @@ async def execute_pipeline(request: Request, pipeline_id):
         
     except HTTPException:
         raise
+    except LibraryError as exc:
+        raise HTTPException(exc.status, str(exc)) from exc
     except ResourceReferenceError as e:
         raise HTTPException(422, str(e))
     except Exception as e:
@@ -332,13 +341,14 @@ async def execute_pipeline_async(request: Request, pipeline_id: str, body: RunOu
         if pipeline_config.get('config', {}).get('execution_options', {}).get('capture_responses'):
             from app.services.text_generation import TextGeneration
             try:
-                return ok(await TextGeneration().submit(pipeline_id=pipeline_id, output_root=body.output_root if body else None))
+                return ok(await TextGeneration().submit(pipeline_id=pipeline_id, output_root=body.output_root if body else None, collection_target=body.collection_target.model_dump() if body and body.collection_target else None))
             except LibraryError as exc:
                 raise HTTPException(exc.status, str(exc)) from exc
 
         # 调用服务层开始异步执行
         result = await container.task_registry.start_execution_async(
-            pipeline_id=pipeline_id, output_root=body.output_root if body else None
+            pipeline_id=pipeline_id, output_root=body.output_root if body else None,
+            collection_target=body.collection_target.model_dump() if body and body.collection_target else None
         )
         task_id = result["task_id"]
         logger.info(f"Async Execution ID: {task_id}, Task ID: {task_id}")
@@ -460,3 +470,8 @@ def choose_result_storage():
     if not paths:
         return ok({'cancelled': True})
     return ok({'cancelled': False, 'output_root': result_call(check_root, paths[0])})
+
+
+@router.get('/collection-target')
+def collection_target_preferences():
+    return ok(target_preferences(container.data_library))

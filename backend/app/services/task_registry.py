@@ -399,7 +399,8 @@ class TaskRegistry:
     async def start_execution_async(
         self, 
         pipeline_id: Optional[str] = None, 
-        config: Optional[Dict[str, Any]] = None, output_root: Optional[str] = None
+        config: Optional[Dict[str, Any]] = None, output_root: Optional[str] = None,
+        collection_target: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
         异步开始执行Pipeline（使用 Ray）
@@ -428,6 +429,8 @@ class TaskRegistry:
         
         import copy
         pipeline_config = copy.deepcopy(pipeline_config)
+        if collection_target is not None:
+            pipeline_config.setdefault('execution_options', {})['collection_target'] = collection_target
         if output_root is not None:
             options = pipeline_config.setdefault('execution_options', {})
             options['output_root'] = output_root
@@ -435,7 +438,7 @@ class TaskRegistry:
                 options['pipeline_name'] = pipeline.get('name', 'Pipeline')
         task_id, pipeline_config, initial_result = self.start_execution(config=pipeline_config)
         if pipeline_id:
-            patch_task(self.path, task_id, {'pipeline_id': pipeline_id})
+            patch_task(self.path, task_id, {'pipeline_id': pipeline_id, 'name': pipeline.get('name', 'Pipeline')})
         dataflow_runtime = DataFlowEngine.decode_hashed_arguments(pipeline_config, task_id)
         
         # 提交到 Ray 异步执行

@@ -12,7 +12,7 @@
         <div class="grid"><label>统一分配文本服务<select v-model="servingId" @change="bindServing"><option value="">按各步骤配置</option><option v-for="s in servings" :key="s.id" :value="s.id">{{ s.name }}</option></select></label><label>请求失败后的额外重试次数<input type="number" min="0" max="5" v-model.number="config.execution_options.additional_retries" /></label></div>
         <p class="help">进度按整批计数。完整批次产物可复用；失败批次手动从头重跑，保留原任务。任务完成后仍需检查数据质量。</p>
         <details><summary>查看步骤与必要参数</summary><article v-for="(op, i) in config.operators" :key="i"><strong>{{ i+1 }}. {{ op.name }}</strong><p>{{ op.pipeline_role }}</p><label v-for="p in editable(op)" :key="p.name">{{ p.name }}<select v-if="p.name === 'llm_serving'" v-model="p.value"><option :value="null">未配置</option><option v-for="s in servings" :key="s.id" :value="s.id">{{ s.name }}</option></select><input v-else v-model="p.value" :type="typeof p.value === 'number' ? 'number' : 'text'" /></label></article></details>
-        <div class="actions"><button :disabled="busy" type="submit">保存配置</button><button :disabled="busy || !selectedId" type="button" @click="openCanvas">进阶画布</button><button :disabled="busy || !selectedId" type="button" @click="check">检查运行条件</button><button class="primary" :disabled="busy || !selectedId || dirty" type="button" @click="submit">提交运行</button></div>
+        <div class="actions"><button :disabled="busy" type="submit">保存配置</button><button :disabled="busy || !selectedId" type="button" @click="openCanvas">进阶画布</button><button :disabled="busy || !selectedId" type="button" @click="check">检查运行条件</button><button class="primary" :disabled="busy || !selectedId || dirty" type="button" @click="showRunConfirm=true">提交运行</button></div>
         <p v-if="dirty" class="help">配置已修改，请先保存。</p><ul v-if="conditions"><li v-for="e in conditions.errors" :key="e" class="error">{{ e }}</li><li v-if="conditions.ready">运行条件检查通过；提交将调用所选文本服务。</li></ul>
       </form>
     </section>
@@ -24,15 +24,18 @@
         <details><summary>输入、配置与资源快照</summary><pre>{{ JSON.stringify({config: task.pipeline_config, resources: task.resource_snapshots}, null, 2) }}</pre></details><details><summary>日志</summary><pre>{{ (task.logs || []).join('\n') }}</pre></details>
       </section>
     </div>
+    <run-confirm-panel v-model="showRunConfirm" :theme="theme" :pipeline-name="name" :dataset-name="pdfDatasets.find(d=>d.id===datasetId)?.name || ''" :contract="{modality:'text',training_type:'sft'}" @confirm="submit" />
   </main>
 </template>
 <script>
 import axios from 'axios'
 import {mapState} from 'pinia'
 import {useTheme} from '@/stores/theme'
+import RunConfirmPanel from '@/components/manage/mainFlow/panels/runConfirmPanel.vue'
 export default {
  name: 'TextGeneration',
- data:()=>({config:null, baseline:'', name:'论文 SFT 生成', selectedId:'',datasetId:'',servingId:'',configs:[],datasets:[],servings:[],tasks:[],task:null,drafts:[],draftId:'',conditions:null,busy:false,error:'',notice:'',timer:null}),
+ components: {RunConfirmPanel},
+ data:()=>({config:null, showRunConfirm:false, baseline:'', name:'论文 SFT 生成', selectedId:'',datasetId:'',servingId:'',configs:[],datasets:[],servings:[],tasks:[],task:null,drafts:[],draftId:'',conditions:null,busy:false,error:'',notice:'',timer:null}),
  computed:{...mapState(useTheme,['theme']),pdfDatasets(){return this.datasets.filter(d=>d.content_type==='pdf' && d.type==='jsonl')},dirty(){return this.baseline!==JSON.stringify([this.name,this.datasetId,this.config])},failure(){const o=this.task?.output||{};return [o.error,o.original_error,o.error_message,o.artifact_error].filter(Boolean).join('；')}},
  async mounted(){await this.load();this.timer=setInterval(()=>{if(!this.busy && this.task && ['queued','running'].includes(this.task.status))this.selectTask(this.task.task_id)},4000)},
  watch:{$route(to,from){if(to.path==='/m/generation' && from.path!==to.path && this.config){this.selectedId=to.query.pipeline||this.selectedId;this.selectConfig();this.load()}}},
@@ -46,7 +49,7 @@ export default {
  editable(op){return op.params.init.filter(p=>['llm_serving','mineru_script','tokenizer_path','chunk_size','chunk_overlap','num_q','timeout_seconds'].includes(p.name))},
  save(){return this.action(async()=>{const c=JSON.parse(JSON.stringify(this.config));c.input_dataset=typeof c.input_dataset==='object'?{...c.input_dataset,id:this.datasetId}:{id:this.datasetId,location:[30,160]};const p=await this.request('post','/generation/configs',{name:this.name,config:c,pipeline_id:this.selectedId||null});this.selectedId=p.id;this.config=p.config;this.baseline=JSON.stringify([this.name,this.datasetId,this.config]);this.configs=(await this.request('get','/pipelines/')).filter(p=>p.tags?.includes('platform-text'));this.notice='已保存，与画布共用此配置';this.conditions=null})},
  check(){return this.action(async()=>{this.conditions=await this.request('get',`/generation/configs/${this.selectedId}/check`);if(this.dirty)this.notice='检查的是已保存配置，请先保存当前修改'})},
- submit(){return this.action(async()=>{const r=await this.request('post',`/generation/configs/${this.selectedId}/submit`);await this.fetchTask(r.task_id);this.tasks=await this.request('get','/generation/tasks');this.notice='任务已提交'})},
+ submit(options){return this.action(async()=>{const r=await this.request('post',`/tasks/execute-async?pipeline_id=${encodeURIComponent(this.selectedId)}`,options);await this.fetchTask(r.task_id);this.tasks=await this.request('get','/generation/tasks');this.notice='任务已提交'})},
  openCanvas(){this.$router.push({path:'/m',query:{pipeline:this.selectedId}})},
  async fetchTask(id){this.task=await this.request('get','/generation/tasks/'+id)},selectTask(id){return this.action(()=>this.fetchTask(id))},
  cancel(){return this.action(async()=>{await this.request('post',`/tasks/execution/${this.task.task_id}/kill`);await this.fetchTask(this.task.task_id);this.tasks=await this.request('get','/generation/tasks')})},

@@ -52,7 +52,7 @@
                             <fv-button theme="dark"
                                 background="linear-gradient(90deg, rgba(69, 98, 213, 1), rgba(161, 145, 206, 1))"
                                 foreground="rgba(255, 255, 255, 1)" border-color="rgba(255, 255, 255, 0.3)"
-                                border-radius="30" :disabled="!currentPipeline" :reveal-background-color="[
+                                border-radius="30" :disabled="!currentPipeline || runPreparing || !lock.running" :reveal-background-color="[
                                     'rgba(255, 255, 255, 0.5)',
                                     'rgba(103, 105, 251, 0.6)'
                                 ]" style="width: 120px;" @click="openRunConfirm">
@@ -133,7 +133,7 @@
             @confirm="addPipeline"></pipelinePanel>
         <execResultPanel v-model="show.execResult" :title="local('Execute Result')" :current-pipeline="currentPipeline"
             :current-step="executionInfo.currentStep" :running-result="executionInfo.runningResult"></execResultPanel>
-        <run-confirm-panel v-model="show.runConfirm" :theme="theme" :pipeline-name="currentPipeline?.name || 'Pipeline'" :dataset-name="sourceDatabase?.name || ''" @confirm="handleRunClick" />
+        <run-confirm-panel v-model="show.runConfirm" :theme="theme" :pipeline-name="currentPipeline?.name || 'Pipeline'" :dataset-name="sourceDatabase?.name || ''" :contract="runCollectionContract" @confirm="handleRunClick" />
         <taskPanel v-model="show.taskPanel" :title="local('运行记录')" :current-pipeline="currentPipeline" :initial-task-id="historyTaskId"
             @confirm="handleWatchExecution"></taskPanel>
     </div>
@@ -265,6 +265,8 @@ export default {
             edges: [],
             sourceDatabase: null,
             currentPipeline: null,
+            pendingRun: false,
+            runPreparing: false,
             executionInfo: {
                 task_id: null,
                 currentStep: null,
@@ -297,6 +299,7 @@ export default {
         }
     },
     watch: {
+        'show.pipelinePanel'(visible) { if (!visible) this.pendingRun = false },
         $route(to, from) {
             if (to.path.replace(/\/$/, '') !== '/m') return
             if (to.query.task && to.query.task !== from.query.task) this.openTaskHistory(to.query.task)
@@ -371,6 +374,13 @@ export default {
         }
     },
     computed: {
+        runCollectionContract() {
+            const c = this.currentPipeline?.config
+            if(c?.execution_options?.simple_training)return c.execution_options.simple_training
+            const names=(c?.operators || []).map(op => op.name)
+            const kind=names.some(n => /DPO/.test(n)) ? 'dpo' : names.some(n => /SFT/.test(n)) ? 'sft' : null
+            return kind ? {modality:names.some(n => /Image|VQA/.test(n))?'image_text':'text',training_type:kind} : null
+        },
         isMM() { return this.$route.query.workflow === 'multimodal' },
         ...mapState(useAppConfig, ['local']),
         ...mapState(useTheme, ['theme', 'color', 'gradient']),
@@ -743,7 +753,7 @@ export default {
             let nodeOperators = this.sortPipeline()
             const flow = useVueFlow(this.flowId)
             let dbNode = flow.findNode('db-node')
-            await this.$api.pipelines
+            return await this.$api.pipelines
                 .update_pipeline(this.currentPipeline.id, {
                     name: this.currentPipeline.name,
                     config: {
@@ -763,14 +773,17 @@ export default {
                         this.$barWarning(this.local('Pipeline has been updated'), {
                             status: 'correct'
                         })
+                        return true
                     }
+                    this.$barWarning(res.message || this.local('Pipeline update failed'), {status:'error'})
+                    return false
                 })
                 .catch((err) => {
                     this.$barWarning(this.local('Pipeline update failed'), {
                         status: 'error'
                     })
+                    return false
                 })
-            return true
         },
         async addPipeline(name) {
             if (!this.sourceDatabase) {
@@ -795,13 +808,14 @@ export default {
                             input_dataset:{id:this.sourceDatabase.id,location:[dbNode.position.x,dbNode.position.y]},
                             operators:nodeOperators}
                     })
+                    this.resumeRunAfterSave()
                     this.show.pipelinePanel = false
                     await this.getPipelines()
                     this.$barWarning(this.local('Pipeline has been created'), {status:'correct'})
                 } catch (e) { this.$barWarning(e.message, {status:'warning'}) }
                 return
             }
-            this.$api.pipelines
+            return await this.$api.pipelines
                 .create_pipeline({
                     name: name,
                     tags: this.currentPipeline?.tags?.includes('platform-text') ? ['platform-text','sft'] : [],
@@ -825,6 +839,7 @@ export default {
                         this.$barWarning(this.local('Pipeline has been created'), {
                             status: 'correct'
                         })
+                        this.resumeRunAfterSave()
                         this.show.pipelinePanel = false
                     } else {
                         this.$barWarning(res.message || this.local('Pipeline update failed'), {status: 'error'})
@@ -834,7 +849,7 @@ export default {
                     this.$barWarning(err?.message || this.local('Pipeline update failed'), {status: 'error'})
                 })
         },
-        async executePipeline(outputRoot) {
+        async executePipeline(runOptions) {
             if (this.isMM) {
                 try { await this.platformRequest('post', `/multimodal/configs/${this.mmRecord.id}/submit`) }
                 catch (e) { this.$barWarning(e.message, {status:'warning'}); this.lock.running = true }
@@ -847,7 +862,7 @@ export default {
                 })
                 return
             }
-            await this.platformRequest('post', `/tasks/execute-async?pipeline_id=${encodeURIComponent(this.currentPipeline.id)}`, {output_root: outputRoot})
+            await this.platformRequest('post', `/tasks/execute-async?pipeline_id=${encodeURIComponent(this.currentPipeline.id)}`, runOptions)
                 .then((data) => ({code: 200, data}))
                 .then((res) => {
                     if (res.code === 200) {
@@ -871,25 +886,29 @@ export default {
                     this.lock.running = true
                 })
         },
-        openRunConfirm() {
+        async openRunConfirm() {
+            if (this.runPreparing || this.show.runConfirm || this.pendingRun) return
             if (!this.lock.running) { this.$barWarning(this.local('Please wait for the previous pipeline to finish'), {status:'warning'}); return }
             if (this.isMM) { this.$barWarning('图片流程当前未启用运行', {status:'warning'}); return }
+            this.runPreparing = true
+            try {
+                const saved = await this.handleSaveClick()
+                if (saved) this.show.runConfirm = true
+                else if (this.show.pipelinePanel) this.pendingRun = true
+            } catch(e) { this.$barWarning(e.message, {status:'error'}) }
+            finally { this.runPreparing = false }
+        },
+        resumeRunAfterSave() {
+            if (!this.pendingRun) return
+            this.pendingRun = false
             this.show.runConfirm = true
         },
-        async handleRunClick(outputRoot) {
-            if (!this.lock.running) {
-                this.$barWarning(this.local('Please wait for the previous pipeline to finish'), {
-                    status: 'warning'
-                })
-                return
-            }
+        async handleRunClick(runOptions) {
+            if (!this.lock.running) return
             this.lock.running = false
-            let isSaved = await this.handleSaveClick()
-            if (!isSaved) {
-                this.lock.running = true
-                return;
-            }
-            await this.executePipeline(outputRoot)
+            // Pipeline was saved before opening the single run-settings dialog.
+            try { await this.executePipeline(runOptions) }
+            catch(e) { this.lock.running = true; this.$barWarning(e.message, {status:'error'}) }
         },
         showExecDetails(pipeline_idx) {
             if (!this.executionInfo.task_id) return

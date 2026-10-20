@@ -259,3 +259,62 @@ def test_polling_status_exposes_auto_collection_without_full_output(setup):
     status=registry.get_execution_status(result['task_id'])
     assert status['auto_collection']['status']=='collected'
     assert 'output' not in status
+
+
+@pytest.mark.parametrize('mode',['new','append'])
+def test_selected_target_is_frozen_remembered_and_used_without_ui(setup,mode):
+    from app.services.auto_collection import freeze_collection_target, collect_completed_result, target_preferences
+    service,records,root=setup
+    existing=service.lib.create_draft(DraftCreate(name='existing',modality='text',training_type='sft'))
+    rec,_=task(setup,task_id='selected-target')
+    target=dict(mode=mode,name='  user selected  ' if mode=='new' else '',draft_id=existing['id'] if mode=='append' else None)
+    config=rec['pipeline_config']
+    config['execution_options']=dict(simple_training=dict(modality='text',training_type='sft'),collection_target=target)
+    freeze_collection_target(config,service.lib)
+    remembered=target_preferences(DataLibrary(service.lib.root))['text:sft']
+    assert remembered['mode']==mode
+    assert remembered['name']==('user selected' if mode=='new' else '')
+    # Later preferences do not redirect an already submitted task.
+    other={'execution_options':{'collection_target':dict(mode='new',name='later')}}
+    freeze_collection_target(other,service.lib)
+    registry=root/'selected-tasks.json';registry.write_bytes(_json_bytes({'tasks':records}))
+    result=collect_completed_result(config,rec,registry)
+    target_id=result['output']['auto_collection']['dataset_id']
+    assert service.lib._get('drafts',target_id)['name']==('user selected' if mode=='new' else 'existing')
+    replay=collect_completed_result(config,result,registry)
+    assert replay['output']['auto_collection']['reused']
+    assert service.lib._get('drafts',target_id)['rows']==[row()]
+
+
+@pytest.mark.parametrize('target', [dict(mode='new',name='  '),dict(mode='append'),dict(mode='append',draft_id='ds_'+'f'*32)])
+def test_invalid_target_is_rejected_before_worker_dispatch(setup,target):
+    from app.services.auto_collection import freeze_collection_target
+    config={'execution_options':{'collection_target':target}}
+    with pytest.raises(LibraryError):freeze_collection_target(config,setup[0].lib)
+    assert not setup[0].lib.list_drafts()
+
+
+def test_incompatible_target_rejected_before_run_and_preferences_kept(setup):
+    from app.services.auto_collection import freeze_collection_target,target_preferences
+    lib=setup[0].lib
+    draft=lib.create_draft(DraftCreate(name='DPO',modality='text',training_type='dpo'))
+    with pytest.raises(LibraryError,match='不一致'):
+        freeze_collection_target({'execution_options':{'simple_training':dict(modality='text',training_type='sft'),
+            'collection_target':dict(mode='append',draft_id=draft['id'])}},lib)
+    assert target_preferences(lib)=={}
+
+
+@pytest.mark.parametrize('route',['/execute','/execute-async'])
+def test_invalid_collection_target_api_rejects_before_queuing(setup,monkeypatch,route):
+    from app.services.task_registry import TaskRegistry
+    lib=setup[0].lib
+    registry=TaskRegistry(str(setup[2]/'api-tasks.json'))
+    monkeypatch.setattr(container,'data_library',lib)
+    monkeypatch.setattr(container,'task_registry',registry)
+    monkeypatch.setattr(container,'pipeline_registry',SimpleNamespace(get_pipeline=lambda _:dict(name='test',config={'operators':[]})))
+    app=FastAPI();app.include_router(tasks.router,prefix='/tasks')
+    with TestClient(app) as client:
+        response=client.post('/tasks'+route+'?pipeline_id=test',json={'collection_target':{'mode':'new','name':' '}})
+    assert response.status_code==422
+    assert not registry.list_executions()
+    assert not lib.list_drafts()
