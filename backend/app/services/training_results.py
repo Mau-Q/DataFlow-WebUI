@@ -25,6 +25,9 @@ def import_result(service, payload):
     if any(not isinstance(payload[k],str) or not re.fullmatch('[a-zA-Z0-9_-]{1,80}',payload[k]) for k in ['run_id','attempt_id']):raise TrainingError('run/attempt ID 无效')
     if type(payload['sequence']) is not int or payload['sequence']<0 or type(payload['synthetic']) is not bool or payload['status'] not in TERMINAL|ACTIVE:raise TrainingError('结果序号/状态/合成标记无效')
     if not isinstance(payload['metrics'],list) or not isinstance(payload.get('strategy_metrics',[]),list) or not isinstance(payload['artifacts'],list):raise TrainingError('指标/产物必须为列表')
+    for key in ['metrics','strategy_metrics']:
+        if any(not isinstance(r,dict) for r in payload.get(key,[])):raise TrainingError('每条指标必须为对象')
+    if not isinstance(payload['actual_config'],dict) or not isinstance(payload['environment'],dict) or not isinstance(payload.get('log',''),str):raise TrainingError('配置/环境需要对象，日志需要字符串')
     artifacts=payload['artifacts']
     if any(not isinstance(a,dict) or not a.get('id') or not re.fullmatch('[0-9a-f]{64}',a.get('sha256','')) or a.get('availability') not in ['remote_registered','local_verified'] for a in artifacts):raise TrainingError('产物需要 ID、哈希和位置状态')
     if len({a['id'] for a in artifacts})!=len(artifacts):raise TrainingError('产物 ID 重复')

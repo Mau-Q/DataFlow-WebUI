@@ -60,7 +60,10 @@ class AppContainer:
         from app.services.model_training import ModelTraining
         from pathlib import Path
         import os
-        self.model_training = ModelTraining(os.environ.get('DATAFLOW_TRAINING_DIR') or Path(settings.BASE_DIR) / settings.RESOURCE_DIR / 'model_training', self.data_library)
+        try:
+            self.model_training = ModelTraining(os.environ.get('DATAFLOW_TRAINING_DIR') or Path(settings.BASE_DIR) / settings.RESOURCE_DIR / 'model_training', self.data_library)
+        except ValueError as exc:
+            self.model_training_error = str(exc)
         if not is_ray_worker:
             from app.services.representative_training import install_templates
             install_templates(self)

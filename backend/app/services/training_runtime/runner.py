@@ -1,5 +1,6 @@
 """Portable standard-library runner. Execute only in the independent training environment."""
 import argparse
+import base64
 import hashlib
 import importlib.metadata
 import json
@@ -33,6 +34,7 @@ def preflight(root, environment=True):
     if not environment:return {'inputs':'verified','environment':'NOT_RUN'}
     import yaml
     config=yaml.safe_load((root/'train.yaml').read_text())
+    sys.path.insert(0,str(root/'source/src'))
     versions={name:importlib.metadata.version(name) for name in ['torch','transformers','llamafactory','datasets','omegaconf']}
     import torch
     if not torch.cuda.is_available():raise ValueError('CUDA is unavailable')
@@ -46,7 +48,21 @@ def preflight(root, environment=True):
             p=Path(binding['ref'])
             if not p.is_file() or p.is_symlink() or sha(p.read_bytes())!=binding['sha256']:raise ValueError('External reference mismatch')
         else:raise ValueError('HF data must be materialized using prepare_data.py before training')
-    return {'inputs':'verified','versions':versions,'cuda':torch.version.cuda,'gpu_count':torch.cuda.device_count()}
+    import importlib
+    buckets=yaml.safe_load((root/'components.yaml').read_text()) or {}
+    for bucket,module in [('selectors','selector'),('mixers','mixer'),('weighters','weighter'),('reorders','reorder')]:
+        if buckets.get(bucket):
+            importlib.import_module('dataflex.train.'+module)
+            from dataflex.core.registry import REGISTRY
+            for name,component in buckets[bucket].items():
+                registered=component.get('params',{}).get('kind',name) if bucket=='reorders' else name
+                REGISTRY.get(module,registered)
+    model_metadata={}
+    if Path(model).is_dir():
+        for name in ['config.json','tokenizer_config.json']:
+            p=Path(model)/name
+            if p.is_file():model_metadata[name]=sha(p.read_bytes())
+    return {'inputs':'verified','model_metadata_sha256':model_metadata,'versions':versions,'cuda':torch.version.cuda,'gpu_count':torch.cuda.device_count()}
 
 
 def identity(pid):
@@ -61,6 +77,10 @@ def identity(pid):
 
 
 def stop(root, attempt):
+    result=root/'result.json'
+    if result.exists():
+        terminal=json.loads(result.read_text())
+        if terminal.get('attempt_id')==attempt and terminal.get('status') in ['stopped','completed','failed']:return terminal
     record=json.loads((root/'process.json').read_text())
     if record['attempt_id']!=attempt or record['identity']!=identity(record['pid']):raise ValueError('PID identity mismatch; refusing signal')
     os.kill(record['pid'],signal.SIGTERM)
@@ -115,7 +135,10 @@ def run(root, attempt, run_id, expected_manifest):
         odm=root/'output/odm_weights.jsonl'
         result['strategy_metrics']=read_metrics(odm)
         log=root/'train.log'
-        if log.exists():result['log']=log.read_bytes()[-1024*1024:].decode(errors='replace')
+        if log.exists():
+            with log.open('rb') as handle:
+                end=handle.seek(0,2);start=max(0,end-1024*1024);handle.seek(start);raw=handle.read(end-start)
+            result.update(log=raw.decode(errors='replace'),log_base64=base64.b64encode(raw).decode(),log_start_offset=start,log_end_offset=end)
         dump(root/'result.json',result)
     try:
         result['environment']=preflight(root)
@@ -126,6 +149,11 @@ def run(root, attempt, run_id, expected_manifest):
         env=os.environ.copy();env['PYTHONPATH']=str(root/'source/src')+os.pathsep+env.get('PYTHONPATH','');env['HF_HUB_OFFLINE']='1';env['HF_DATASETS_OFFLINE']='1'
         with (root/'train.log').open('ab') as log:
             child=subprocess.Popen([sys.executable,'-c','from dataflex.cli import main; main()','train','train.yaml'],cwd=root,env=env,stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
+            process_record=json.loads((root/'process.json').read_text())
+            try:child_identity=identity(child.pid);child_pgid=os.getpgid(child.pid)
+            except (ProcessLookupError,subprocess.CalledProcessError):child_identity=None;child_pgid=child.pid
+            process_record.update(child_pid=child.pid,child_pgid=child_pgid,child_identity=child_identity)
+            dump(root/'process.json',process_record)
             result['status']='running';sync()
             deadline=None
             while child.poll() is None:
@@ -150,4 +178,6 @@ if __name__=='__main__':
     if args.command=='verify':print(json.dumps(preflight(root,False)))
     elif args.command=='preflight':print(json.dumps(preflight(root)))
     elif args.command=='stop':print(json.dumps(stop(root,args.attempt)))
-    else:run(root,args.attempt,args.run_id,args.manifest)
+    else:
+        if not all([args.attempt,args.run_id,args.manifest]):parser.error('run requires --attempt, --run-id and --manifest')
+        run(root,args.attempt,args.run_id,args.manifest)

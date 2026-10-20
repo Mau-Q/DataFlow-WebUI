@@ -103,8 +103,10 @@ class ModelTraining:
         for i,b in enumerate(plan['data']):
             if not b['ref']: errors.append(f'data[{i}].ref: 缺少数据引用')
             if b['kind']=='draft': errors.append(f'data[{i}]: 草稿需在生成数据集页面明确发布后重新绑定')
-            if b['kind']=='release' and b['ref'] not in releases: errors.append(f'data[{i}]: 发布版本不存在')
-            if b['kind']=='huggingface' and not b['revision']: errors.append(f'data[{i}]: HF 数据需要固定 revision')
+            if b['kind']=='release':
+                if b['ref'] not in releases:errors.append(f'data[{i}]: 发布版本不存在')
+                elif releases[b['ref']].get('modality','text')!=plan['modality'] or releases[b['ref']].get('training_type','sft')!=plan['task']:errors.append(f'data[{i}]: 发布版本与任务/模态不兼容')
+            if b['kind']=='huggingface' and not __import__('re').fullmatch('[0-9a-f]{40,64}',b['revision']): errors.append(f'data[{i}]: HF 数据需要固定 revision')
         return {'structure': 'passed', 'compatibility':'failed' if errors else 'passed','errors':errors,'environment':'not_checked','runtime':'NOT_RUN'}
 
     def backup(self):

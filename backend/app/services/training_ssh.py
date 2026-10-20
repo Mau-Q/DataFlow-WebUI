@@ -1,6 +1,7 @@
 """One fixed SSH target. System authentication and strict known_hosts are mandatory."""
 from contextlib import contextmanager
 import fcntl
+import base64
 import json
 import os
 from pathlib import Path
@@ -9,7 +10,7 @@ import shlex
 import subprocess
 import uuid
 from app.services.model_training import TrainingError,canonical,digest,now
-from app.services.training_results import import_result
+from app.services.training_results import import_result,load_result
 
 
 def validate_host(body):
@@ -28,7 +29,7 @@ class SSHTransport:
         try:
             r=subprocess.run(['ssh','-o','BatchMode=yes','-o','StrictHostKeyChecking=yes','-o','ConnectTimeout=10',self.host['alias'],command],capture_output=True,text=True,timeout=90)
         except (OSError,subprocess.TimeoutExpired) as e:raise TrainingError('SSH 连接未完成，运行状态未知',503) from e
-        if r.returncode:raise TrainingError('SSH 操作失败: '+r.stderr[-1500:],503)
+        if r.returncode:raise TrainingError('SSH 操作失败: '+r.stderr[-1500:],503 if r.returncode==255 else 409)
         try:return json.loads(r.stdout)
         except ValueError as e:raise TrainingError('SSH 返回非 JSON 状态',502) from e
     def upload(self,path,remote):
@@ -83,7 +84,7 @@ def start(service,bundle_id,request_id,factory=SSHTransport):
         transport,host=transport_for(service,factory);bundle=service.get('bundles',bundle_id)
         path=Path(bundle['path'])
         if not path.is_file() or digest(path.read_bytes())!=bundle['archive_sha256']:raise TrainingError('本地运行包校验失败',409)
-        if bundle['manifest']['external_references']:raise TrainingError('外部数据引用尚未物化；请先固定数据并生成可执行包')
+        if any(b['kind']!='file' for b in bundle['manifest']['external_references']):raise TrainingError('HF 数据引用尚未物化；请先固定数据并生成可执行包')
         directory=host['workdir'].rstrip('/')+'/runs/'+attempt
         control=service.put('controls',{'bundle_id':bundle_id,'attempt_id':attempt,'run_id':uuid.uuid4().hex,'phase':'uploading','connection':'connected','host':host,'directory':directory,'manifest_sha256':bundle['manifest_sha256'],'last_observed_at':now()},attempt)
         try:
@@ -104,18 +105,24 @@ def sync(service,attempt,stop=False,factory=SSHTransport):
         control=service.get('controls',attempt);transport=factory(control['host'])
         try:
             if stop:transport.execute(STOP,control['directory'],control['host']['python'],attempt)
-            state=transport.execute(STATUS,control['directory']);control.update(connection='connected',last_observed_at=now(),error='')
+            previous_record=next((r for r in service.list('runs') if r['id']==attempt),None)
+            previous=load_result(service,previous_record) if previous_record else None
+            state=transport.execute(STATUS,control['directory'],len(previous.get('metrics',[])) if previous else 0,len(previous.get('strategy_metrics',[])) if previous else 0,previous.get('log_end_offset',-1) if previous else -1)
+            if state.get('delta'):state['result']=merge_delta(previous,state['result'],state['delta'])
+            control.update(connection='connected',last_observed_at=now(),error='')
             result=state.get('result')
             if result:
                 if result['attempt_id']!=attempt or result['run_id']!=control['run_id'] or result['input_manifest_sha256']!=control['manifest_sha256']:raise TrainingError('远程结果身份冲突',409)
                 imported=import_result(service,result);control.update(phase=imported['status'],sequence=imported['sequence'])
+                if state.get('process_alive') is False and imported['status'] not in ['completed','failed','stopped']:
+                    control.update(phase='unknown',error='runner 身份不再匹配，训练子进程退出尚未确认；需要核对远端记录')
             elif state.get('process'):
                 control['phase']='starting'
             else:
                 # No process record after interrupted staging: safe to close this attempt without signalling anything.
                 control['phase']='failed';control['error']='远端没有进程记录；本次准备未完成，可用新 attempt 重试'
         except TrainingError as e:
-            control.update(connection='disconnected',error=str(e))
+            control.update(connection='disconnected' if e.status==503 else 'connected',error=str(e))
         return service.put('controls',control,attempt,control['version'])
 
 PROBE="""import json,importlib.metadata as m,sys,os
@@ -123,7 +130,11 @@ versions={}
 for name in ['torch','transformers','llamafactory','datasets','omegaconf']:
  try:versions[name]=m.version(name)
  except m.PackageNotFoundError:versions[name]=None
-print(json.dumps({'python':sys.version,'platform':sys.platform,'versions':versions,'environment_checked':True,'gpu_training':'NOT_RUN'}))
+gpu={'available':False}
+if versions.get('torch'):
+ import torch
+ gpu={'available':torch.cuda.is_available(),'cuda':torch.version.cuda,'device_count':torch.cuda.device_count()}
+print(json.dumps({'python':sys.version,'platform':sys.platform,'versions':versions,'gpu':gpu,'environment_checked':True,'ready':all(versions.values()) and gpu['available'],'gpu_training':'NOT_RUN'}))
 """
 MKDIR="""import pathlib,sys,json
 p=pathlib.Path(sys.argv[1]);p.mkdir(parents=True,exist_ok=True)
@@ -141,6 +152,7 @@ with zipfile.ZipFile(archive) as z:
   if p.is_absolute() or '..' in p.parts or '\\\\' in i.filename or stat.S_ISLNK(i.external_attr>>16):raise ValueError('Unsafe member')
  if hashlib.sha256(z.read('manifest.json')).hexdigest()!=sys.argv[3]:raise ValueError('Manifest mismatch')
  manifest=json.loads(z.read('manifest.json'))
+ if set(names)!=set(manifest['files'])|{'manifest.json'}:raise ValueError('Unmanifested member')
  for name,h in manifest['files'].items():
   if hashlib.sha256(z.read(name)).hexdigest()!=h:raise ValueError('Member hash mismatch')
  dest=root/'ready'
@@ -165,10 +177,40 @@ else:
   p=subprocess.Popen([sys.argv[2],str(root/'runner.py'),'run','--run-id',sys.argv[3],'--attempt',sys.argv[4],'--manifest',sys.argv[5]],cwd=root,stdout=log,stderr=log,start_new_session=True,env=env)
  print(json.dumps({'pid':p.pid,'attempt_id':sys.argv[4]}))
 """
-STATUS="""import pathlib,sys,json
+STATUS="""import pathlib,sys,json,hashlib,base64
 root=pathlib.Path(sys.argv[1])/'ready'
-print(json.dumps({k:json.loads((root/(k+'.json')).read_text()) if (root/(k+'.json')).exists() else None for k in ['process','result']}))
+state={k:json.loads((root/(k+'.json')).read_text()) if (root/(k+'.json')).exists() else None for k in ['process','result']}
+if state['process']:
+ try:
+  import importlib.util
+  spec=importlib.util.spec_from_file_location('dataflex_runner',root/'runner.py');module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+  state['process_alive']=module.identity(state['process']['pid'])==state['process']['identity']
+ except Exception:state['process_alive']=False
+r=state['result'];mc=int(sys.argv[2]);sc=int(sys.argv[3]);offset=int(sys.argv[4])
+if r and mc<=len(r.get('metrics',[])) and sc<=len(r.get('strategy_metrics',[])):
+ def h(value):return hashlib.sha256(json.dumps(value,sort_keys=True,ensure_ascii=False,allow_nan=False,separators=(',',':')).encode()).hexdigest()
+ delta={'metrics_base':mc,'strategy_base':sc,'metrics_sha256':h(r.get('metrics',[])[:mc]),'strategy_sha256':h(r.get('strategy_metrics',[])[:sc]),'log_append':False}
+ r['metrics']=r.get('metrics',[])[mc:];r['strategy_metrics']=r.get('strategy_metrics',[])[sc:]
+ if r.get('log_base64') and r.get('log_start_offset',0)<=offset<=r.get('log_end_offset',0):
+  raw=base64.b64decode(r['log_base64']);raw=raw[offset-r.get('log_start_offset',0):]
+  r['log_base64']=base64.b64encode(raw).decode();r.pop('log',None);delta['log_append']=True;delta['log_base_offset']=offset
+ state['delta']=delta
+print(json.dumps(state))
 """
+
+
+def merge_delta(previous,result,delta):
+    previous=previous or {'metrics':[],'strategy_metrics':[]}
+    for key,count,hashkey in [('metrics','metrics_base','metrics_sha256'),('strategy_metrics','strategy_base','strategy_sha256')]:
+        values=previous.get(key,[])
+        if len(values)!=delta[count] or digest(canonical(values))!=delta[hashkey]:raise TrainingError('远程指标前缀与已保存结果冲突',409)
+        result[key]=values+result.get(key,[])
+    if delta.get('log_append'):
+        if previous.get('log_end_offset')!=delta['log_base_offset']:raise TrainingError('远程日志偏移冲突',409)
+        raw=(base64.b64decode(previous.get('log_base64',''))+base64.b64decode(result['log_base64']))[-1024*1024:]
+        result['log_base64']=base64.b64encode(raw).decode();result['log']=raw.decode(errors='replace');result['log_start_offset']=result['log_end_offset']-len(raw)
+    return result
+
 STOP="""import pathlib,sys,subprocess
 root=pathlib.Path(sys.argv[1])/'ready'
 r=subprocess.run([sys.argv[2],str(root/'runner.py'),'stop','--attempt',sys.argv[3]],cwd=root,capture_output=True,text=True)

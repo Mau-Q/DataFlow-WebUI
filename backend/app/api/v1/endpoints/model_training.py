@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, UploadFile, File
 from app.api.v1.resp import ok
 from app.core.container import container
 from app.schemas.model_training import PlanSave, ExperimentGroup
@@ -7,7 +7,7 @@ router=APIRouter(tags=['model_training'])
 
 def service():
     if container.model_training is None:
-        raise HTTPException(503, '训练存储未就绪')
+        raise HTTPException(503, getattr(container,'model_training_error','训练存储未就绪'))
     return container.model_training
 
 def call(fn,*args,**kwargs):
@@ -108,3 +108,27 @@ def sync(attempt:str):
 def stop(attempt:str):
     from app.services.training_ssh import sync
     return ok(call(sync,service(),attempt,True))
+
+@router.post('/backups')
+def backup():
+    from app.services.training_backups import backup
+    path=call(backup,service())
+    return ok({'id':path.stem,'filename':path.name})
+@router.get('/backups/{key}/download')
+def download_backup(key:str):
+    import re
+    from fastapi.responses import FileResponse
+    from app.services.training_backups import verify
+    if not re.fullmatch('[0-9a-f]{32}',key):raise HTTPException(404,'备份不存在')
+    path=service().root/'backups'/(key+'.zip')
+    if not path.is_file():raise HTTPException(404,'备份不存在')
+    call(verify,path)
+    return FileResponse(path,filename='dataflex-backup-'+key+'.zip',media_type='application/zip')
+
+
+@router.post('/bundles/import')
+def upload_bundle(file: UploadFile = File(...)):
+    from app.services.training_bundles import import_bundle, MAX_BUNDLE
+    blob=file.file.read(MAX_BUNDLE+1)
+    if len(blob)>MAX_BUNDLE:raise HTTPException(400,'包超过 512 MiB')
+    return ok(call(import_bundle,service(),blob))

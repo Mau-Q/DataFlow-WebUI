@@ -33,6 +33,7 @@ def test_families_compile_without_importing_training_packages(tmp_path,family,na
     p=TrainingPlan(model='/remote/model',data=[{'kind':'file','ref':'a.jsonl'},{'kind':'file','ref':'b.jsonl','domain':'second'}],strategy={'family':family,'component':name,'params':{}}).model_dump()
     r=compile_plan(s,p)
     assert not r['checks']['errors'],r['checks']
+    assert json.loads(r['yaml']['dataset_info.json'])==r['dataset_info']
     assert r['train']['packing'] is False
     assert r['train']['report_to']=='none'
     assert r['train']['train_type'].startswith('dynamic_')
@@ -94,7 +95,7 @@ def test_zip_and_symlink_guards(tmp_path):
     with pytest.raises(TrainingError,match='普通文件'):safe_read(tmp_path/'link')
 
 from app.services.training_results import import_result,run_detail,add_evaluation,compare
-from app.services.model_training import digest
+from app.services.model_training import digest, canonical
 
 
 def result_fixture(service,attempt='attempt1',status='running',sequence=1):
@@ -126,3 +127,102 @@ def test_evaluation_requires_artifact_identity_and_partial_jsonl(tmp_path):
     from app.services.training_runtime.runner import read_metrics
     p=tmp_path/'metrics.jsonl';p.write_text('{"current_steps":1,"loss":2}\n{"current_steps":2')
     assert read_metrics(p)==[{'current_steps':1,'step':1,'loss':2}]
+
+
+def test_training_backup_restore_and_tamper_guard(tmp_path):
+    from app.services.training_backups import backup,verify,restore
+    s=ModelTraining(tmp_path/'original');payload=result_fixture(s)
+    # Synthetic bundle metadata fixture used above has no physical bundle; remove for this result-only snapshot.
+    with s.connect() as db:db.execute("DELETE FROM records WHERE kind='bundles'")
+    from app.schemas.model_training import TrainingPlan
+    # Real zip content and matching registry record for backup integrity.
+    p=s.root/'bundles/bundle1.zip';p.parent.mkdir();p.write_bytes(b'fixture zip')
+    s.put('bundles',{'manifest_sha256':'a'*64,'plan_snapshot':TrainingPlan().model_dump(),'manifest':{'source':{}},'archive_sha256':digest(p.read_bytes()),'path':str(p)},'bundle1')
+    import_result(s,payload)
+    path=backup(s);files,manifest=verify(path)
+    recovered=restore(path,tmp_path/'recovered')
+    assert run_detail(recovered,'attempt1')['result']==payload
+    assert Path(recovered.get('bundles','bundle1')['path']).is_file()
+    assert manifest['remote_checkpoints_included'] is False
+    with pytest.raises(TrainingError,match='空目录'):restore(path,recovered.root)
+    content=io.BytesIO()
+    with zipfile.ZipFile(path) as source,zipfile.ZipFile(content,'w') as out:
+        for name in source.namelist():out.writestr(name,b'tampered' if name.startswith('results/') else source.read(name))
+    damaged=tmp_path/'damaged.zip';damaged.write_bytes(content.getvalue())
+    with pytest.raises(TrainingError,match='哈希'):verify(damaged)
+
+
+def test_api_versions_schemas_result_identity_and_missing_host(tmp_path,monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api.v1.endpoints.model_training import router
+    from app.core.container import container
+    service=ModelTraining(tmp_path);monkeypatch.setattr(container,'model_training',service)
+    app=FastAPI();app.include_router(router,prefix='/training');client=TestClient(app)
+    body={'plan':TrainingPlan(name='API independent').model_dump()}
+    r=client.post('/training/plans',json=body).json()['data']
+    assert client.put('/training/plans/'+r['id'],json=body).status_code==409
+    assert client.post('/training/start',json={'bundle_id':'none','idempotency_key':'request-123'}).status_code==409
+    body['plan']['batch_size']=0
+    assert client.post('/training/plans',json=body).status_code==422
+    assert client.get('/training/plans/'+r['id']).json()['data']['version']==1
+
+
+def test_release_message_and_media_bundle_is_portable(tmp_path,monkeypatch):
+    from app.services.data_library import DataLibrary
+    from app.services.training_lifecycle import TrainingLifecycle
+    from app.schemas.data_library import DraftCreate,MaterialMetadata
+    from PIL import Image
+    library=DataLibrary(tmp_path/'data/library')
+    picture=io.BytesIO();Image.new('RGB',(2,2),'red').save(picture,format='PNG')
+    mat=library.add_material('fixture.png',picture.getvalue(),MaterialMetadata(name='fixture').model_dump())
+    draft=library.create_draft(DraftCreate(name='fixture image',modality='image_text',training_type='sft'))
+    rows=[{'messages':[{'role':'user','content':[{'type':'text','text':'describe'},{'type':'image_url','image_url':{'url':'image1'}}]},{'role':'assistant','content':'red'}]}]
+    library.import_rows(draft['id'],'fixture.jsonl',b''.join(canonical(r)+b'\n' for r in rows),{'image1':mat['id']})
+    release=TrainingLifecycle(library).publish(draft['id'])
+    s=ModelTraining(tmp_path/'training',library)
+    plan=s.save_plan(TrainingPlan(model='/fixture/vlm',modality='image_text',data=[{'kind':'release','ref':release['id']}]).model_dump())
+    bundle=export_bundle(s,plan['id']);members=safe_members(Path(bundle['path']).read_bytes())
+    data=json.loads(members['data/dataset_0.jsonl'])
+    assert '<image>' in data['messages'][0]['content']
+    assert 'data/'+data['images'][0] in members
+    assert json.loads(members['data/dataset_info.json'])['dataset_0']['formatting']=='sharegpt'
+    assert json.loads(members['sample_map.json'])['mapping'][0]['sample_id']==release['sample_ids'][0]
+    from app.services.training_bundles import import_bundle
+    assert import_bundle(s,Path(bundle['path']).read_bytes())['idempotent']
+
+
+def test_hf_preparation_creates_importable_derived_identity_offline(tmp_path,monkeypatch):
+    import app.services.training_bundles as bundles
+    monkeypatch.setattr(bundles,'snapshot_source',lambda *args:({'source/src/dataflex/cli.py':b'# synthetic source'}, {'commit':'fixture','dirty':False,'files':{}}))
+    service=ModelTraining(tmp_path/'state')
+    r=service.save_plan(TrainingPlan(model='/remote/model',data=[{'kind':'huggingface','ref':'fixture/data','revision':'a'*40}]).model_dump())
+    bundle=bundles.export_bundle(service,r['id']);members=bundles.safe_members(Path(bundle['path']).read_bytes())
+    root=tmp_path/'prepare';root.mkdir()
+    for name,body in members.items():p=root/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(body)
+    (root/'datasets.py').write_text('''import json
+class Dataset:
+ def to_json(self,path,**kwargs):open(path,'w').write(json.dumps({'instruction':'fixture','output':'answer'})+'\\n')
+def load_dataset(ref,subset,revision,split):
+ assert ref=='fixture/data' and revision=='a'*40 and split=='train'
+ return Dataset()
+''')
+    ran=subprocess.run([sys.executable,str(root/'prepare_data.py'),'--allow-dataset-download'],capture_output=True,text=True)
+    assert ran.returncode==0,ran.stderr
+    derived=next(tmp_path.glob('prepared-*.zip'))
+    imported=bundles.import_bundle(service,derived.read_bytes())
+    assert imported['manifest']['parent_manifest_sha256']==bundle['manifest_sha256']
+    assert imported['manifest_sha256']!=bundle['manifest_sha256']
+    assert not imported['manifest']['external_references']
+    assert 'data/dataset_0.jsonl' in imported['manifest']['files']
+
+
+def test_explicit_external_reference_is_hashed_without_copy(tmp_path,monkeypatch):
+    import app.services.training_bundles as bundles
+    monkeypatch.setattr(bundles,'snapshot_source',lambda *args:({'source/src/dataflex/cli.py':b'# fixture'}, {'commit':'fixture','dirty':False,'files':{}}))
+    s=ModelTraining(tmp_path/'state');data=tmp_path/'input.jsonl';data.write_bytes(b'{"instruction":"q","output":"a"}\n')
+    record=s.save_plan(TrainingPlan(model='/remote/model',data=[{'kind':'file','ref':str(data),'mode':'reference','execution_ref':'/remote/data/large.jsonl'}]).model_dump())
+    b=bundles.export_bundle(s,record['id'])
+    assert b['manifest']['external_references'][0]['sha256']==digest(data.read_bytes())
+    assert b['manifest']['external_references'][0]['ref']=='/remote/data/large.jsonl'
+    assert 'data/dataset_0.jsonl' not in b['manifest']['files']

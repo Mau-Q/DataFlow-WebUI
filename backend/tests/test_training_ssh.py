@@ -102,3 +102,37 @@ m.run(Path({str(root)!r}),'attempt1','run1',{hashlib.sha256((root/'manifest.json
         assert not observed or observed.startswith('Z')
     finally:
         if process.poll() is None:os.killpg(process.pid,signal.SIGKILL);process.wait()
+
+
+def test_isolated_publish_checks_zip_and_payload_hashes(tmp_path):
+    """Execute the exact remote publication program locally; no SSH transport."""
+    import io,zipfile,hashlib
+    root=tmp_path/'remote';root.mkdir()
+    payload=b'print("isolated runner")'
+    manifest=json.dumps({'files':{'runner.py':hashlib.sha256(payload).hexdigest()}}).encode()
+    data=io.BytesIO()
+    with zipfile.ZipFile(data,'w') as z:z.writestr('runner.py',payload);z.writestr('manifest.json',manifest)
+    archive=data.getvalue();(root/'input.zip').write_bytes(archive)
+    argv=[sys.executable,'-c',PUBLISH,str(root),hashlib.sha256(archive).hexdigest(),hashlib.sha256(manifest).hexdigest()]
+    r=subprocess.run(argv,capture_output=True,text=True)
+    assert r.returncode==0,r.stderr
+    assert (root/'ready/runner.py').read_bytes()==payload
+    # Uploaded bytes changed: publication must stop before reading/executing any payload.
+    (root/'input.zip').write_bytes(archive+b'changed')
+    r=subprocess.run(argv,capture_output=True,text=True)
+    assert r.returncode!=0 and 'Upload hash mismatch' in r.stderr
+
+
+def test_remote_delta_metrics_and_utf8_log_reconstruction(tmp_path):
+    import base64
+    from app.services.training_ssh import merge_delta
+    root=tmp_path/'attempt/ready';root.mkdir(parents=True)
+    raw='前一行\n后一行\n'.encode();oldraw='前一行\n'.encode()
+    previous={'metrics':[{'step':1,'loss':2}],'strategy_metrics':[],'log_base64':base64.b64encode(oldraw).decode(),'log_end_offset':len(oldraw)}
+    full={'metrics':[{'step':1,'loss':2},{'step':2,'loss':1}],'strategy_metrics':[],'log_base64':base64.b64encode(raw).decode(),'log':raw.decode(),'log_start_offset':0,'log_end_offset':len(raw)}
+    (root/'result.json').write_text(json.dumps(full))
+    r=subprocess.run([sys.executable,'-c',STATUS,str(root.parent),'1','0',str(len(oldraw))],capture_output=True,text=True,check=True)
+    state=json.loads(r.stdout)
+    assert len(state['result']['metrics'])==1
+    restored=merge_delta(previous,state['result'],state['delta'])
+    assert restored==full
