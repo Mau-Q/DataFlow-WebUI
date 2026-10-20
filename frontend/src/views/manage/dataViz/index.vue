@@ -12,17 +12,17 @@
                     <div class="selector-row">
                         <div class="selector-item">
                             <p class="selector-label">{{ local('Select Dataset') }}</p>
-                            <native-select v-model="selectedDataset.key" :theme="theme" label="选择数据集" placeholder="请选择数据集" :options="datasetOptions.map(o=>({value:o.key,label:o.text}))" @update:modelValue="handleDatasetChange" />
+                            <native-select v-model="selectedDataset.key" :theme="theme" label="选择数据集" placeholder="请选择数据集" :options="datasetOptions" @update:modelValue="handleDatasetChange" />
                         </div>
                         
                         <div class="selector-item">
                             <p class="selector-label">{{ local('Preview Rows') }}</p>
-                            <native-select v-model="rowCount" :theme="theme" label="预览条数" :options="[10,20,50,100].map(value=>({value,label:`${value} 条`}))" />
+                            <native-select v-model="rowCount" :theme="theme" label="预览条数" :options="rowOptions" />
                         </div>
 
                         <div class="selector-item">
                             <p class="selector-label">{{ local('View Type') }}</p>
-                            <native-select v-model="viewType.key" :theme="theme" label="查看方式" :options="[{value:'table',label:'表格'},{value:'distribution',label:'值分布'},{value:'statistics',label:'统计'},{value:'nulls',label:'缺失值'}]" @update:modelValue="handleViewTypeChange" />
+                            <native-select v-model="viewType.key" :theme="theme" label="查看方式" :options="viewOptions" @update:modelValue="handleViewTypeChange" />
                         </div>
                     </div>
 
@@ -159,6 +159,7 @@
 
 <script>
 import axios from 'axios'
+import { markRaw } from 'vue'
 import NativeSelect from '@/components/manage/forms/NativeSelect.vue'
 import { mapState } from 'pinia'
 import { useAppConfig } from '@/stores/appConfig'
@@ -179,12 +180,14 @@ export default {
     components:{NativeSelect},
     data() {
         return {
-            datasets: [], error:'', previewVersion:0,
+            datasets: [], pageActive:true, error:'', previewVersion:0,
             selectedDataset: {},
             selectedColumn: '',
             previewData: [],
             loading: false,
-            rowCount: 10,
+            rowCount: 10, handledDatasetKey:'',
+            rowOptions:[10,20,50,100].map(value=>({value,label:`${value} 条`})),
+            viewOptions:[{value:'table',label:'表格'},{value:'distribution',label:'值分布'},{value:'statistics',label:'统计'},{value:'nulls',label:'缺失值'}],
             viewType: { key: 'table', text: 'Table' },
             viewTypeOptions: [
                 { key: 'table', text: 'Table' },
@@ -203,8 +206,8 @@ export default {
         ...mapState(useTheme, ['theme']),
         datasetOptions() {
             return this.datasets.map(ds => ({
-                key: ds.id,
-                text: `${ds.generated ? '生成' : '原始'} · ${ds.name || ds.id} (${ds.num_samples || 0} 条)`
+                value: ds.id,
+                label: `${ds.generated ? '生成' : '原始'} · ${ds.name || ds.id} (${ds.num_samples || 0} 条)`
             }))
         },
         uniqueDataTypes() {
@@ -237,11 +240,11 @@ export default {
     mounted() {
         this.loadDatasets()
     },
-    beforeUnmount() {
-        this.chartInstance?.destroy()
-        this.nullChartInstance?.destroy()
-    },
+    activated(){this.pageActive=true;this.$nextTick(this.handleViewTypeChange)},
+    deactivated(){this.pageActive=false;this.previewVersion++;this.loading=false;this.destroyCharts()},
+    beforeUnmount(){this.previewVersion++;this.destroyCharts()},
     methods: {
+        destroyCharts(){this.chartInstance?.destroy();this.nullChartInstance?.destroy();this.chartInstance=null;this.nullChartInstance=null},
         async loadDatasets() {
             this.error=''
             try {
@@ -251,6 +254,10 @@ export default {
             }catch(error){this.error=error.response?.data?.message || error.message || '数据集加载失败'}
         },
         handleDatasetChange() {
+            const key=this.selectedDataset?.key || ''
+            if(key===this.handledDatasetKey)return
+            this.handledDatasetKey=key
+            this.destroyCharts()
             this.previewVersion++; this.loading=false;this.error=''
             this.previewData = []
             this.columns = []
@@ -258,7 +265,9 @@ export default {
             this.nullCounts = {}
         },
         handleViewTypeChange() {
+            this.destroyCharts()
             this.$nextTick(() => {
+                if(!this.pageActive)return
                 if (this.viewType.key === 'distribution') {
                     this.renderDistributionChart()
                 } else if (this.viewType.key === 'nulls') {
@@ -304,7 +313,7 @@ export default {
             })
         },
         renderDistributionChart() {
-            if (!this.$refs.chartCanvas || !this.selectedColumn || !this.previewData.length) return
+            if (!this.pageActive || !this.$refs.chartCanvas || !this.selectedColumn || !this.previewData.length) return
             
             this.chartInstance?.destroy()
             
@@ -333,7 +342,7 @@ export default {
                 : 'rgba(120, 120, 120, 0.1)'
             const tickColor = isDark ? 'rgba(245, 245, 245, 0.85)' : 'rgba(0, 0, 0, 0.7)'
             
-            this.chartInstance = new Chart(this.$refs.chartCanvas, {
+            this.chartInstance = markRaw(new Chart(this.$refs.chartCanvas, {
                 type: 'bar',
                 data: {
                     labels,
@@ -381,10 +390,10 @@ export default {
                         }
                     }
                 }
-            })
+            }))
         },
         renderNullChart() {
-            if (!this.$refs.nullChartCanvas || !this.columns.length) return
+            if (!this.pageActive || !this.$refs.nullChartCanvas || !this.columns.length) return
             
             this.nullChartInstance?.destroy()
             
@@ -397,7 +406,7 @@ export default {
                 : 'rgba(120, 120, 120, 0.1)'
             const tickColor = isDark ? 'rgba(245, 245, 245, 0.85)' : 'rgba(0, 0, 0, 0.7)'
             
-            this.nullChartInstance = new Chart(this.$refs.nullChartCanvas, {
+            this.nullChartInstance = markRaw(new Chart(this.$refs.nullChartCanvas, {
                 type: 'bar',
                 data: {
                     labels,
@@ -431,7 +440,7 @@ export default {
                         }
                     }
                 }
-            })
+            }))
         },
         getColumnType(col) {
             if (!this.previewData.length) return 'unknown'
