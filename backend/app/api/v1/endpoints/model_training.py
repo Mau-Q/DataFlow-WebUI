@@ -81,3 +81,30 @@ def evaluation(body:dict):
 def comparison(body:dict):
     from app.services.training_results import compare
     return ok(call(compare,service(),body.get('attempts',[]),body.get('include_synthetic',False)))
+
+@router.get('/host')
+def host():
+    from app.services.training_ssh import host_config
+    return ok(call(host_config,service()))
+@router.put('/host')
+def host_save(body:dict):
+    from app.services.training_ssh import save_host
+    return ok(call(save_host,service(),body))
+@router.post('/host/probe')
+def probe_host():
+    from app.services.training_ssh import probe
+    return ok(call(probe,service()))
+@router.get('/controls')
+def controls():return ok(call(service().list,'controls'))
+@router.post('/start')
+def start(body:dict):
+    from app.services.training_ssh import start
+    return ok(call(start,service(),body.get('bundle_id'),body.get('idempotency_key')))
+@router.post('/controls/{attempt}/sync')
+def sync(attempt:str):
+    from app.services.training_ssh import sync
+    return ok(call(sync,service(),attempt))
+@router.post('/controls/{attempt}/stop')
+def stop(attempt:str):
+    from app.services.training_ssh import sync
+    return ok(call(sync,service(),attempt,True))

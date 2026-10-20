@@ -97,6 +97,9 @@ def run(root, attempt, run_id, expected_manifest):
         if existing['attempt_id']!=attempt:raise ValueError('Run directory is bound to another attempt')
         # A previous terminal/partial execution must never be silently restarted.
         return
+    host_lock=(root.parent.parent/'.training-active.lock').open('a')
+    try:fcntl.flock(host_lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+    except BlockingIOError:raise ValueError('Another training process holds the host lock')
     dump(root/'process.json',{'pid':os.getpid(),'attempt_id':attempt,'identity':identity(os.getpid())})
     result={'schema_version':1,'run_id':run_id,'attempt_id':attempt,'input_manifest_sha256':expected_manifest,'sequence':0,'synthetic':False,'status':'preflight','metrics':[],'strategy_metrics':[],'artifacts':[],'environment':{},'actual_config':{},'log':''}
     child=None;stopping=False
@@ -118,6 +121,8 @@ def run(root, attempt, run_id, expected_manifest):
         result['environment']=preflight(root)
         import yaml
         result['actual_config']=yaml.safe_load((root/'train.yaml').read_text())
+        if stopping:
+            result['status']='stopped';return
         env=os.environ.copy();env['PYTHONPATH']=str(root/'source/src')+os.pathsep+env.get('PYTHONPATH','');env['HF_HUB_OFFLINE']='1';env['HF_DATASETS_OFFLINE']='1'
         with (root/'train.log').open('ab') as log:
             child=subprocess.Popen([sys.executable,'-c','from dataflex.cli import main; main()','train','train.yaml'],cwd=root,env=env,stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
