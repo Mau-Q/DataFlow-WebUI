@@ -4,7 +4,7 @@
     <p v-if="error" role="alert" class="error">{{ error }}</p><p v-if="notice" role="status" class="notice">{{ notice }}</p>
     <section>
       <h2>生成配置</h2>
-      <label>现有模板或配置<select v-model="selectedId" @change="selectConfig"><option value="">新建 · 论文 PDF → 多跳 QA → 筛选 → SFT</option><option v-for="p in configs" :key="p.id" :value="p.id">{{ p.name }}</option></select></label>
+      <label>现有模板或配置<select :value="selectedId" @change="changeConfig"><option value="">新建 · 论文 PDF → 多跳 QA → 筛选 → SFT</option><option v-for="p in configs" :key="p.id" :value="p.id">{{ p.name }}</option></select></label>
       <form v-if="config" @submit.prevent="save">
         <div class="grid"><label>名称<input v-model="name" required maxlength="240" /></label><label>PDF 原始数据集<select v-model="datasetId" required><option value="">请选择</option><option v-for="d in pdfDatasets" :value="d.id" :key="d.id">{{ d.name }} · {{ d.file_count }} 个 PDF</option></select></label></div>
         <p v-if="datasetId && !pdfDatasets.some(d => d.id === datasetId)" class="error">当前配置的数据集不属于可用的纯 PDF 数据集，请重新选择。</p>
@@ -28,11 +28,13 @@
   </main>
 </template>
 <script>
+import { useUnsavedChanges, confirmDiscard } from '@/components/manage/forms/unsaved'
 import axios from 'axios'
 import {mapState} from 'pinia'
 import {useTheme} from '@/stores/theme'
 import RunConfirmPanel from '@/components/manage/mainFlow/panels/runConfirmPanel.vue'
 export default {
+ setup(){useUnsavedChanges(vm=>!!vm.config && vm.dirty,vm=>{vm.config=null})},
  name: 'TextGeneration',
  components: {RunConfirmPanel},
  data:()=>({config:null, showRunConfirm:false, baseline:'', name:'论文 SFT 生成', selectedId:'',datasetId:'',servingId:'',configs:[],datasets:[],servings:[],tasks:[],task:null,drafts:[],draftId:'',conditions:null,busy:false,error:'',notice:'',timer:null}),
@@ -41,6 +43,7 @@ export default {
  watch:{$route(to,from){if(to.path==='/m/generation' && from.path!==to.path && this.config){this.selectedId=to.query.pipeline||this.selectedId;this.selectConfig();this.load()}}},
  beforeUnmount(){clearInterval(this.timer)},
  methods:{
+ async changeConfig(event){if(this.dirty && !await confirmDiscard(this)){event.target.value=this.selectedId;return}this.selectedId=event.target.value;this.selectConfig()},
  async request(method,path,data){const r=await axios({method,url:'/api/v1'+path,data});if(!r.data.success)throw new Error(r.data.message);return r.data.data},
  async action(fn){if(this.busy)return;this.busy=true;this.error='';this.notice='';try{await fn()}catch(e){this.error=e.response?.data?.message || e.response?.data?.detail || e.message}finally{this.busy=false}},
  async load(){await this.action(async()=>{[this.configs,this.datasets,this.servings,this.tasks,this.drafts]=await Promise.all(['/pipelines/','/datasets/?visible_only=true','/serving/','/generation/tasks','/library/drafts?visible_only=true'].map(p=>this.request('get',p)));this.drafts=this.drafts.filter(d=>d.training_type==='sft' && d.modality==='text');this.configs=this.configs.filter(p=>p.tags?.includes('platform-text'));if(!this.config){this.selectedId=this.$route.query.pipeline || '';await this.selectConfig();}if(this.$route.query.task)await this.fetchTask(this.$route.query.task)})},

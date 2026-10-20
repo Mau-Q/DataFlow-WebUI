@@ -36,6 +36,7 @@
 </template>
 
 <script>
+import { useUnsavedChanges, confirmDiscard } from '@/components/manage/forms/unsaved'
 import { mapState, mapActions } from 'pinia'
 import axios from 'axios'
 import {publishChange,subscribeChanges} from '@/components/manage/forms/changes'
@@ -43,6 +44,7 @@ import { useAppConfig } from '@/stores/appConfig'
 import { useTheme } from '@/stores/theme'
 
 export default {
+ setup(){useUnsavedChanges(vm=>vm.rootDirty,vm=>{vm.outputRoot=vm.savedOutputRoot})},
     name: 'DataflowSettings',
     data() {
         return {

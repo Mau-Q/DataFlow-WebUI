@@ -9,7 +9,10 @@ import '@creatorsn/vfluent3/style.css';
 
 import apiPlugin from '@/axios'
 
+import { installInteractions } from '@/components/general/interactions'
+
 const app = createApp(App)
+installInteractions(app)
 app.use(VueFluent);
 
 app.use(createPinia())

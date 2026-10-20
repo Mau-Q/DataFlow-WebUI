@@ -1,7 +1,8 @@
 <template>
     <div class="df-main-flow-container">
         <VueFlow class="main-flow" :id="id" v-model:nodes="thisNodes" v-model:edges="thisEdges" @dragover="dragOver"
-            @drop="drop" @dragleave="dragLeave" @connect="$emit('connect', $event)"
+            @drop="drop" @dragleave="dragLeave" @connect="$emit('edited');$emit('connect', $event)"
+            @node-drag-stop="$emit('edited')" @edges-change="changes => {if(changes.some(c=>c.type==='remove'))$emit('edited')}"
             @connect-end="$emit('connect-end', $event)" @connect-start="$emit('connect-start', $event)"
             @node-click="selectOperator" @nodes-initialized="$emit('nodes-ready')">
             <Background variant="dots" gap="20" size="3" :color="'rgba(200, 200, 200, 0.3)'" :style="{
@@ -29,7 +30,7 @@
         </VueFlow>
         <slot v-if="!thisNodes.length" name="empty" />
         <Teleport to="body">
-            <operator-detail-panel v-if="selectedOperator" :key="selectedOperator.id" v-model="showInspector"
+            <operator-detail-panel @edited="emits('edited')" v-if="selectedOperator" :key="selectedOperator.id" v-model="showInspector"
                 :node-id="selectedOperator.id" :data="selectedOperator.data" :theme="theme"
                 @update-run-value="updateRunValue" @show-details="showDetails" @download-data="downloadData" />
         </Teleport>
@@ -57,6 +58,7 @@ const appConfig = useAppConfig()
 const _theme = useTheme()
 const theme = computed(() => _theme.theme)
 const emits = defineEmits([
+    'edited',
     'switch-database',
     'nodes-ready',
     'update:nodes',
@@ -94,7 +96,7 @@ watch(
     () => props.nodes,
     (newNodes) => {
         thisNodes.value = newNodes
-        if (selectedOperatorId.value && !newNodes.some(n => n.id === selectedOperatorId.value)) { selectedOperatorId.value = null; closeInspector() }
+        if (selectedOperatorId.value && !newNodes.some(n => n.id === selectedOperatorId.value) && !canvasFlow.findNode(selectedOperatorId.value)) { selectedOperatorId.value = null; closeInspector() }
     }
 )
 watch(
@@ -129,6 +131,7 @@ const updateNodeData = (nodeInfo) => {
 }
 
 const updateRunValue = (runValue) => {
+    emits('edited')
     emits('update-run-value', runValue)
 }
 
@@ -179,6 +182,7 @@ const drop = (event) => {
         }
     }
     flow.addNodes(newNode)
+    emits('edited')
     console.log(data)
 
     isDragOver.value = false
@@ -195,6 +199,7 @@ const deleteNode = (nodeInfo) => {
         confirm: () => {
             const flow = useVueFlow(props.id)
             flow.removeNodes(nodeInfo.id)
+            emits('edited')
             if (selectedOperator.value?.id === nodeInfo.id) {
                 selectedOperatorId.value = null
                 showInspector.value = false

@@ -133,10 +133,20 @@ test('canvas fits unbound templates once, waits for complete nodes, and supports
   const nodes={value:[{id:'op-1'}]}
   const flow={nodes,findNode:()=>bound?{id:'db-node'}:null,fitView(){fits++}}
   const fit=new Function('useVueFlow',`return ({${method}}).fitPlatformWhenReady`)(()=>flow)
-  const ctx={flowId:'flow',currentPipeline:{config:{operators:[{},{}]}},isMM:false,$route:{fullPath:'/m'},$nextTick:async()=>{},platformFitKey:''}
+  const ctx={flowId:'flow',currentPipeline:{config:{operators:[{},{}]}},isMM:false,$route:{fullPath:'/m'},$nextTick:async()=>{},platformFitKey:'',markCanvasSaved(){this.canvasBaseline='saved'}}
   await fit.call(ctx);assert.equal(fits,0)
   nodes.value=[{id:'op-1'},{id:'op-2'},...(bound?[{id:'db-node'}]:[])]
   await fit.call(ctx);assert.equal(fits,1)
   await fit.call(ctx);assert.equal(fits,1)
  }
+})
+
+
+test('automatic graph initialization is clean, actual edits are guarded, and reverting clears dirty state',()=>{
+ const method=page.slice(page.indexOf('        canvasDirty(){'),page.indexOf('        runCollectionContract()')).trim().replace(/,$/,'')
+ const dirty=new Function(`return ({${method}}).canvasDirty`)()
+ const vm={canvasEdited:false,canvasBaseline:'initial',canvasFingerprint:'normalized metadata'}
+ assert.equal(dirty.call(vm),false)
+ vm.canvasEdited=true;assert.equal(dirty.call(vm),true)
+ vm.canvasFingerprint='initial';assert.equal(dirty.call(vm),false)
 })

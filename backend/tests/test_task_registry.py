@@ -177,6 +177,16 @@ class TestTaskRegistry:
         assert "pipeline" in stats["by_executor_type"]
         assert "operator" in stats["by_executor_type"]
 
+    def test_statistics_normalizes_completed_and_legacy_statuses(self, task_registry, sample_task_data):
+        for status in ('completed', 'success', 'queued', 'pending', 'cancelled'):
+            record = task_registry.create({**sample_task_data, 'pipeline_id': 'example'})
+            task_registry.update(record['id'], {'status': status})
+        stats = task_registry.get_statistics()
+        assert stats['completed'] == stats['success'] == 2
+        assert stats['queued'] == stats['pending'] == 2
+        assert stats['cancelled'] == 1
+        assert stats['by_executor_type']['pipeline'] == 5
+
     def test_delete_task(self, task_registry, created_task):
         """测试删除任务"""
         task_id = created_task["id"]

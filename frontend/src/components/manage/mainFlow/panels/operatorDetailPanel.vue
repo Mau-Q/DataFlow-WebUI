@@ -25,7 +25,7 @@
                             <span class="count">{{ visibleInitParams.length + promptTemplateItems.length }}</span>
                         </div>
 
-                        <prompt-resource-input v-for="item in promptTemplateItems" :key="item.name" :item="item" :data="data" @update-value="item.value = $event" />
+                        <prompt-resource-input v-for="item in promptTemplateItems" :key="item.name" :item="item" :data="data" @update-value="item.value = $event;emits('edited')" />
                         <div v-if="allowedPrompts.length > 0 && promptTemplateItem && !isResourcePrompt" class="parameter-field">
                             <span class="field-label">{{ appConfig.local('Prompt Template') }}</span>
                             <fv-combobox :theme="theme" v-model="promptTemplateModel"
@@ -44,7 +44,7 @@
                         <div v-for="(item, index) in visibleInitParams" :key="`init_detail_${index}`"
                             class="parameter-field">
                             <span class="field-label">{{ item.name }}</span>
-                            <value-input :theme="theme" v-model="item.value" :item-obj="item" :this-data="data"
+                            <value-input :theme="theme" v-model="item.value" :item-obj="item" :this-data="data" @update:modelValue="emits('edited')"
                                 @mousedown.stop @click.stop></value-input>
                         </div>
                     </section>
@@ -108,7 +108,7 @@ const props = defineProps({
     theme: { type: String, default: 'light' }
 })
 
-const emits = defineEmits(['update:modelValue', 'update-run-value', 'show-details', 'download-data'])
+const emits = defineEmits(['edited', 'update:modelValue', 'update-run-value', 'show-details', 'download-data'])
 const appConfig = useAppConfig()
 const dataflow = useDataflow()
 
@@ -134,6 +134,7 @@ const promptTemplateModel = computed({
     },
     set(value) {
         if (!value?.key || value.key === promptTemplateModel.value.key || !promptTemplateItem.value) return
+        emits('edited')
         const promptInfo = dataflow.promptInfo[value.key]
         const params = (promptInfo?.parameter?.init || []).map((param) => ({
             ...param,

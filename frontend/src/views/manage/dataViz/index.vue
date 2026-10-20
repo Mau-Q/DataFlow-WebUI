@@ -6,44 +6,34 @@
                 <p class="sub-title">{{ local('Explore and analyze your datasets') }}</p>
             </div>
             
-            <div class="content-block">
+            <p v-if="error" role="alert">{{ error }} <button @click="selectedDataset.key ? loadDatasetPreview() : loadDatasets()">重试</button></p><p>当前已加载 {{ previewData.length }} 条预览样本，统计与导出仅针对这些样本；每次最多预览 100 条。</p><div class="content-block">
                 <!-- Dataset Selector Section -->
                 <div class="selector-section">
                     <div class="selector-row">
                         <div class="selector-item">
                             <p class="selector-label">{{ local('Select Dataset') }}</p>
-                            <fv-combobox :theme="theme" v-model="selectedDataset" :options="datasetOptions"
-                                :placeholder="local('Choose a dataset')" :border-radius="6"
-                                :input-background="theme === 'dark' ? 'rgba(40, 40, 40, 1)' : 'rgba(252, 252, 252, 1)'"
-                                @change="handleDatasetChange">
-                            </fv-combobox>
+                            <native-select v-model="selectedDataset.key" :theme="theme" label="选择数据集" placeholder="请选择数据集" :options="datasetOptions.map(o=>({value:o.key,label:o.text}))" @update:modelValue="handleDatasetChange" />
                         </div>
                         
                         <div class="selector-item">
                             <p class="selector-label">{{ local('Preview Rows') }}</p>
-                            <fv-spin-button :theme="theme" v-model="rowCount" :minimum="1" :maximum="100"
-                                :border-radius="6" :is-box-shadow="true">
-                            </fv-spin-button>
+                            <native-select v-model="rowCount" :theme="theme" label="预览条数" :options="[10,20,50,100].map(value=>({value,label:`${value} 条`}))" />
                         </div>
 
                         <div class="selector-item">
                             <p class="selector-label">{{ local('View Type') }}</p>
-                            <fv-combobox :theme="theme" v-model="viewType" :options="viewTypeOptions"
-                                :placeholder="local('Select view type')" :border-radius="6"
-                                :input-background="theme === 'dark' ? 'rgba(40, 40, 40, 1)' : 'rgba(252, 252, 252, 1)'"
-                                @change="handleViewTypeChange">
-                            </fv-combobox>
+                            <native-select v-model="viewType.key" :theme="theme" label="查看方式" :options="[{value:'table',label:'表格'},{value:'distribution',label:'值分布'},{value:'statistics',label:'统计'},{value:'nulls',label:'缺失值'}]" @update:modelValue="handleViewTypeChange" />
                         </div>
                     </div>
 
                     <div class="selector-actions">
                         <fv-button :theme="theme" :is-box-shadow="true" border-radius="6" 
-                            :disabled="!selectedDataset || loading" @click="loadDatasetPreview">
+                            :disabled="!selectedDataset.key || loading" @click="loadDatasetPreview">
                             {{ loading ? local('Loading...') : local('Load Data') }}
                         </fv-button>
-                        <fv-button v-if="selectedDataset" :theme="theme" :is-box-shadow="true" border-radius="6"
-                            :disabled="loading" @click="exportData">
-                            {{ local('Export') }}
+                        <fv-button v-if="selectedDataset.key" :theme="theme" :is-box-shadow="true" border-radius="6"
+                            :disabled="loading || !previewData.length" @click="exportData">
+                            导出预览
                         </fv-button>
                     </div>
                 </div>
@@ -168,6 +158,8 @@
 </template>
 
 <script>
+import axios from 'axios'
+import NativeSelect from '@/components/manage/forms/NativeSelect.vue'
 import { mapState } from 'pinia'
 import { useAppConfig } from '@/stores/appConfig'
 import { useTheme } from '@/stores/theme'
@@ -184,9 +176,10 @@ import {
 Chart.register(BarController, BarElement, CategoryScale, LinearScale, Tooltip, Legend)
 
 export default {
+    components:{NativeSelect},
     data() {
         return {
-            datasets: [],
+            datasets: [], error:'', previewVersion:0,
             selectedDataset: {},
             selectedColumn: '',
             previewData: [],
@@ -211,7 +204,7 @@ export default {
         datasetOptions() {
             return this.datasets.map(ds => ({
                 key: ds.id,
-                text: `${ds.id} (${ds.num_samples} rows)`
+                text: `${ds.generated ? '生成' : '原始'} · ${ds.name || ds.id} (${ds.num_samples || 0} 条)`
             }))
         },
         uniqueDataTypes() {
@@ -249,16 +242,16 @@ export default {
         this.nullChartInstance?.destroy()
     },
     methods: {
-        loadDatasets() {
-            this.$api.datasets.list_datasets().then((res) => {
-                if (res.code === 200) {
-                    this.datasets = (res.data || []).filter(item => item.is_visible !== false)
-                }
-            }).catch((err) => {
-                console.error('Failed to load datasets', err)
-            })
+        async loadDatasets() {
+            this.error=''
+            try {
+                const [sources, drafts]=await Promise.all([this.$api.datasets.list_datasets(),axios.get('/api/v1/library/drafts?visible_only=true')])
+                if(sources.code!==200 || !drafts.data.success)throw new Error(sources.message || drafts.data.message || '列表加载失败')
+                this.datasets=[...(sources.data || []).filter(d=>d.is_visible!==false),...drafts.data.data.map(d=>({...d,id:`draft:${d.id}`,generated:true,num_samples:d.row_count}))]
+            }catch(error){this.error=error.response?.data?.message || error.message || '数据集加载失败'}
         },
         handleDatasetChange() {
+            this.previewVersion++; this.loading=false;this.error=''
             this.previewData = []
             this.columns = []
             this.selectedColumn = ''
@@ -273,35 +266,30 @@ export default {
                 }
             })
         },
-        loadDatasetPreview() {
-            if (!this.selectedDataset || !this.selectedDataset.key) return
-            
-            this.loading = true
-            this.$api.datasets
-                .get_dataset_preview(this.selectedDataset.key, this.rowCount)
-                .then((res) => {
-                    if (res.code === 200 && Array.isArray(res.data) && res.data.length) {
-                        this.previewData = res.data
-                        this.columns = Object.keys(res.data[0])
-                        this.selectedColumn = this.columns[0]
-                        this.calculateNullCounts()
-                        
-                        this.$nextTick(() => {
-                            if (this.viewType.key === 'distribution') {
-                                this.renderDistributionChart()
-                            } else if (this.viewType.key === 'nulls') {
-                                this.renderNullChart()
-                            }
-                        })
-                    }
-                })
-                .catch((err) => {
-                    this.$barWarning({ status: 'error', title: this.local('Failed to load dataset') })
-                    console.error(err)
-                })
-                .finally(() => {
-                    this.loading = false
-                })
+        async loadDatasetPreview() {
+            const key=this.selectedDataset?.key
+            if(!key || this.loading)return
+            const version=++this.previewVersion
+            this.loading=true;this.error='';this.previewData=[]
+            try {
+                let rows
+                if(key.startsWith('draft:')){
+                    const response=await axios.get(`/api/v1/library/drafts/${encodeURIComponent(key.slice(6))}?offset=0&limit=${Math.min(100,Math.max(1,this.rowCount))}`)
+                    if(!response.data.success)throw new Error(response.data.message)
+                    rows=response.data.data.rows
+                }else{
+                    const response=await this.$api.datasets.get_dataset_preview(key,this.rowCount)
+                    if(response.code!==200)throw new Error(response.message)
+                    rows=response.data
+                }
+                if(version!==this.previewVersion)return
+                this.previewData=Array.isArray(rows)?rows:[]
+                this.columns=Object.keys(this.previewData[0] || {})
+                this.selectedColumn=this.columns[0] || ''
+                this.calculateNullCounts();this.handleViewTypeChange()
+                if(!this.previewData.length)this.error='当前数据集没有可预览的样本。'
+            }catch(error){if(version===this.previewVersion)this.error=error.response?.data?.message || error.message || '预览加载失败，请重试'}
+            finally{if(version===this.previewVersion)this.loading=false}
         },
         calculateNullCounts() {
             this.nullCounts = {}

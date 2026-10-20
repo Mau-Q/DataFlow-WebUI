@@ -2,10 +2,10 @@
     <router-link v-if="isMM" :to="{path:'/m/multimodal',query:{config:mmRecord?.id}}" class="wizard-return">图片、服务与输出设置 · MM 未启用运行</router-link>
     <div class="df-default-container" :class="[{ dark: theme === 'dark', 'show-pipeline': show.pipeline, 'show-chat': show.chat }]">
         <pipeline v-model="show.pipeline" v-model:loading="lock.loading" v-model:pipeline="currentPipeline"
-            :flow-id="flowId" class="df-pipeline-container" @confirm-dataset="confirmDataset($event, true)"
+            :before-change="confirmCanvasChange" :flow-id="flowId" class="df-pipeline-container" @confirm-dataset="confirmDataset($event, true)"
             @select-pipeline="selectPipelineCallback"></pipeline>
         <div class="df-flow-container">
-            <mainFlow :id="flowId" v-model:nodes="nodes" v-model:edges="edges" @switch-database="openInputSettings"
+            <mainFlow @edited="markCanvasEdited" :id="flowId" v-model:nodes="nodes" v-model:edges="edges" @switch-database="openInputSettings"
                 @connect="onConnect" @connect-start="onConnectStart" @connect-end="onConnectEnd"
                 @update-run-value="useEdgeSync.syncRunValue($event, flowId)" @show-details="showExecDetails"
                 @download-data="downloadData" @nodes-ready="fitPlatformWhenReady" @click="show.pipeline = false">
@@ -44,7 +44,7 @@
                         :switch-on-background="gradient" :title="local('Whether Auto Connect Run Edges')">
                     </fv-toggle-switch>
                     <fv-button :theme="theme" border-radius="6" :title="local('Auto Layout')"
-                        style="width: 96px; height: 30px" @click="autoLayoutPipeline">
+                        style="width: 96px; height: 30px" @click="markCanvasEdited();autoLayoutPipeline()">
                         <i class="ms-Icon ms-Icon--GridViewMedium" style="margin-right: 5px"></i>
                         <p>{{ local('Auto Layout') }}</p>
                     </fv-button>
@@ -148,6 +148,7 @@
 </template>
 
 <script>
+import { useUnsavedChanges, confirmDiscard } from '@/components/manage/forms/unsaved'
 import { mapState, mapActions } from 'pinia'
 import { useAppConfig } from '@/stores/appConfig'
 import { useTheme } from '@/stores/theme'
@@ -193,6 +194,11 @@ function getStoredChatWidth() {
 }
 
 export default {
+    setup(){
+        const state=useVueFlow('df-main-flow')
+        useUnsavedChanges(vm=>vm.canvasDirty,vm=>{vm.canvasBaseline='';vm.canvasEdited=false})
+        return {canvasNodes:()=>state.nodes.value,canvasEdges:()=>state.edges.value}
+    },
     name: "dataflowPage",
     components: {
         mainFlow,
@@ -209,7 +215,7 @@ export default {
     },
     data() {
         return {
-            flowId: 'df-main-flow',
+            flowId: 'df-main-flow', canvasBaseline:'', canvasEdited:false,
             historyTaskId: '',
             mmRecord: null,
             platformFitKey: '',
@@ -382,6 +388,11 @@ export default {
         }
     },
     computed: {
+        canvasFingerprint(){
+            const nodes=this.canvasNodes(),edges=this.canvasEdges()
+            return JSON.stringify([this.sourceDatabase?.id,nodes.map(n=>({id:n.id,type:n.type,position:{x:n.position.x,y:n.position.y},params:Object.fromEntries(['init','run'].map(kind=>[kind,(n.data?.operatorParams?.[kind] || []).map(p=>({name:p.name,value:p.value}))]))})).sort((a,b)=>a.id.localeCompare(b.id)),edges.map(e=>({source:e.source,target:e.target,sourceHandle:e.sourceHandle,targetHandle:e.targetHandle})).sort((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b)))])
+        },
+        canvasDirty(){return this.canvasEdited && !!this.canvasBaseline && this.canvasBaseline!==this.canvasFingerprint},
         runCollectionContract() {
             const c = this.currentPipeline?.config
             if(c?.execution_options?.simple_training)return c.execution_options.simple_training
@@ -453,6 +464,9 @@ export default {
         window.removeEventListener('mouseup', this.stopChatResize)
     },
     methods: {
+        async confirmCanvasChange(){if(!this.canvasDirty)return true;if(!await confirmDiscard(this))return false;this.canvasBaseline='';this.canvasEdited=false;return true},
+        markCanvasEdited(){if(this.lock.loading && !this.loadingLinkedPipeline && !this.loadingPlatform)this.canvasEdited=true},
+        markCanvasSaved(){this.canvasBaseline=this.canvasFingerprint;this.canvasEdited=false},
         async openTaskHistory(taskId) {
             this.historyTaskId = taskId
             try {
@@ -473,6 +487,7 @@ export default {
             this.platformFitKey = key
             await this.$nextTick()
             flow.fitView({padding:0.22,duration:0})
+            if(!this.canvasBaseline)this.markCanvasSaved()
         },
         async platformRequest(method, path, data) {
             const r = await http({method, url:'/api/v1'+path, data})
@@ -481,6 +496,7 @@ export default {
         },
         async loadPlatformWorkflow() {
             if (this.loadingPlatform) return
+            this.canvasBaseline=''
             this.loadingPlatform = true
             this.platformFitKey = ''
             const targetRoute = this.$route.fullPath
@@ -515,6 +531,7 @@ export default {
                 }
                 await this.$nextTick()
                 await this.autoLayoutPipeline()
+                this.markCanvasSaved()
             } catch (e) { this.$barWarning(e.message, {status:'error'}) }
             finally {
                 this.loadingPlatform = false
@@ -538,6 +555,7 @@ export default {
                     const node = flow.findNode('mm-'+s.id)
                     flow.updateNodeData(node.id, {...node.data,pipelineRole:`${node.data.status}：${Object.values(s.inputs).join(' + ')} → ${s.output}。`})
                 }
+                this.markCanvasSaved()
                 this.$barWarning('MM 配置已保存；未做真实运行验证', {status:'correct'})
                 return true
             } catch (e) { this.$barWarning(e.message, {status:'warning'}); return false }
@@ -625,6 +643,7 @@ export default {
             }
         },
         confirmDataset(dataset, refresh = false) {
+            if(!refresh)this.markCanvasEdited()
             this.sourceDatabase = dataset
             this.show.dataset = false
             if (refresh) this.updateDatabaseNode()
@@ -779,6 +798,7 @@ export default {
                 .then((res) => {
                     if (res.code === 200) {
                         this.getPipelines()
+                        this.markCanvasSaved()
                         this.$barWarning(this.local('Pipeline has been updated'), {
                             status: 'correct'
                         })
@@ -820,6 +840,7 @@ export default {
                     this.resumeRunAfterSave()
                     this.show.pipelinePanel = false
                     await this.getPipelines()
+                    this.markCanvasSaved()
                     this.$barWarning(this.local('Pipeline has been created'), {status:'correct'})
                 } catch (e) { this.$barWarning(e.message, {status:'warning'}) }
                 return
@@ -845,7 +866,8 @@ export default {
                         if (!this.currentPipeline || !this.currentPipeline.id || this.isTemplate) {
                             this.currentPipeline = res.data
                         }
-                        this.$barWarning(this.local('Pipeline has been created'), {
+                        this.markCanvasSaved()
+                    this.$barWarning(this.local('Pipeline has been created'), {
                             status: 'correct'
                         })
                         this.resumeRunAfterSave()
@@ -955,6 +977,7 @@ export default {
             this.show.pipeline = false
             await this.$nextTick()
             await this.autoLayoutPipeline()
+            this.markCanvasSaved()
         },
         async selectExecutionPipeline(config) {
             console.log(config)
@@ -976,6 +999,7 @@ export default {
             this.lock.loading = true
         },
         async recoverPipeline() {
+            if(!await this.confirmCanvasChange())return
             if (!this.currentPipeline || !this.currentPipeline.config) {
                 return
             }

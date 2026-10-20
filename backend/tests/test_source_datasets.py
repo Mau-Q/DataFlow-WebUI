@@ -280,6 +280,8 @@ def test_native_selection_auto_detects_folder_and_imports_owned_files(source_app
     monkeypatch.setattr(local_source_picker, 'pick_paths', lambda: [str(root)])
     choice = client.post('/api/v1/library/inputs/choose-local').json()['data']
     assert choice['data_form'] == '混合' and choice['count'] == 2
+    assert {f['name'] for f in choice['files']} == {'selected/image.png', 'selected/nested/note.txt'}
+    assert all(f['size'] > 0 and not Path(f['name']).is_absolute() for f in choice['files'])
     assert len(choice['skipped']) == 2 and registry.list() == []
     record = client.post('/api/v1/library/inputs/import-local', data={'selection_id': choice['selection_id'], 'name': 'native'}).json()['data']
     assert (root / 'nested/note.txt').read_text() == '内容'

@@ -265,7 +265,10 @@ import NativeSelect from '@/components/manage/forms/NativeSelect.vue'
 import NativeText from '@/components/manage/forms/NativeText.vue'
 import { publishChange, subscribeChanges } from '@/components/manage/forms/changes'
 
+import { useUnsavedChanges, confirmDiscard } from '@/components/manage/forms/unsaved'
+
 export default {
+    setup(){useUnsavedChanges(vm=>vm.editDirty,vm=>{vm.editing=null})},
     components: { NativeSelect, NativeText },
     name: 'ManagedResourceCatalog',
     props: { kind: { type: String, required: true } },
@@ -281,7 +284,7 @@ export default {
         operator: '',
         relation: 'referenced',
         selected: null,
-        editing: null,
+        editing: null, editBaseline: '',
         busy: false,
         loading: false,
         error: '',
@@ -298,6 +301,7 @@ export default {
         usages
     }),
     computed: {
+        editDirty(){return !!this.editing && this.editBaseline!==JSON.stringify([this.editing,this.exampleText,this.allowedText])},
         filterState() { return [this.source,this.search,this.usage,this.purpose,this.pipeline,this.operator,this.relation] },
         visibleReferences() {
             return (this.selected?.references || []).filter((ref) =>
@@ -437,7 +441,8 @@ export default {
             if (Object.keys(this.$route.query).length)
                 this.$router.replace({ path: this.$route.path, query: {} })
         },
-        back() {
+        async back() {
+            if(this.editDirty && !await confirmDiscard(this))return false
             this.selected = null
             this.editing = null
             this.previewText = ''
@@ -486,8 +491,8 @@ export default {
                 ...JSON.parse(JSON.stringify(record))
             }
         },
-        create() {
-            this.back()
+        async create() {
+            if(await this.back()===false)return
             this.selected = null
             this.source = 'user'
             this.editing = this.form()
@@ -495,6 +500,7 @@ export default {
             this.allowedText = ''
             this.previewText = ''
             this.previewError = ''
+            this.editBaseline=JSON.stringify([this.editing,this.exampleText,this.allowedText])
         },
         edit() {
             this.editing = this.form({ ...this.selected, usage: this.selected.usages[0] })
@@ -502,11 +508,12 @@ export default {
             this.exampleText = JSON.stringify(this.selected.example_variables || {}, null, 2)
             this.previewText = ''
             this.previewError = ''
+            this.editBaseline=JSON.stringify([this.editing,this.exampleText,this.allowedText])
         },
-        copyAsOwn() {
+        async copyAsOwn() {
             const row = this.selected,
                 rendered = this.previewText
-            this.back()
+            if(await this.back()===false)return
             this.editing = this.form({
                 ...row,
                 id: undefined,
@@ -524,9 +531,10 @@ export default {
             this.exampleText = JSON.stringify(row.example_variables || {}, null, 2)
             this.previewText = ''
             this.previewError = ''
+            this.editBaseline=JSON.stringify([this.editing,this.exampleText,this.allowedText])
         },
-        cancelEdit() {
-            if (this.busy) return
+        async cancelEdit() {
+            if (this.busy || this.editDirty && !await confirmDiscard(this)) return
             this.editing = null
             if(this.syncPending){this.syncPending=false;this.load()}
             this.previewText = ''

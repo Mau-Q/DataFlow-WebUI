@@ -2,11 +2,11 @@
   <main class="mm" :class="{dark: theme === 'dark'}">
     <router-link :to="{path:'/m',query:{workflow:'multimodal',config:selectedId || undefined}}">返回原生 Pipeline 画布</router-link>
     <header><div><h1>图片 VQA</h1><p>从图片生成问题和答案，检查结构并整理为图文 SFT 样本。</p></div><button :disabled="busy" @click="load">刷新列表</button></header>
-    <p class="status">未做真实运行验证。当前仅支持模板配置，独立 MM 执行尚未启用。</p>
+    <p class="status">未做真实运行验证。当前仅支持模板配置，独立 MM 执行尚未启用。需要通过视觉 API 生成图文数据，请使用代表性图文流程：<router-link :to="{path:'/m',query:{pipeline:'representative-image_text-sft-v1'}}">图文 SFT</router-link> · <router-link :to="{path:'/m',query:{pipeline:'representative-image_text-dpo-v1'}}">图文 DPO</router-link>。</p>
     <p class="error" role="alert" v-if="error">{{ error }}</p><p role="status" v-if="notice">{{ notice }}</p>
     <form v-if="config" @submit.prevent="save">
       <section><h2>输入与输出</h2>
-        <label>配置<select v-model="selectedId" @change="open"><option value="">新建 · MM 基础图片 VQA</option><option v-for="r in configs" :key="r.id" :value="r.id">{{ r.name }}</option></select></label>
+        <label>配置<select :value="selectedId" @change="changeConfig"><option value="">新建 · MM 基础图片 VQA</option><option v-for="r in configs" :key="r.id" :value="r.id">{{ r.name }}</option></select></label>
         <label>名称<input v-model="name" required maxlength="240" /></label>
         <p><router-link to="/m/materials">管理图片材料</router-link> · <router-link to="/m/training-datasets">管理图文草稿</router-link></p>
         <fieldset><legend>图片材料</legend><p v-if="!images.length">暂无图片，请先在材料管理中导入。</p><label v-for="m in images" :key="m.id" class="image"><input type="checkbox" :value="m.id" v-model="config.material_ids" /><img :src="`/api/v1/library/materials/${m.id}/file`" alt="" />{{ m.name }}</label></fieldset>
@@ -31,16 +31,19 @@
   </main>
 </template>
 <script>
+import { useUnsavedChanges, confirmDiscard } from '@/components/manage/forms/unsaved'
 import axios from 'axios'
 import {mapState} from 'pinia'
 import {useTheme} from '@/stores/theme'
 export default {
+ setup(){useUnsavedChanges(vm=>!!vm.config && vm.dirty,vm=>{vm.config=null})},
  name:'MultimodalConfiguration',
  data:()=>({config:null,name:'图片 VQA 配置',selectedId:'',configs:[],images:[],drafts:[],prompts:[],schemas:[],builtins:{},defaultRefs:{},baseline:'',busy:false,error:'',notice:'',conditions:null,labels:{question:'生成问题',answer:'生成答案',validate:'结构检查',format:'训练格式整理'}}),
  computed:{...mapState(useTheme,['theme']),dirty(){return this.baseline!==JSON.stringify([this.name,this.config])},canvasWidth(){return Math.max(1180,...this.config.steps.map(s=>s.x+270))},canvasHeight(){return Math.max(150,...this.config.steps.map(s=>s.y+110))}},
  watch:{$route(to){if(this.config && to.path==='/m/multimodal' && to.query.config && to.query.config!==this.selectedId){this.selectedId=to.query.config;this.open()}}},
  async mounted(){await this.load();if(this.$route.query.config){this.selectedId=this.$route.query.config;await this.open()}} ,
  methods:{
+ async changeConfig(event){if(this.dirty && !await confirmDiscard(this)){event.target.value=this.selectedId;return}this.selectedId=event.target.value;this.open()},
  async request(method,path,data){const r=await axios({method,url:'/api/v1'+path,data});if(!r.data.success)throw new Error(r.data.message);return r.data.data},
  async action(fn){if(this.busy)return;this.busy=true;this.error='';this.notice='';try{await fn()}catch(e){this.error=e.response?.data?.detail||e.response?.data?.message||e.message}finally{this.busy=false}},
  load(){return this.action(async()=>{const [t,configs,materials,drafts,prompts,schemas]=await Promise.all(['/multimodal/template','/multimodal/configs','/library/materials','/library/drafts','/prompts/user','/json_schemas?include_builtin=true'].map(p=>this.request('get',p)));this.configs=configs;this.images=materials.filter(m=>m.kind==='image');this.drafts=drafts.filter(d=>d.modality==='image_text'&&d.training_type==='sft');this.prompts=prompts;this.schemas=schemas;this.builtins=t.builtin_resources;this.defaultRefs=Object.fromEntries(t.config.steps.map(s=>[s.id,s.resource_ref]));if(!this.config){this.config=t.config;this.name=t.name;this.baseline=JSON.stringify([this.name,this.config])}})},

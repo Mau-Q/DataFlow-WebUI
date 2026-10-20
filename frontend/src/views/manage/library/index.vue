@@ -7,7 +7,7 @@
         </header>
         <p v-if="error" role="alert" class="notice error">{{ error }}</p><p v-if="notice" role="status" class="notice">{{ notice }}</p>
         <section v-if="!detailId && (records.length || loading)" class="dataset-catalog">
-            <div class="list-toolbar"><input v-model="search" aria-label="搜索数据集" placeholder="搜索数据集名称" type="search" /><span>{{ filtered.length }} 个数据集</span></div>
+            <dataset-filters v-model="filters" :mode="mode" :theme="theme" :count="filtered.length" :total="records.length" />
             <div class="table-scroll"><table class="dataset-table">
                 <thead><tr><th scope="col">数据集名称</th><th scope="col">{{ isSources ? '数据形式' : '数据类型' }}</th><th scope="col">{{ isSources ? '数量' : '样本数' }}</th><th v-if="!isSources" scope="col">发布版本</th><th scope="col">更新时间</th><th scope="col"><span class="sr-only">操作</span></th></tr></thead>
                 <tbody><tr v-for="item in filtered" :key="item.id">
@@ -27,7 +27,7 @@
                 <div class="detail-heading"><div><h2>{{ selected.name }}</h2><p>{{ isSources ? `${sourceType(selected)} · ${sourceCount(selected)}` : `${modalityLabel(selected.modality)} · ${(selected.training_type || 'sft').toUpperCase()} · ${selected.row_count} 条` }}</p></div><button v-if="!isSources" @click="openImport">导入数据</button></div>
                 <template v-if="isSources && hasSourceFiles">
                     <div class="source-layout">
-                        <div class="file-list"><button v-for="(row, i) in sourceRows" :key="i" :class="{ active: sourceIndex === i }" @click="sourceIndex = i"><span>{{ offset + i + 1 }}</span><strong :title="row.source_name || row.source">{{ sourceName(row) }}</strong></button></div>
+                        <div class="file-list"><button v-for="(row, i) in sourceRows" :key="i" :class="{ active: sourceIndex === i }" @click="selectSource(i)"><span>{{ offset + i + 1 }}</span><strong :title="row.source_name || row.source">{{ sourceName(row) }}</strong></button></div>
                         <div class="file-preview">
                             <div class="preview-heading"><span>{{ sourceName(sourceRows[sourceIndex]) }}</span><a :href="sourceFileUrl" target="_blank" rel="noopener">打开原文件 ↗</a></div>
                             <img v-if="isImage(sourceRows[sourceIndex])" :src="sourceFileUrl" :alt="sourceName(sourceRows[sourceIndex])" class="image-preview" />
@@ -97,17 +97,17 @@
                         <dt>创建时间</dt><dd>{{ formatTime(materialDetails.created_at, true) }}</dd><dt>更新时间</dt><dd>{{ formatTime(materialDetails.updated_at, true) }}</dd><dt>材料 ID</dt><dd>{{ materialDetails.id }}</dd><dt>父材料 ID</dt><dd>{{ materialDetails.parent_material_id || '无' }}</dd><dt>受管文件名</dt><dd>{{ materialDetails.blob_name }}</dd><dt>SHA-256</dt><dd>{{ materialDetails.sha256 }}</dd>
                     </dl>
                 </details>
-                <dataset-lifecycle v-if="!isSources" :key="selected.id" :draft="selected" @updated="reload" @forked="draftForked" @dirty-change="sampleEditingChanged" />
+                <dataset-lifecycle ref="sampleEditor" v-if="!isSources" :key="selected.id" :draft="selected" @updated="reload" @forked="draftForked" @dirty-change="sampleEditingChanged" />
             </section>
             <section v-else class="empty"><h2>{{ loading ? '正在加载数据集…' : '无法打开数据集' }}</h2><p v-if="!loading">请返回列表选择数据集，或刷新重试。</p><button v-if="!loading" @click="backToList">返回列表</button></section>
         </div>
-        <section v-else class="empty full-empty"><div class="empty-icon">{{ isSources ? '▤' : '◫' }}</div><h2>{{ isSources ? '添加第一份原始数据集' : '还没有生成数据集' }}</h2><p>{{ isSources ? '导入 PDF、图片或已有数据文件。' : '创建数据集后，可导入已有训练样本。' }}</p><button class="primary" @click="openCreate">{{ isSources ? '添加数据集' : '新建数据集' }}</button></section>
+        <section v-else-if="!error" class="empty full-empty"><div class="empty-icon">{{ isSources ? '▤' : '◫' }}</div><h2>{{ isSources ? '添加第一份原始数据集' : '还没有生成数据集' }}</h2><p>{{ isSources ? '导入 PDF、图片或已有数据文件。' : '创建数据集后，可导入已有训练样本。' }}</p><button class="primary" @click="openCreate">{{ isSources ? '添加数据集' : '新建数据集' }}</button></section>
 
-        <base-panel v-if="showCreate || showImport" v-model="dialogVisible" :title="dialogTitle" :theme="theme" width="560px" :height="isSources ? '560px' : showCreate ? '440px' : '520px'" :teleport="true" :is-footer="false" :show-title-bar="!dialogBusy">
+        <base-panel v-if="showCreate || showImport" v-model="dialogVisible" :before-close="canCloseDialog" :busy="dialogBusy" :title="dialogTitle" :theme="theme" width="560px" :height="isSources ? '560px' : showCreate ? '440px' : '520px'" :teleport="true" :is-footer="false" :show-title-bar="!dialogBusy">
             <template #content>
                 <div class="native-dialog-body" :class="{dark:theme==='dark'}" @keydown.esc.stop="closeDialog">
                     <p v-if="dialogError && showCreate && !isSources" role="alert" class="error">{{ dialogError }}</p>
-                    <source-dataset-import v-if="isSources" :theme="theme" @busy-change="sourceBusy = $event" @cancel="closeDialog" @created="sourceCreated" />
+                    <source-dataset-import ref="sourceImport" v-if="isSources" :theme="theme" @busy-change="sourceBusy = $event" @cancel="closeDialog" @created="sourceCreated" />
                     <form v-else-if="showCreate" @submit.prevent="createDraft">
                         <div class="native-field">名称<native-text v-model="draftForm.name" :theme="theme" :disabled="busy" label="数据集名称" placeholder="数据集名称" /></div>
                         <div class="native-field">数据类型<native-select v-model="draftForm.modality" :theme="theme" :disabled="busy" label="数据类型" :options="[{value:'text',label:'文本'},{value:'image_text',label:'图文'}]" /></div>
@@ -132,6 +132,9 @@
 </template>
 <script>
 import axios from 'axios'
+import DatasetFilters from '@/components/manage/library/DatasetFilters.vue'
+import { defaultFilters, filterCatalog } from './filters.js'
+import { confirmDiscard, useUnsavedChanges } from '@/components/manage/forms/unsaved'
 import BasePanel from '@/components/general/basePanel.vue'
 import NativeText from '@/components/manage/forms/NativeText.vue'
 import NativeSelect from '@/components/manage/forms/NativeSelect.vue'
@@ -140,19 +143,22 @@ import { mapState } from 'pinia'
 import { useTheme } from '@/stores/theme'
 import DatasetLifecycle from '@/components/manage/library/DatasetLifecycle.vue'
 import SourceDatasetImport from '@/components/manage/library/SourceDatasetImport.vue'
-import { sourceType, sourceCount, recordTime, recentFirst, formatTime, releaseLabel } from './catalog.js'
+import { sourceType, sourceCount, recordTime, formatTime, releaseLabel } from './catalog.js'
 export default {
     name: 'DatasetLibrary',
-    components: { BasePanel, NativeText, NativeSelect, SourceDatasetImport, DatasetLifecycle },
+    setup(){useUnsavedChanges(vm=>vm.dialogDirty || vm.metadataDirty,vm=>{vm.fileMetadata=null;vm.finishCloseDialog()})},
+    components: { DatasetFilters, BasePanel, NativeText, NativeSelect, SourceDatasetImport, DatasetLifecycle },
     props: { mode: { type: String, required: true } },
-    data: () => ({ sourceBusy:false, sampleDirty:false, syncPending:false, stopChanges:null, mediaVersion:0, reloadVersion:0, mediaLoading:false, selectedTrainingFile:null, trainingName:'', records: [], materials: [], selected: null, sourceRows: [], sourceIndex: 0, offset: 0, search: '', busy: false, loading: false, error: '', notice: '', dialogError: '', showCreate: false, showImport: false, mediaBindings: '{}', mediaRefs: [], mediaChoices: {}, draftForm: { name: '', modality: 'text', training_type: 'sft', description: '' }, loadVersion: 0, pendingReload: false, fileMetadata: null, materialDetails: null, memberRows: [], memberLoading: false, memberError: '', memberVersion: 0, listPositions: {}, listSearches: {}, importAfterLoad: false }),
+    data: () => ({ sourceBusy:false, sampleDirty:false, syncPending:false, stopChanges:null, mediaVersion:0, reloadVersion:0, mediaLoading:false, selectedTrainingFile:null, trainingName:'', records: [], materials: [], selected: null, sourceRows: [], sourceIndex: 0, offset: 0, filters: defaultFilters(), savedFilters: {}, search: '', busy: false, loading: false, error: '', notice: '', dialogError: '', showCreate: false, showImport: false, mediaBindings: '{}', mediaRefs: [], mediaChoices: {}, draftForm: { name: '', modality: 'text', training_type: 'sft', description: '' }, loadVersion: 0, pendingReload: false, fileMetadata: null, metadataBaseline:'', materialDetails: null, memberRows: [], memberLoading: false, memberError: '', memberVersion: 0, listPositions: {}, listSearches: {}, importAfterLoad: false }),
     computed: {
-        dialogVisible: {get(){return this.showCreate || this.showImport},set(v){if(!v)this.closeDialog()}},
+        dialogVisible: {get(){return this.showCreate || this.showImport},set(v){if(!v)this.finishCloseDialog()}},
+        metadataDirty(){return !!this.fileMetadata && this.metadataBaseline!==JSON.stringify(this.fileMetadata)},
+        dialogDirty(){if(!this.dialogVisible)return false;if(this.isSources)return !!(this.$refs.sourceImport?.name || this.$refs.sourceImport?.count);return this.showCreate?!!this.draftForm.name.trim() || !!this.draftForm.description.trim() || this.draftForm.modality!=='text' || this.draftForm.training_type!=='sft':!!this.selectedTrainingFile},
         dialogBusy(){return this.busy || this.sourceBusy},
         ...mapState(useTheme, ['theme']),
         detailId() { return typeof this.$route.query.dataset === 'string' ? this.$route.query.dataset : '' },
         isSources() { return this.mode === 'materials' },
-        filtered() { return recentFirst(this.records.filter(r => r.name.toLowerCase().includes(this.search.toLowerCase()))) },
+        filtered() { return filterCatalog(this.records, this.filters, this.mode) },
         detailFields() { return this.selected?.fields || [...new Set(this.sourceRows.flatMap(row => row && typeof row === 'object' ? Object.keys(row) : []))] },
         sourceTaskIds() { return [...new Set([...Object.values(this.selected?.sample_sources || {}).flat().map(s => s.task_id), ...(this.selected?.collections || []).map(key => key.split(':')[0])].filter(Boolean))] },
         imageMaterials() { return this.materials.filter(m => m.kind === 'image') },
@@ -162,12 +168,13 @@ export default {
         sampleRows() { return (this.isSources ? this.sourceRows : this.selected.rows || []).map(row => row && typeof row === 'object' ? row : { value: row }) },
         dialogTitle() { return this.isSources ? '添加原始数据集' : this.showCreate ? '新建生成数据集' : '导入训练数据' }
     },
-    watch: { detailId() { this.loadVersion++; this.selected = null; this.materialDetails = null; this.sourceRows = []; this.offset = 0; this.showCreate = false; this.showImport = false; this.dialogError = ''; if (this.detailId) this.$nextTick(() => { if (this.$refs.libraryPane) this.$refs.libraryPane.scrollTop = 0 }); this.mediaVersion++;this.mediaLoading=false;if (this.busy) this.pendingReload = true; else this.reload() }, sourceIndex() { this.fileMetadata = null; this.materialDetails = null; this.loadMemberPreview() }, mode(value, previous) { this.listSearches[previous] = this.search; this.loadVersion++; this.selected = null; this.materialDetails = null; this.sourceRows = []; this.search = this.listSearches[value] || ''; this.error = ''; this.notice = ''; this.showCreate = false; this.showImport = false; if (this.busy) this.pendingReload = true; else this.reload() } },
+    watch: { detailId() { this.loadVersion++; this.selected = null; this.materialDetails = null; this.sourceRows = []; this.offset = 0; this.showCreate = false; this.showImport = false; this.dialogError = ''; if (this.detailId) this.$nextTick(() => { if (this.$refs.libraryPane) this.$refs.libraryPane.scrollTop = 0 }); this.mediaVersion++;this.mediaLoading=false;if (this.busy) this.pendingReload = true; else this.reload() }, sourceIndex() { this.fileMetadata = null; this.materialDetails = null; this.loadMemberPreview() }, mode(value, previous) { this.savedFilters[previous] = {...this.filters}; this.filters = this.savedFilters[value] || defaultFilters(); this.listSearches[previous] = this.search; this.loadVersion++; this.selected = null; this.materialDetails = null; this.sourceRows = []; this.search = this.listSearches[value] || ''; this.error = ''; this.notice = ''; this.showCreate = false; this.showImport = false; if (this.busy) this.pendingReload = true; else this.reload() } },
     deactivated(){this.showCreate=false;this.showImport=false;this.mediaVersion++;this.mediaLoading=false},
-    mounted() { this.stopChanges=subscribeChanges(change=>{if(change.topic==='datasets'){if(this.dialogVisible || this.busy || this.sampleDirty)this.syncPending=true;else if(this.$route.path===(this.isSources?'/m/materials':'/m/training-datasets'))this.reload()}}); this.reload() },
+    mounted() { this.stopChanges=subscribeChanges(change=>{if(change.topic==='datasets'){if(this.dialogVisible || this.busy || this.sampleDirty || this.metadataDirty)this.syncPending=true;else if(this.$route.path===(this.isSources?'/m/materials':'/m/training-datasets'))this.reload()}}); this.reload() },
     beforeUnmount(){this.stopChanges?.()},
     activated() { if (!this.loading && !this.busy) this.reload() },
     methods: {
+        async selectSource(index){if(index===this.sourceIndex)return;if(this.metadataDirty && !await confirmDiscard(this))return;this.sourceIndex=index},
         sampleEditingChanged(dirty){this.sampleDirty=dirty;if(!dirty && this.syncPending && !this.busy && !this.dialogVisible){this.syncPending=false;this.reload()}},
         detailLocation(id) { return { path: this.isSources ? '/m/materials' : '/m/training-datasets', query: { dataset: id } } },
         rememberListPosition() { this.listPositions[this.mode] = this.$refs.libraryPane?.scrollTop || 0 },
@@ -199,7 +206,7 @@ export default {
         async request(method, path, data) { const r = await axios({ method, url: `/api/v1${path}`, data }); if (!r.data.success) throw new Error(r.data.message); return r.data.data },
         async action(fn, {keepNotice=false}={}) { if (this.busy) return; this.busy = true; this.error = ''; if(!keepNotice)this.notice = ''; try { await fn() } catch (e) { if (this.showCreate || this.showImport) this.dialogError = e.response?.data?.message || e.message; else this.error = e.response?.data?.message || e.message } finally { this.busy = false; if (this.pendingReload || (this.syncPending && !this.dialogVisible && !this.sampleDirty)) { this.pendingReload = false;this.syncPending=false; this.reload() } } },
         async loadLists() { const mode = this.mode; const records = await this.request('get', this.isSources ? '/datasets/?visible_only=true' : '/library/drafts?visible_only=true'); if (mode === this.mode) this.records = records },
-        async reload() { if(this.busy){this.pendingReload=true;return}const reloadVersion=++this.reloadVersion;this.loading = true; await this.action(async () => { await this.loadLists(); const id = this.detailId; if (id) await this.loadSelected(id); else this.selected = null }, {keepNotice:true}); if(reloadVersion===this.reloadVersion)this.loading = false; if (this.importAfterLoad && this.selected) { this.importAfterLoad = false; this.openImport() } if (!this.detailId) this.$nextTick(() => { if (this.$refs.libraryPane) this.$refs.libraryPane.scrollTop = this.listPositions[this.mode] || 0 }) },
+        async reload() { if((this.sampleDirty || this.metadataDirty) && !await confirmDiscard(this))return; if(this.busy){this.pendingReload=true;return}const reloadVersion=++this.reloadVersion;this.loading = true; await this.action(async () => { await this.loadLists(); const id = this.detailId; if (id) await this.loadSelected(id); else this.selected = null }, {keepNotice:true}); if(reloadVersion===this.reloadVersion)this.loading = false; if (this.importAfterLoad && this.selected) { this.importAfterLoad = false; this.openImport() } if (!this.detailId) this.$nextTick(() => { if (this.$refs.libraryPane) this.$refs.libraryPane.scrollTop = this.listPositions[this.mode] || 0 }) },
         async loadSelected(id) {
             const version = ++this.loadVersion
             if (this.isSources) {
@@ -226,20 +233,23 @@ export default {
             } catch (e) { if (version === this.memberVersion) this.memberError = e.response?.data?.message || e.message }
             finally { if (version === this.memberVersion) this.memberLoading = false }
         },
-        page(delta) { this.action(async () => { this.offset += delta; await this.loadSelected(this.selected.id) }) },
+        async page(delta) { if((this.sampleDirty || this.metadataDirty) && !await confirmDiscard(this))return;this.action(async () => { this.offset += delta; await this.loadSelected(this.selected.id) }) },
         async loadFileMetadata(event) {
-            if (!event.target.open) return
+            if (!event.target.open || this.fileMetadata) return
             const id = this.sourceRows[this.sourceIndex]?.material_id
             await this.action(async () => {
                 const record = await this.request('get', `/library/materials/${id}`)
                 this.fileMetadata = Object.fromEntries(['name', 'group', 'source', 'description', 'parent_material_id', 'relation'].map(k => [k, record[k]]))
+                this.metadataBaseline=JSON.stringify(this.fileMetadata)
                 this.materials = await this.request('get', '/library/materials')
             })
         },
-        saveFileMetadata() { this.action(async () => { this.materialDetails = await this.request('put', `/library/materials/${this.sourceRows[this.sourceIndex].material_id}`, this.fileMetadata); this.notice = '文件信息已保存' }) },
-        openImport() { this.mediaVersion++;this.mediaLoading=false;this.selectedTrainingFile=null;this.trainingName='';this.dialogError = ''; this.mediaRefs = []; this.mediaChoices = {}; this.mediaBindings = '{}'; this.showCreate = false; this.showImport = true },
-        openCreate() { this.dialogError = ''; this.showImport = false; this.showCreate = true },
-        closeDialog() { if (this.dialogBusy) return; this.mediaVersion++;this.showCreate=false;this.showImport=false;this.dialogError='';if(this.syncPending){this.syncPending=false;this.reload()} },
+        saveFileMetadata() { this.action(async () => { this.materialDetails = await this.request('put', `/library/materials/${this.sourceRows[this.sourceIndex].material_id}`, this.fileMetadata); this.metadataBaseline=JSON.stringify(this.fileMetadata);this.notice = '文件信息已保存' }) },
+        async openImport() { if(this.sampleDirty){if(!await confirmDiscard(this))return;this.$refs.sampleEditor?.cancelRow();} this.mediaVersion++;this.mediaLoading=false;this.selectedTrainingFile=null;this.trainingName='';this.dialogError = ''; this.mediaRefs = []; this.mediaChoices = {}; this.mediaBindings = '{}'; this.showCreate = false; this.showImport = true },
+        openCreate() { this.draftForm={name:'',modality:'text',training_type:'sft',description:''}; this.dialogError = ''; this.showImport = false; this.showCreate = true },
+        async canCloseDialog(){return !this.dialogBusy && (!this.dialogDirty || await confirmDiscard(this))},
+        async closeDialog(){if(await this.canCloseDialog())this.finishCloseDialog()},
+        finishCloseDialog() { if (this.dialogBusy) return; this.mediaVersion++;this.showCreate=false;this.showImport=false;this.dialogError='';if(this.syncPending){this.syncPending=false;this.reload()} },
         async sourceCreated(record, result = {}) {
             const navigate=this.isSources && this.showCreate && this.$route.path==='/m/materials'
             this.showCreate=false

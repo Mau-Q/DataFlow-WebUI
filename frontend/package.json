@@ -9,7 +9,8 @@
         "preview": "vite preview",
         "lint": "eslint . --ext .vue,.js,.jsx,.cjs,.mjs --fix --ignore-path .gitignore",
         "format": "prettier --write src/",
-        "api": "api-cli get http://100.64.0.91:8000/openapi.json -d ./src/axios"
+        "api": "api-cli get http://100.64.0.91:8000/openapi.json -d ./src/axios",
+        "test": "node --test"
     },
     "dependencies": {
         "@creatorsn/powereditor3": "^0.1.9",

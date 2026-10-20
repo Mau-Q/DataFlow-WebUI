@@ -143,23 +143,31 @@ class TaskRegistry:
             "total": len(tasks),
             "pending": 0,
             "running": 0,
+            "completed": 0,
+            "queued": 0,
             "success": 0,
             "failed": 0,
             "cancelled": 0,
             "by_executor_type": {
                 "operator": 0,
+                "unknown": 0,
                 "pipeline": 0
             }
         }
         
         for task in tasks:
-            status = task.get("status", "pending")
+            status = task.get("status", "queued")
+            status = {"success": "completed", "pending": "queued"}.get(status, status)
             stats[status] = stats.get(status, 0) + 1
             
-            executor_type = task.get("executor_type", "")
+            executor_type = task.get("executor_type") or ("pipeline" if task.get("pipeline_id") else "operator" if task.get("executor_name") else "")
             if executor_type in stats["by_executor_type"]:
                 stats["by_executor_type"][executor_type] += 1
+            else:
+                stats["by_executor_type"]["unknown"] += 1
         
+        stats["success"] = stats.get("completed", 0)
+        stats["pending"] = stats.get("queued", 0)
         return stats
 
     def get_current_time(self):

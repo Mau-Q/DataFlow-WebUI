@@ -118,6 +118,7 @@ export default {
         execLabel
     },
     props: {
+        beforeChange:{type:Function,default:async()=>true},
         modelValue: {
             default: false
         },
@@ -246,6 +247,7 @@ export default {
             flow.addNodes(newNode)
         },
         async selectPipeline(pipelineItem) {
+            if(!pipelineItem.workflow && !this.$route.query.workflow && !await this.beforeChange())return
             if (pipelineItem.workflow) {
                 this.thisValue = false
                 this.$router.push({path: '/m', query: {workflow: pipelineItem.workflow}})

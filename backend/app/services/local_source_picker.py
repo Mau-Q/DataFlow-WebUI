@@ -120,6 +120,7 @@ class LocalSourcePicker:
             _SELECTIONS[token] = {'created': now, 'root': str(self.library.root), 'entries': entries, 'directory': has_directory}
         name = roots[0].name if len(roots) == 1 and has_directory else roots[0].stem if len(entries) == 1 else f'原始材料 · {len(entries)} 份'
         return {'selection_id': token, 'name': name, 'count': len(entries),
+                'files': [{'name': relative, 'size': stamp[0]} for _, relative, stamp in entries],
                 'data_form': next(iter(kinds)) if len(kinds) == 1 else '混合', 'skipped': skipped}
 
     def import_selection(self, token, name):
