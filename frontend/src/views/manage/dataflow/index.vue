@@ -8,9 +8,21 @@
             <mainFlow :id="flowId" v-model:nodes="nodes" v-model:edges="edges" @switch-database="openInputSettings"
                 @connect="onConnect" @connect-start="onConnectStart" @connect-end="onConnectEnd"
                 @update-run-value="useEdgeSync.syncRunValue($event, flowId)" @show-details="showExecDetails"
-                @download-data="downloadData" @nodes-ready="fitPlatformWhenReady" @click="show.pipeline = false"></mainFlow>
-            <div class="control-menu-block">
-                <fv-command-bar :theme="theme" v-model="value" :options="options" :item-border-radius="30"
+                @download-data="downloadData" @nodes-ready="fitPlatformWhenReady" @click="show.pipeline = false">
+                <template #empty>
+                    <div class="canvas-empty-state" @click.stop>
+                        <i class="ms-Icon ms-Icon--Flow" aria-hidden="true"></i>
+                        <h2>开始一个数据生成流程</h2>
+                        <p>选择已有 Pipeline 或模板，再添加输入数据与算子。</p>
+                        <fv-button class="canvas-start-button" :theme="theme" border-radius="6" icon="OpenFolderHorizontal" style="width: 150px; height: 34px"
+                            @click.stop="show.pipeline = true">选择 Pipeline</fv-button>
+                    </div>
+                </template>
+            </mainFlow>
+            <div class="control-menu-block" role="toolbar" aria-label="Pipeline 操作">
+                <current-pipeline-block v-model="currentPipeline" :taskId="executionInfo.task_id"
+                    @recover-click="recoverPipeline"></current-pipeline-block>
+                <fv-command-bar :theme="theme" v-model="value" :options="options" :item-border-radius="6"
                     :background="theme === 'dark' ? '' : 'rgba(250, 250, 250, 0.8)'" class="command-bar">
                     <template v-slot:optionItem="x">
                         <div class="command-bar-item-wrapper">
@@ -23,69 +35,65 @@
                             <i v-show="x.item.secondary.length > 0" class="ms-Icon ms-Icon--ChevronDown icon"></i>
                         </div>
                     </template>
-                    <template v-slot:right-space>
-                        <div class="command-bar-right-space">
-                            <fv-toggle-switch v-if="!isMM" :theme="theme" v-model="isAutoConnectionModel" :width="75"
-                                :on="local('Auto')" :off="local('Manual')" :insideContent="true" :height="30"
-                                :off-foreground="theme === 'dark' ? 'rgba(255, 255, 255, 1)' : ''"
-                                borderColor="rgba(235, 235, 235, 1)" ring-background="rgba(180, 180, 180, 1)"
-                                :switch-on-background="gradient" :title="local('Whether Auto Connect Run Edges')">
-                            </fv-toggle-switch>
-                            <fv-button :theme="theme" border-radius="30" :title="local('Auto Layout')"
-                                style="width: 96px; height: 30px" @click="autoLayoutPipeline">
-                                <i class="ms-Icon ms-Icon--GridViewMedium" style="margin-right: 5px"></i>
-                                <p>{{ local('Auto Layout') }}</p>
-                            </fv-button>
-                            <fv-button v-if="!isMM" :theme="currentServing ? 'dark' : theme" :background="currentServing
-                                ? 'linear-gradient(135deg, rgba(69, 98, 213, 1), #ff0080, #ff8c00)'
-                                : ''
-                                " border-radius="30" :disabled="!lock.serving" style="width: 30px; height: 30px"
-                                @click="showServing">
-                                <transition-group tag="span" name="df-scale-up-to-up">
-                                    <i v-show="currentServing" key="0" class="ms-Icon"
-                                        :class="[`ms-Icon--DialShape4`]"></i>
-                                    <i v-show="!currentServing" key="1" class="ms-Icon" :class="[`ms-Icon--More`]"></i>
-                                </transition-group>
-                                <i v-show="false" class="ms-Icon"
-                                    :class="[`ms-Icon--${currentServing ? 'DialShape4' : 'More'}`]"></i>
-                            </fv-button>
-                            <fv-button theme="dark"
-                                background="linear-gradient(90deg, rgba(69, 98, 213, 1), rgba(161, 145, 206, 1))"
-                                foreground="rgba(255, 255, 255, 1)" border-color="rgba(255, 255, 255, 0.3)"
-                                border-radius="30" :disabled="!currentPipeline || runPreparing || !lock.running" :reveal-background-color="[
-                                    'rgba(255, 255, 255, 0.5)',
-                                    'rgba(103, 105, 251, 0.6)'
-                                ]" style="width: 120px;" @click="openRunConfirm">
-                                <i v-show="lock.running" class="ms-Icon ms-Icon--Play" style="margin-right: 5px"></i>
-                                <fv-progress-ring v-show="!lock.running" loading="true" :r="10" :border-width="2"
-                                    background="rgba(200, 200, 200, 1)" :color="'white'"
-                                    style="margin-right: 5px"></fv-progress-ring>
-                                <p>{{ this.local('Save & Run') }}</p>
-                            </fv-button>
-                            <fv-button v-show="!lock.running && executionInfo.task_id" theme="dark"
-                                background="rgba(200, 38, 95, 0.9)" font-size="10" foreground="rgba(255, 255, 255, 1)"
-                                border-color="whitesmoke" border-radius="30" :title="local('Stop')"
-                                style="width: 30px; height: 30px" @click="stopExecution">
-                                <i class="ms-Icon ms-Icon--StopSolid"></i>
-                            </fv-button>
-                            <fv-button theme="dark" background="rgba(191, 95, 95, 0.6)"
-                                foreground="rgba(255, 255, 255, 1)" border-color="whitesmoke" border-radius="30"
-                                :title="local('Delete')" style="width: 30px; height: 30px" @click="resetFlow">
-                                <i class="ms-Icon ms-Icon--Delete"></i>
-                            </fv-button>
-                            <fv-button
-                                :theme="show.chat ? 'dark' : theme"
-                                :background="show.chat ? 'linear-gradient(90deg, rgba(69, 98, 213, 1), rgba(161, 145, 206, 1))' : ''"
-                                :foreground="show.chat ? 'rgba(255, 255, 255, 1)' : ''"
-                                border-radius="30" :title="local('AI Assistant')"
-                                style="width: 30px; height: 30px" @click="show.chat = !show.chat">
-                                <i class="ms-Icon ms-Icon--Robot"></i>
-                            </fv-button>
-                        </div>
-                    </template>
                 </fv-command-bar>
-                <current-pipeline-block v-model="currentPipeline" :taskId="executionInfo.task_id"
-                    @recover-click="recoverPipeline"></current-pipeline-block>
+                <div class="command-bar-right-space" role="group" aria-label="画布与运行">
+                    <fv-toggle-switch v-if="!isMM" :theme="theme" v-model="isAutoConnectionModel" :width="75"
+                        :on="local('Auto')" :off="local('Manual')" :insideContent="true" :height="30"
+                        :off-foreground="theme === 'dark' ? 'rgba(255, 255, 255, 1)' : ''"
+                        borderColor="rgba(235, 235, 235, 1)" ring-background="rgba(180, 180, 180, 1)"
+                        :switch-on-background="gradient" :title="local('Whether Auto Connect Run Edges')">
+                    </fv-toggle-switch>
+                    <fv-button :theme="theme" border-radius="6" :title="local('Auto Layout')"
+                        style="width: 96px; height: 30px" @click="autoLayoutPipeline">
+                        <i class="ms-Icon ms-Icon--GridViewMedium" style="margin-right: 5px"></i>
+                        <p>{{ local('Auto Layout') }}</p>
+                    </fv-button>
+                    <fv-button v-if="!isMM" :theme="currentServing ? 'dark' : theme" :background="currentServing
+                        ? 'rgba(69, 98, 213, 1)'
+                        : ''
+                        " border-radius="6" :disabled="!lock.serving" style="width: 30px; height: 30px"
+                        @click="showServing">
+                        <transition-group tag="span" name="df-scale-up-to-up">
+                            <i v-show="currentServing" key="0" class="ms-Icon"
+                                :class="[`ms-Icon--DialShape4`]"></i>
+                            <i v-show="!currentServing" key="1" class="ms-Icon" :class="[`ms-Icon--More`]"></i>
+                        </transition-group>
+                        <i v-show="false" class="ms-Icon"
+                            :class="[`ms-Icon--${currentServing ? 'DialShape4' : 'More'}`]"></i>
+                    </fv-button>
+                    <fv-button theme="dark"
+                        background="rgba(69, 98, 213, 1)"
+                        foreground="rgba(255, 255, 255, 1)" border-color="rgba(255, 255, 255, 0.3)"
+                        border-radius="6" :disabled="!currentPipeline || runPreparing || !lock.running" :reveal-background-color="[
+                            'rgba(255, 255, 255, 0.5)',
+                            'rgba(103, 105, 251, 0.6)'
+                        ]" style="width: 120px;" @click="openRunConfirm">
+                        <i v-show="lock.running" class="ms-Icon ms-Icon--Play" style="margin-right: 5px"></i>
+                        <fv-progress-ring v-show="!lock.running" loading="true" :r="10" :border-width="2"
+                            background="rgba(200, 200, 200, 1)" :color="'white'"
+                            style="margin-right: 5px"></fv-progress-ring>
+                        <p>{{ this.local('Save & Run') }}</p>
+                    </fv-button>
+                    <fv-button v-show="!lock.running && executionInfo.task_id" theme="dark"
+                        background="rgba(200, 38, 95, 0.9)" font-size="10" foreground="rgba(255, 255, 255, 1)"
+                        border-color="whitesmoke" border-radius="6" :title="local('Stop')"
+                        style="width: 30px; height: 30px" @click="stopExecution">
+                        <i class="ms-Icon ms-Icon--StopSolid"></i>
+                    </fv-button>
+                    <fv-button :theme="theme"
+                        foreground="rgba(185, 65, 75, 1)" border-radius="6"
+                        :title="local('Delete')" style="width: 30px; height: 30px" @click="resetFlow">
+                        <i class="ms-Icon ms-Icon--Delete"></i>
+                    </fv-button>
+                    <fv-button
+                        :theme="show.chat ? 'dark' : theme"
+                        :background="show.chat ? 'rgba(69, 98, 213, 1)' : ''"
+                        :foreground="show.chat ? 'rgba(255, 255, 255, 1)' : ''"
+                        border-radius="6" :title="local('AI Assistant')"
+                        style="width: 30px; height: 30px" @click="show.chat = !show.chat">
+                        <i class="ms-Icon ms-Icon--Robot"></i>
+                    </fv-button>
+                </div>
             </div>
         </div>
         <!-- AI Assistant Chat Panel -->
@@ -458,7 +466,8 @@ export default {
             if (!this.currentPipeline && !this.isMM) return
             const flow = useVueFlow(this.flowId)
             const count = this.isMM ? this.mmRecord?.config.steps.length : this.currentPipeline?.config?.operators.length
-            if (flow.nodes.value.length !== count + 1) return
+            const inputNodes = flow.findNode('db-node') ? 1 : 0
+            if (flow.nodes.value.length !== count + inputNodes) return
             const key = this.$route.fullPath + flow.nodes.value.map(n => n.id).join(',')
             if (key === this.platformFitKey) return
             this.platformFitKey = key
@@ -1210,11 +1219,21 @@ export default {
         width: 100%;
         height: 100%;
         flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
         background: rgba(250, 250, 250, 1);
         border: rgba(120, 120, 120, 0.1) solid thin;
         border-radius: 15px;
-        box-shadow: inset 0px 0px 6px rgba(0, 0, 0, 0.1);
         overflow: hidden;
+        container-type: inline-size;
+
+        > .df-main-flow-container {
+            order: 2;
+            flex: 1;
+            min-height: 0;
+            height: 0;
+        }
     }
 
     .df-chat-container {
@@ -1265,24 +1284,33 @@ export default {
     }
 
     .control-menu-block {
-        position: absolute;
-        left: 0px;
-        top: 0px;
+        position: relative;
         width: 100%;
-        height: auto;
-        padding: 35px 0px;
+        padding: 10px 12px;
         display: flex;
-        justify-content: center;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        flex-shrink: 0;
+        border-bottom: 1px solid rgba(120, 120, 120, 0.14);
+        background: rgba(250, 250, 250, 0.96);
+        z-index: 1;
+
+        > .command-bar-right-space {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 6px;
+            min-width: 0;
+        }
 
         .command-bar {
-            min-width: 320px;
-            width: 70%;
-            max-width: 800px;
-            border: rgba(120, 120, 120, 0.1) solid thin;
-            border-radius: 30px;
-            backdrop-filter: blur(10px);
-            -webkit-backdrop-filter: blur(10px);
-            box-shadow: 0px 1px 2px rgba(0, 0, 0, 0.1);
+            min-width: 240px;
+            flex: 1;
+            width: auto;
+            border: 0;
+            border-radius: 6px;
+            box-shadow: none;
 
             .command-bar-item {
                 &:hover {
@@ -1318,17 +1346,46 @@ export default {
                 font-size: 12px;
                 color: rgba(45, 48, 56, 1);
             }
-
-            .command-bar-right-space {
-                @include Vcenter;
-
-                position: relative;
-                width: auto;
-                height: 100%;
-                padding-right: 5px;
-                gap: 3px;
-            }
         }
+    }
+}
+
+.df-default-container.dark .control-menu-block {
+    background: rgba(30, 30, 30, 0.98);
+    border-bottom-color: rgba(255, 255, 255, 0.12);
+}
+
+@container (max-width: 880px) {
+    .control-menu-block > .command-bar,
+    .control-menu-block > .command-bar-right-space {
+        flex: 1 1 100%;
+    }
+}
+
+
+.canvas-empty-state {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 24px;
+    color: #737780;
+    text-align: center;
+    pointer-events: none;
+
+    > i { font-size: 36px; color: rgba(69, 98, 213, 0.65); }
+    h2 { font-size: 17px; font-weight: 600; color: #454b58; }
+    p { font-size: 13px; line-height: 1.7; }
+    .canvas-start-button { pointer-events: auto; margin-top: 4px; }
+}
+.df-default-container.dark .canvas-empty-state h2 { color: #e5e7eb; }
+
+@media (max-width: 1024px) {
+    .control-menu-block > .df-current-pipeline-container {
+        padding-left: 26px;
     }
 }
 

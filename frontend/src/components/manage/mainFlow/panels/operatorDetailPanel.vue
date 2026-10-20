@@ -1,6 +1,6 @@
 <template>
     <aside v-if="modelValue" class="operator-detail-drawer" :class="{ dark: theme === 'dark' }"
-        @mousedown.stop @click.stop>
+        @mousedown.stop @click.stop @keydown.esc="close" aria-label="算子参数详情">
         <header class="operator-detail-header">
             <p>{{ data?.label || data?.name || appConfig.local('Operator') }}</p>
             <button type="button" :title="appConfig.local('Close')" @click="close">
@@ -8,6 +8,7 @@
             </button>
         </header>
         <div class="operator-detail-panel">
+                <div class="operator-detail-scroll" @wheel.stop>
                 <div class="operator-detail-summary">
                     <span class="step-pill">{{ stepLabel }}</span>
                     <div>
@@ -16,7 +17,6 @@
                     </div>
                 </div>
 
-                <div class="operator-detail-scroll" @wheel.stop>
                     <p v-if="data?.parameterLoading" role="status">正在加载参数…</p>
                     <p v-if="data?.parameterError" role="alert">{{ data.parameterError }}</p>
                     <section class="parameter-section">
@@ -182,16 +182,16 @@ const downloadData = () => emits('download-data', { pipeline_idx: props.data?.pi
     top: 15px;
     right: 15px;
     bottom: 15px;
-    width: 420px;
+    width: min(420px, calc(100vw - 30px));
     padding: 14px;
     box-sizing: border-box;
     background: rgba(252, 252, 252, 0.96);
     border: 1px solid rgba(120, 120, 120, 0.16);
-    border-radius: 14px;
+    border-radius: 8px;
     color: rgba(28, 30, 41, 1);
     display: flex;
     flex-direction: column;
-    box-shadow: 0px 12px 40px rgba(0, 0, 0, 0.18);
+    box-shadow: 0px 4px 20px rgba(0, 0, 0, 0.14);
     backdrop-filter: blur(14px);
     z-index: 30;
 
@@ -275,8 +275,8 @@ const downloadData = () => emits('download-data', { pipeline_idx: props.data?.pi
         .operator-description {
             margin-top: 4px;
             color: rgba(120, 120, 120, 1);
-            font-size: 11px;
-            line-height: 1.4;
+            font-size: 12px;
+            line-height: 1.6;
         }
     }
 
@@ -312,7 +312,7 @@ const downloadData = () => emits('download-data', { pipeline_idx: props.data?.pi
                 background: rgba(120, 120, 120, 0.1);
                 border-radius: 999px;
                 color: rgba(120, 120, 120, 1);
-                font-size: 10px;
+                font-size: 12px;
                 text-align: center;
             }
         }
@@ -323,7 +323,7 @@ const downloadData = () => emits('download-data', { pipeline_idx: props.data?.pi
             .field-label {
                 margin-bottom: 4px;
                 color: rgba(120, 120, 120, 1);
-                font-size: 10px;
+                font-size: 12px;
                 font-weight: 600;
                 display: block;
             }

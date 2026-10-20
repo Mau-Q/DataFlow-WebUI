@@ -27,6 +27,7 @@
                 <baseEdge v-bind="edgeProps" />
             </template>
         </VueFlow>
+        <slot v-if="!thisNodes.length" name="empty" />
         <Teleport to="body">
             <operator-detail-panel v-if="selectedOperator" :key="selectedOperator.id" v-model="showInspector"
                 :node-id="selectedOperator.id" :data="selectedOperator.data" :theme="theme"

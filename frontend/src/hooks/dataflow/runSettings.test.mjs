@@ -125,3 +125,18 @@ test('a changed operator starts a new request and ignores the old response', asy
  assert.equal(props.data.operatorParams.init[0].name,'new')
  assert.equal(props.data.parameterLoading,false)
 })
+
+test('canvas fits unbound templates once, waits for complete nodes, and supports bound input', async()=>{
+ const method=page.slice(page.indexOf('        async fitPlatformWhenReady()'),page.indexOf('        async platformRequest(')).trim().replace(/,$/,'')
+ for(const bound of [false,true]){
+  let fits=0
+  const nodes={value:[{id:'op-1'}]}
+  const flow={nodes,findNode:()=>bound?{id:'db-node'}:null,fitView(){fits++}}
+  const fit=new Function('useVueFlow',`return ({${method}}).fitPlatformWhenReady`)(()=>flow)
+  const ctx={flowId:'flow',currentPipeline:{config:{operators:[{},{}]}},isMM:false,$route:{fullPath:'/m'},$nextTick:async()=>{},platformFitKey:''}
+  await fit.call(ctx);assert.equal(fits,0)
+  nodes.value=[{id:'op-1'},{id:'op-2'},...(bound?[{id:'db-node'}]:[])]
+  await fit.call(ctx);assert.equal(fits,1)
+  await fit.call(ctx);assert.equal(fits,1)
+ }
+})
