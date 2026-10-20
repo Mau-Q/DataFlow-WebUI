@@ -1,0 +1,48 @@
+<template>
+<main class="training" :class="{dark:theme==='dark'}">
+<header><div><h1>模型训练</h1><p>配置 DataFlex 训练方案，固定数据与运行输入。</p></div><div class="actions"><button :disabled="busy" @click="load">刷新列表</button><button :disabled="busy" @click="newPlan">新建方案</button></div></header>
+<p class="error" role="alert" v-if="error">{{error}}</p><p role="status">{{notice}}</p>
+<section v-if="!record"><h2>训练方案</h2><p v-if="!plans.length">还没有训练方案。普通训练无需创建实验组。</p><button class="row" v-for="r in plans" :key="r.id" @click="open(r.id)"><strong>{{r.plan.name}}</strong><span>{{r.plan.model || '模型待填写'}} · {{r.plan.strategy.family}} · v{{r.version}}</span></button></section>
+<template v-else><nav><button @click="close">← 方案列表</button><span>版本 {{record.version || '未保存'}}</span></nav>
+<section><h2>模型与预算</h2><div class="grid"><label>方案名称<native-text v-model="record.plan.name" :theme="theme" label="方案名称" /></label><label>模型引用<native-text v-model="record.plan.model" :theme="theme" label="模型引用" placeholder="远端模型路径或固定模型 ID" /></label><label>Tokenizer（留空沿用模型）<native-text v-model="record.plan.tokenizer" :theme="theme" label="Tokenizer" /></label><label>模型 revision<native-text v-model="record.plan.model_revision" :theme="theme" label="模型 revision" /></label><label>任务<native-select v-model="record.plan.task" :options="['sft','pt','dpo']" :theme="theme" label="训练任务" /></label><label>模态<native-select v-model="record.plan.modality" :options="['text','image_text']" :theme="theme" label="模态" /></label><label>微调方式<native-select v-model="record.plan.finetuning_type" :options="['lora','full']" :theme="theme" label="微调方式" /></label><label>模板<native-text v-model="record.plan.template" :theme="theme" label="模型模板" /></label><label v-for="k in ['max_steps','batch_size','gradient_accumulation_steps','learning_rate','seed']" :key="k">{{labels[k]}}<input type="number" :step="k==='learning_rate'?'any':'1'" v-model.number="record.plan[k]" :aria-label="labels[k]" /></label></div></section>
+<section><h2>数据绑定</h2><p>仅引用已发布版本。草稿请先在<router-link to="/m/training-datasets">生成数据集</router-link>明确发布。保存配置不会下载数据或模型。</p><article v-for="(b,i) in record.plan.data" :key="i"><div class="grid"><label>角色<native-select v-model="b.role" :options="roles" :theme="theme" label="数据角色" /></label><label>来源<native-select v-model="b.kind" :options="kinds" :theme="theme" label="数据来源" /></label><label>域<native-text v-model="b.domain" :theme="theme" label="数据域" /></label><label v-if="b.kind==='release'">发布版本<native-select v-model="b.ref" :options="releaseOptions" :theme="theme" label="发布版本" /></label><label v-else>路径或数据集 ID<native-text v-model="b.ref" :theme="theme" label="数据引用" /></label><label v-if="b.kind==='huggingface'">固定 revision<native-text v-model="b.revision" :theme="theme" label="数据 revision" /></label><label v-if="b.kind==='huggingface'">子集<native-text v-model="b.subset" :theme="theme" label="子集" /></label><label v-if="b.kind==='huggingface'">划分<native-text v-model="b.split" :theme="theme" label="数据划分" /></label><label v-if="b.kind==='file'">期望 SHA-256（可留空，导出时固定）<native-text v-model="b.sha256" :theme="theme" label="数据哈希" /></label></div><button @click="record.plan.data.splice(i,1)">移除此绑定</button></article><button @click="addBinding">添加数据绑定</button></section>
+<section><h2>实验组（可选）</h2><native-select v-model="record.plan.group_id" :options="[{value:null,label:'独立训练'},...groups.map(g=>({value:g.id,label:g.name}))]" :theme="theme" label="实验组" /><details><summary>新建实验组</summary><label>名称<native-text v-model="groupName" :theme="theme" label="实验组名称" /></label><button @click="addGroup">创建实验组</button></details></section>
+<slot />
+<section><div class="actions"><button class="primary" :disabled="busy" @click="save">保存方案</button><button :disabled="busy || !record.id" @click="copy">复制已保存版本</button><button :disabled="busy || !record.id || dirty" @click="check">检查运行条件</button></div><p v-if="dirty">有未保存修改。</p><template v-if="checks"><p>结构：{{checks.structure}} · 数据/组件：{{checks.compatibility}} · 环境：{{checks.environment}} · 真实训练：{{checks.runtime}}</p><ul><li v-for="e in checks.errors" :key="e">{{e}}</li></ul></template></section>
+<details><summary>高级配置（保留未知字段）</summary><native-text v-model="advancedText" multiline code :rows="14" :theme="theme" label="高级配置 JSON" /><button @click="applyAdvanced">应用 JSON 到表单</button><button @click="advancedText=JSON.stringify(record.plan,null,2)">从表单更新 JSON</button></details>
+</template></main>
+</template>
+<script>
+import axios from 'axios'
+import {mapState} from 'pinia'
+import {useTheme} from '@/stores/theme'
+import NativeText from '@/components/manage/forms/NativeText.vue'
+import NativeSelect from '@/components/manage/forms/NativeSelect.vue'
+import {useUnsavedChanges,confirmDiscard} from '@/components/manage/forms/unsaved'
+const empty=()=>({name:'新训练方案',model:'',tokenizer:'',model_revision:'',template:'qwen',task:'sft',modality:'text',finetuning_type:'lora',max_steps:100,batch_size:1,gradient_accumulation_steps:8,learning_rate:0.0001,seed:42,data:[],group_id:null,strategy:{family:'static',component:'',params:{}},advanced:{}})
+export default {
+ name:'ModelTraining',components:{NativeText,NativeSelect},
+ setup(){useUnsavedChanges(vm=>!!vm.record && vm.dirty,vm=>{vm.record=null})},
+ data:()=>({plans:[],groups:[],releases:[],record:null,baseline:'',advancedText:'',busy:false,error:'',notice:'',checks:null,groupName:'',labels:{max_steps:'优化器步数',batch_size:'每设备 batch',gradient_accumulation_steps:'梯度累积步数',learning_rate:'学习率',seed:'随机种子'},roles:[{value:'train',label:'训练域'},{value:'validation',label:'验证集'},{value:'reference',label:'策略目标参考集'}],kinds:[{value:'release',label:'平台发布版本'},{value:'file',label:'本地文件'},{value:'huggingface',label:'Hugging Face'},{value:'draft',label:'草稿（执行前需发布）'}]}),
+ computed:{...mapState(useTheme,['theme']),dirty(){return !!this.record && JSON.stringify(this.record.plan)!==this.baseline},releaseOptions(){return this.releases.map(r=>({value:r.id,label:`${r.name || r.draft_id} · v${r.version} · ${r.row_count ?? r.sample_ids?.length ?? ''} 样本`}))}},
+ mounted(){this.load()},
+ methods:{
+ async request(method,path,data){const r=await axios({method,url:'/api/v1/training'+path,data});if(!r.data.success)throw Error(r.data.message);return r.data.data},
+ async action(fn){if(this.busy)return;this.busy=true;this.error='';this.notice='';try{await fn()}catch(e){this.error=typeof e.response?.data?.detail==='string'?e.response.data.detail:JSON.stringify(e.response?.data?.detail||e.response?.data?.message||e.message)}finally{this.busy=false}},
+ load(){return this.action(async()=>{[this.plans,this.groups,this.releases]=await Promise.all(['/plans','/groups','/releases'].map(p=>this.request('get',p)))})},
+ setRecord(r){this.record=r;this.baseline=JSON.stringify(r.plan);this.advancedText=JSON.stringify(r.plan,null,2);this.checks=null},
+ async newPlan(){if(this.dirty&&!await confirmDiscard(this))return;this.setRecord({plan:empty()})},
+ async close(){if(this.dirty&&!await confirmDiscard(this))return;this.record=null;this.load()},
+ open(id){return this.action(async()=>{this.setRecord(await this.request('get','/plans/'+id))})},
+ save(){return this.action(async()=>{const r=this.record;this.setRecord(await this.request(r.id?'put':'post','/plans'+(r.id?'/'+r.id:''),{plan:r.plan,expected_version:r.version}));this.plans=await this.request('get','/plans');this.notice='方案已保存'})},
+ copy(){return this.action(async()=>{this.setRecord(await this.request('post','/plans/'+this.record.id+'/copy'));this.plans=await this.request('get','/plans');this.notice='副本已创建'})},
+ check(){return this.action(async()=>{this.checks=await this.request('post','/plans/'+this.record.id+'/check')})},
+ addBinding(){this.record.plan.data.push({role:'train',kind:'release',ref:'',domain:'default',revision:'',subset:'',split:'train',sha256:'',columns:{prompt:'instruction',query:'input',response:'output'}})},
+ addGroup(){return this.action(async()=>{const g=await this.request('post','/groups',{name:this.groupName});this.groups.unshift(g);this.record.plan.group_id=g.id;this.groupName=''})},
+ applyAdvanced(){try{const p=JSON.parse(this.advancedText);if(!p||typeof p!=='object'||Array.isArray(p))throw Error('需要 JSON 对象');this.record.plan={...empty(),...p};this.error=''}catch(e){this.error=e.message}}
+ }
+}
+</script>
+<style scoped>
+.training{flex:1;min-width:0;height:100%;overflow:auto;box-sizing:border-box;padding:28px;color:#25334c;background:#f7f8fb;font-size:14px}header,.actions,nav{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap}h1{margin:0}h2{font-size:19px}p{line-height:1.7}section,details{background:#fff;border:1px solid #e2e7f0;border-radius:10px;padding:22px;margin:18px 0}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 22px}label{display:block;line-height:2;margin:8px 0}input,button{font:inherit;color:inherit;background:transparent;border:1px solid #d9dfeb;border-radius:6px;padding:9px;box-sizing:border-box}input{width:100%;height:38px}button{cursor:pointer}button:disabled{opacity:.45;cursor:default}.primary{background:#4e5bd5;color:white}article{border-bottom:1px solid #e2e7f0;padding:10px 0 20px}.row{display:flex;justify-content:space-between;gap:12px;width:100%;text-align:left;margin:8px 0;padding:16px}.error{color:#ae342b;background:#fff0ed;padding:12px}a{color:#4e5bd5}pre{white-space:pre-wrap;overflow-wrap:anywhere}.dark{background:#20242d;color:#dfe5ef}.dark section,.dark details,.dark input,.dark button{background:#292e39;border-color:#424b5b}.dark .primary{background:#4e5bd5}.dark .error{background:#502d30;color:#ffd2d2}@media(max-width:800px){.training{padding:16px}.grid{grid-template-columns:1fr}.row{flex-direction:column}}
+</style>
