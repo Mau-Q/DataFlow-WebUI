@@ -52,3 +52,43 @@ def test_compatibility_and_custom_description(tmp_path):
     assert compile_plan(s,p)['components']['selectors']['user_alg']['params']['k']==4
     p['task']='dpo'
     assert any('DPO' in e for e in compile_plan(s,p)['checks']['errors'])
+
+import json, zipfile, io, subprocess, sys
+from pathlib import Path
+from app.services.training_bundles import export_bundle, safe_members, snapshot_source
+
+
+def test_portable_bundle_hash_guard_and_no_fake_run(tmp_path,monkeypatch):
+    src=tmp_path/'src';(src/'src/dataflex').mkdir(parents=True)
+    (src/'src/dataflex/cli.py').write_text('print("fixture")')
+    subprocess.run(['git','init',str(src)],check=True,capture_output=True)
+    subprocess.run(['git','-C',str(src),'add','src'],check=True)
+    monkeypatch.setenv('DATAFLEX_SOURCE_DIR',str(src))
+    subprocess.run(['git','-C',str(src),'-c','user.name=test','-c','user.email=test@example.invalid','commit','-m','fixture'],check=True,capture_output=True)
+    data=tmp_path/'rows.jsonl';data.write_text('{"instruction":"q","output":"a"}\n')
+    service=ModelTraining(tmp_path/'state')
+    r=service.save_plan(TrainingPlan(model='/remote/model',data=[{'kind':'file','ref':str(data)}]).model_dump())
+    bundle=export_bundle(service,r['id'])
+    members=safe_members(Path(bundle['path']).read_bytes());dest=tmp_path/'moved';dest.mkdir()
+    for k,v in members.items():p=dest/k;p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(v)
+    result=subprocess.run([sys.executable,str(dest/'runner.py'),'verify'],capture_output=True,text=True)
+    assert result.returncode==0,result.stderr
+    assert service.list('runs')==[]
+    (dest/'data/dataset_0.jsonl').write_text('changed')
+    result=subprocess.run([sys.executable,str(dest/'runner.py'),'verify'],capture_output=True,text=True)
+    assert result.returncode!=0
+    data.write_text('{"instruction":"changed","output":"a"}\n')
+    bundle2=export_bundle(service,r['id'])
+    assert bundle2['manifest']['inputs'][0]['sha256']!=bundle['manifest']['inputs'][0]['sha256']
+    (src/'src/dataflex/cli.py').write_text('print("changed")')
+    bundle3=export_bundle(service,r['id'])
+    assert bundle3['manifest']['source_sha256']!=bundle2['manifest']['source_sha256']
+
+
+def test_zip_and_symlink_guards(tmp_path):
+    out=io.BytesIO()
+    with zipfile.ZipFile(out,'w') as z:z.writestr('../escape','no')
+    with pytest.raises(TrainingError,match='不安全'):safe_members(out.getvalue())
+    from app.services.training_bundles import safe_read
+    (tmp_path/'file').write_text('x');(tmp_path/'link').symlink_to(tmp_path/'file')
+    with pytest.raises(TrainingError,match='普通文件'):safe_read(tmp_path/'link')

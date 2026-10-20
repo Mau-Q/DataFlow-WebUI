@@ -47,3 +47,18 @@ def component(body:dict):
 def compile(key:str):
     from app.services.training_compiler import compile_plan
     return ok(call(compile_plan,service(),call(service().get,'plans',key)['plan']))
+
+@router.post('/plans/{key}/bundles')
+def bundle(key:str):
+    from app.services.training_bundles import export_bundle
+    return ok(call(export_bundle,service(),key))
+@router.get('/bundles')
+def bundles(): return ok(call(service().list,'bundles'))
+@router.get('/bundles/{key}/download')
+def bundle_download(key:str):
+    from pathlib import Path
+    from fastapi.responses import FileResponse
+    from app.services.model_training import digest
+    r=call(service().get,'bundles',key);p=Path(r['path'])
+    if not p.is_file() or digest(p.read_bytes())!=r['archive_sha256']:raise HTTPException(409,'运行包缺失或已改动')
+    return FileResponse(p,filename='dataflex-'+key+'.zip',media_type='application/zip')
