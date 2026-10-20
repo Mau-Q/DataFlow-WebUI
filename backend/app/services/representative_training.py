@@ -167,7 +167,7 @@ def definitions():
                 if kind == 'dpo':
                     ops += [image('representative-image-negative-v1','candidate_b','image_question')]
             if kind == 'dpo':
-                ops += [op('TrainingPreferenceBuilder','组合同题正例与合成负例；检查问题一致性，不评分',run={
+                ops += [op('TrainingPreferenceBuilder','组合同题正负例；相同回答最多重生成负例 2 次，不评分',init={'llm_serving':None,'max_negative_retries':2},run={
                             'input_key':'candidate_a','input_alternative_key':'candidate_b','output_key':'alternatives'}),
                         synthetic_pair_operator()]
                 final_candidate = 'preference_candidate'
@@ -187,7 +187,7 @@ def definitions():
 
 
 def install_templates(c):
-    """Replace exactly the four legacy demo templates; preserve user copies/tasks."""
+    """Install and migrate representative configurations with recoverable backups."""
     data = c.pipeline_registry._read()
     legacy = {key:data['pipelines'][key] for key in LEGACY_IDS if key in data['pipelines']}
     if legacy:
@@ -249,3 +249,39 @@ def install_templates(c):
             item['params'] = c.pipeline_registry._parse_frontend_params(item['params'])
         data['pipelines'][pipeline['id']] = c.pipeline_registry._enrich_pipeline_operators_internal(pipeline)
         c.pipeline_registry._write(data)
+    data = c.pipeline_registry._read()
+    old = {key:copy.deepcopy(record) for key,record in data['pipelines'].items()
+           if record.get('config',{}).get('execution_options',{}).get('representative_training')
+           and record['config']['execution_options'].get('row_isolation_version') != 1}
+    if old:
+        backup = Path(c.pipeline_registry.path).parent/'backups'/'training-row-isolation'
+        atomic_write(backup/(_hash(_json_bytes(old))+'.json'), _json_bytes(old))
+        for key,record in old.items():
+            record['config'] = isolate_rows(record['config'])
+            record['updated_at'] = now
+            data['pipelines'][key] = record
+        c.pipeline_registry._write(data)
+
+
+def isolate_rows(config):
+    config = copy.deepcopy(config)
+    options = config.setdefault('execution_options', {})
+    if options.get('row_isolation_version') == 1:
+        return config
+    service = None
+    for op in config.get('operators', []):
+        for param in op['params']['init']:
+            if param['name'] == 'llm_serving' and param.get('value'):
+                service = param['value']
+        if op['name'] == 'TrainingPreferenceBuilder':
+            params = op['params']['init']
+            values = {p['name']: p for p in params}
+            if 'llm_serving' not in values:
+                params.append(dict(name='llm_serving', value=service, default_value=None))
+            elif not values['llm_serving'].get('value'):
+                values['llm_serving']['value'] = service
+            if 'max_negative_retries' not in values:
+                params.append(dict(name='max_negative_retries', value=2, default_value=2))
+            op['pipeline_role'] = '组合同题正负例；相同回答有界重生成负例，失败样本单独记录'
+    options['row_isolation_version'] = 1
+    return config

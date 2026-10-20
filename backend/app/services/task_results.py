@@ -97,6 +97,9 @@ class TaskResults:
         result = {k: task.get(k) for k in ('task_id', 'pipeline_id', 'name', 'status', 'created_at', 'completed_at')}
         result.update(available=False, collectable=False, collections=[], sample_data=[],
                       auto_collection=(task.get('output') or {}).get('auto_collection'),
+                      sample_summary=(task.get('output') or {}).get('sample_summary'),
+                      invalid_samples_file=(task.get('output') or {}).get('invalid_samples_file'),
+                      invalid_artifact=next((a['id'] for a in (task.get('output') or {}).get('artifacts', []) if a.get('kind') == 'invalid_samples'), None),
                       result_directory=task.get('output', {}).get('result_directory') or task.get('pipeline_config', {}).get('execution_options', {}).get('result_directory'),
                       storage_error=task.get('output', {}).get('storage_error'))
         try:

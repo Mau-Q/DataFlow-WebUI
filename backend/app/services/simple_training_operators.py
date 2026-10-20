@@ -7,6 +7,8 @@ import base64
 import io
 import json
 import re
+import unicodedata
+from decimal import Decimal
 from pathlib import Path
 
 from PIL import Image
@@ -27,6 +29,22 @@ def image_data(path):
     if mime not in {'image/png', 'image/jpeg', 'image/webp'}:
         raise ValueError('API 示例仅接受 PNG、JPEG、WebP 图片')
     return f'data:{mime};base64,' + base64.b64encode(content).decode('ascii')
+
+
+def row_issues(row):
+    value = row.get('_training_issues')
+    return list(value) if isinstance(value, list) else []
+
+
+def same_answer(a, b):
+    """Conservative equality, including a bare number and the same number + unit."""
+    def normalize(value):
+        return re.sub(r'[\s，,。!！?？]+', '', unicodedata.normalize('NFKC', value)).casefold().rstrip('.')
+    if normalize(a) == normalize(b):
+        return True
+    numeric = r'([+-]?\d+(?:\.\d+)?)\s*(小时|分钟|秒|毫秒|字节|条|个|次|%|hours?|minutes?|seconds?|bytes?)?'
+    x, y = re.fullmatch(numeric, a.strip()), re.fullmatch(numeric, b.strip())
+    return bool(x and y and Decimal(x[1]) == Decimal(y[1]) and (not x[2] or not y[2] or x[2] == y[2]))
 
 
 @OPERATOR_REGISTRY.register()
@@ -52,29 +70,38 @@ class APIImagePairGenerator(OperatorABC):
         if input_context_key and input_context_key not in frame:
             raise ValueError(f'Missing {input_context_key}; available columns: {list(frame.columns)}')
         prompt = self.prompt_template.build_prompt()
-        conversations = []
-        for _, row in frame.iterrows():
+        conversations, positions = [], []
+        issues = [row_issues(row) for _, row in frame.iterrows()]
+        for position, (_, row) in enumerate(frame.iterrows()):
             context = row[input_context_key] if input_context_key else None
             if input_context_key:
                 try:
                     context = parse_candidate(context)
                 except (ValueError, TypeError):
-                    raise ValueError('上游问题或候选不是有效 JSON 对象；未调用下一步视觉 API') from None
+                    issues[position].append('上游问题或候选不是有效 JSON 对象；未调用下一步视觉 API')
+                    continue
                 if not isinstance(context.get('question'), str) or not context['question'].strip():
-                    raise ValueError('上游问题或候选缺少 question；未调用下一步视觉 API')
-            extra = '' if context is None else '\n待处理输入：\n' + (context if isinstance(context,str) else json.dumps(context,ensure_ascii=False,allow_nan=False))
+                    issues[position].append('上游问题或候选缺少 question；未调用下一步视觉 API')
+                    continue
+            try:
+                extra = '' if context is None else '\n待处理输入：\n' + (context if isinstance(context,str) else json.dumps(context,ensure_ascii=False,allow_nan=False))
+                uri = image_data(row[input_image_key])
+            except (ValueError, TypeError, OSError):
+                issues[position].append('图片或上下文内容不可读，未调用视觉 API')
+                continue
+            positions.append(position)
             conversations.append([{'role': 'user', 'content': [
                 {'type': 'text', 'text': prompt + extra},
-                {'type': 'image_url', 'image_url': {'url': image_data(row[input_image_key])}},
+                {'type': 'image_url', 'image_url': {'url': uri}},
             ]}])
-        if not conversations:
-            frame[output_key] = []
-            storage.write(frame)
-            return [output_key]
-        responses = self.llm_serving.generate_from_conversations(conversations)
-        if len(responses) != len(frame):
+        responses = self.llm_serving.generate_from_conversations(conversations) if conversations else []
+        if len(responses) != len(positions):
             raise ValueError('视觉 API 返回条数与输入不一致')
-        frame[output_key] = responses
+        values = [''] * len(frame)
+        for position, response in zip(positions, responses):
+            values[position] = response
+        frame[output_key] = values
+        frame['_training_issues'] = issues
         storage.write(frame)
         return [output_key]
 
@@ -115,21 +142,26 @@ class TrainingPairFormatter(OperatorABC):
 
     @staticmethod
     def get_desc(lang='zh'):
-        return '校验候选 JSON 并整理为 SFT/DPO；错误样本使任务失败，原始响应保留在运行记录。' if lang == 'zh' else 'Validate candidates and format SFT/DPO training samples.'
+        return '校验候选 JSON 并整理为 SFT/DPO；逐条隔离无效样本，保留有效结果和错误明细。' if lang == 'zh' else 'Validate candidates and format SFT/DPO training samples.'
 
     def run(self, storage: DataFlowStorage, input_key='candidate', output_key='training_sample'):
         from app.services.data_library import DataLibrary
         frame = storage.read('dataframe')
         if input_key not in frame:
             raise ValueError(f'Missing {input_key}; available columns: {list(frame.columns)}')
-        rows = []
+        rows, issues = [], []
         for index, row in frame.iterrows():
+            errors = row_issues(row)
+            reason = '候选 JSON 无效'
             try:
                 pair = parse_candidate(row[input_key])
+                reason = '候选不符合 JSON Schema'
                 self.validator.validate(pair)
+                reason = '候选缺少非空问题或回答'
                 required = ['question', 'answer'] if self.training_type == 'sft' else ['question', 'chosen', 'rejected']
                 if any(not isinstance(pair.get(k), str) or not pair[k].strip() for k in required):
                     raise ValueError('候选缺少非空问题或回答')
+                reason = '训练样本字段或图片引用无效'
                 question = pair['question'].strip()
                 if self.training_type == 'dpo':
                     sample = dict(prompt=question, chosen=pair['chosen'].strip(), rejected=pair['rejected'].strip())
@@ -148,15 +180,23 @@ class TrainingPairFormatter(OperatorABC):
                                 {'type': 'text', 'text': question}]},
                             {'role': 'assistant', 'content': pair['answer'].strip()}]}
                     sample['images'] = [ref]
+                if self.training_type == 'dpo' and same_answer(sample['chosen'], sample['rejected']):
+                    reason = '正负回答相同或只有简单格式差异'
+                    raise ValueError('正负回答相同或只是数字单位形式不同')
+                if errors:
+                    reason = '上游样本未通过校验'
+                    raise ValueError('上游样本无效')
                 DataLibrary._validate_row(None, sample, self.modality, self.training_type)
                 rows.append(sample)
             except Exception as exc:
-                # Avoid echoing API bodies, model reasoning, or any credentials.
-                raise ValueError(f'第 {len(rows)+1} 条候选不符合训练契约（{type(exc).__name__}）；请检查上一步候选和 Schema') from None
+                rows.append(None)
+                errors.append(f'{reason}（{type(exc).__name__}）')
+            issues.append(errors)
         if not rows and not self.allow_empty:
             raise ValueError('输入为空，不能生成空训练数据集')
         # Preserve intermediate columns for field-flow inspection; finalization
         # extracts the explicit training_sample rather than guessing columns.
         frame[output_key] = rows
+        frame['_training_issues'] = issues
         storage.write(frame)
         return [output_key]

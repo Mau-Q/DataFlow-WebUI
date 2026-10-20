@@ -206,6 +206,9 @@ class TextGeneration:
             if not pipeline:
                 raise LibraryError('配置不存在', 404)
             config = copy.deepcopy(pipeline['config'])
+        if config.get('execution_options', {}).get('representative_training'):
+            from app.services.representative_training import isolate_rows
+            config = isolate_rows(config)
         check = self.preflight(config)
         if not check['ready']:
             raise LibraryError('；'.join(check['errors']), 422)

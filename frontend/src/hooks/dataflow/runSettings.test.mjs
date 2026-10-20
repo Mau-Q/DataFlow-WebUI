@@ -54,10 +54,10 @@ test('new name persists on reopening',async()=>{
  drafts=[];prefs={'text:dpo':{mode:'new',name:'remembered'}};const s=panelState();await s.load();assert.equal(s.collectionName,'remembered')
 })
 const canvas=readFileSync(new URL('../../components/manage/mainFlow/index.vue',import.meta.url),'utf8')
-const selection=canvas.slice(canvas.indexOf('const thisNodes ='),canvas.indexOf('const isDragOver ='))
+const selection=canvas.slice(canvas.indexOf('const canvasFlow ='),canvas.indexOf('const isDragOver ='))
 test('inspector follows live replacement and reopens same node',()=>{
  const ref=value=>({value}),computed=fn=>({get value(){return fn()}})
- const h=new Function('ref','computed','watch','props','emits','useVueFlow','onDeactivated',`${selection};return {thisNodes,selectedOperator,showInspector,inspectOperator,closeInspector,selectOperator}`)(ref,computed,()=>{},{nodes:[{id:'a',type:'operator-node',data:{name:'old'}}],edges:[]},()=>{},()=>({}),()=>{})
+ const h=new Function('ref','computed','watch','props','emits','useVueFlow','onDeactivated',`${selection};return {thisNodes,selectedOperator,showInspector,inspectOperator,closeInspector,selectOperator}`)(ref,computed,()=>{},{nodes:[{id:'a',type:'operator-node',data:{name:'old'}}],edges:[]},()=>{},()=>({findNode:()=>null}),()=>{})
  h.inspectOperator('a');assert(h.showInspector.value)
  h.thisNodes.value=[{id:'a',type:'operator-node',data:{name:'current'}}];assert.equal(h.selectedOperator.value.data.name,'current')
  h.closeInspector();h.inspectOperator('a');assert(h.showInspector.value)
@@ -82,4 +82,18 @@ test('parameter request failure is visible and another click retries',async()=>{
  const h=new Function('props','loading','emits','$api','paramsWrapper','watch',`${loader};return {getNodeDetail,inspect}`)(props,ref(false),emits,api,x=>x,watch)
  await h.getNodeDetail();assert.equal(props.data.parameterError,'offline');h.inspect();await nextTick();await nextTick()
  assert.equal(opens,1);assert.equal(calls,2);assert.equal(props.data.parameterError,'');assert(props.data.operatorParams)
+})
+
+test('explicit inspector uses live graph even while v-model nodes lag behind',()=>{
+ const ref=value=>({value}),computed=fn=>({get value(){return fn()}})
+ const live={id:'live',type:'operator-node',data:{name:'live current data'}}
+ const h=new Function('ref','computed','watch','props','emits','useVueFlow','onDeactivated',`${selection};return {selectedOperator,showInspector,inspectOperator}`)(ref,computed,()=>{},{id:'flow',nodes:[],edges:[]},()=>{},()=>({findNode:id=>id==='live'?live:null}),()=>{})
+ h.inspectOperator('live');assert(h.showInspector.value);assert.equal(h.selectedOperator.value,live)
+})
+
+test('primary pointer release opens details independently of a suppressed click',()=>{
+ const props={id:'node',data:{operatorParams:{init:[],run:[]}}};let opens=0
+ const h=new Function('props','loading','emits','$api','paramsWrapper','watch',`${loader};return {inspectPointer}`)(props,ref(false),(kind)=>{if(kind==='inspect-node')opens++},{},x=>x,()=>{})
+ h.inspectPointer({button:0});assert.equal(opens,1)
+ h.inspectPointer({button:2});assert.equal(opens,1)
 })

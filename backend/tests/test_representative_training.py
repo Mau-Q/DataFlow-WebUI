@@ -296,9 +296,12 @@ def test_bad_upstream_image_question_never_calls_next_model(platform):
     path,_=c.data_library.material_file(material['id'])
     frame=pd.DataFrame([dict(source=str(path),question='not JSON')])
     serving=SimpleNamespace(generate_from_conversations=lambda _:pytest.fail('must not call model'))
-    with pytest.raises(ValueError,match='未调用下一步'):
-        APIImagePairGenerator(serving,SimpleNamespace(build_prompt=lambda:'test')).run(
-            SimpleNamespace(read=lambda _:frame,write=lambda _:pytest.fail('must not write')),input_context_key='question')
+    out=[]
+    APIImagePairGenerator(serving,SimpleNamespace(build_prompt=lambda:'test')).run(
+        SimpleNamespace(read=lambda _:frame,write=lambda f:out.append(f.copy())),input_context_key='question')
+    assert out[0]['candidate'].tolist()==['']
+    assert out[0]['_training_issues'][0]
+
 
 
 def test_error_messages_with_json_braces_are_recorded_without_masking_failure(platform,monkeypatch):
@@ -395,8 +398,11 @@ def test_preference_ranking_selects_b_when_b_is_better_and_preserves_raw_candida
 
 def test_candidate_question_mismatch_fails_before_ranking():
     frame=pd.DataFrame([dict(candidate_a=dict(question='Q1',answer='A'),candidate_b=dict(question='Q2',answer='B'))])
-    with pytest.raises(ValueError,match='同题'):
-        TrainingPreferenceBuilder().run(SimpleNamespace(read=lambda _:frame,write=lambda _:pytest.fail('must not write')))
+    out=[]
+    TrainingPreferenceBuilder().run(SimpleNamespace(read=lambda _:frame,write=lambda f:out.append(f.copy())))
+    assert out[0]['_training_issues'][0]
+    assert out[0]['alternatives'][0]['question']==''
+
 
 
 def test_qa_expansion_preserves_original_source():

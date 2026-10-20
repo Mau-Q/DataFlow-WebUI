@@ -83,10 +83,11 @@ const props = defineProps({
     }
 })
 
+const canvasFlow = useVueFlow(props.id)
 const thisNodes = ref(props.nodes)
 const thisEdges = ref(props.edges)
 const selectedOperatorId = ref(null)
-const selectedOperator = computed(() => thisNodes.value.find(n => n.id === selectedOperatorId.value) || null)
+const selectedOperator = computed(() => canvasFlow.findNode(selectedOperatorId.value) || thisNodes.value.find(n => n.id === selectedOperatorId.value) || null)
 const showInspector = ref(false)
 watch(
     () => props.nodes,
@@ -140,7 +141,7 @@ const selectOperator = ({ node }) => {
 }
 
 const inspectOperator = (nodeId) => {
-    selectOperator({ node: thisNodes.value.find(n => n.id === nodeId) })
+    selectOperator({ node: canvasFlow.findNode(nodeId) || thisNodes.value.find(n => n.id === nodeId) })
 }
 
 const closeInspector = () => {

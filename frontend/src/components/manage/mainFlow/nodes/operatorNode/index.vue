@@ -9,7 +9,7 @@
                 <span class="step-pill">{{ stepLabel }}</span>
                 <span class="parameter-count">{{ initParamCount }} init · {{ runParamCount }} run</span>
             </div>
-            <button class="details-button nodrag" type="button" :aria-label="`${thisData.label} 参数详情`" @pointerdown.stop @dblclick.stop @click.stop="inspect">
+            <button class="details-button nodrag nopan" type="button" :aria-label="`${thisData.label} 参数详情`" @pointerdown.stop @pointerup.stop="inspectPointer" @mousedown.stop @dblclick.stop @click.stop="inspect">
                 <i class="ms-Icon ms-Icon--Info"></i>
                 {{ appConfig.local('参数详情') }}
             </button>
@@ -175,6 +175,9 @@ const getNodeDetail = async () => {
         if (request === detailRequest && props.id === id) emits('update-node-data', {id, data: {parameterLoading: false, parameterError: e.message || '参数加载失败，请再次点击参数详情重试'}})
     } finally { if (request === detailRequest) loading.value = false }
 }
+// Vue Flow's drag handler can suppress the synthetic click after a pan/drag.
+// Handle primary pointer release as well; keyboard activation still uses click.
+const inspectPointer = (event) => { if (event.button === 0) inspect() }
 const inspect = () => {
     emits('inspect-node', props.id)
     if (!props.data.operatorParams || props.data.parameterError) getNodeDetail()
@@ -266,8 +269,8 @@ onMounted(async () => {
         }
 
         .details-button {
-            height: 28px;
-            padding: 0px 9px;
+            min-height: 32px;
+            padding: 0px 10px;
             flex-shrink: 0;
             color: #fff;
             background: var(--node-border-color);

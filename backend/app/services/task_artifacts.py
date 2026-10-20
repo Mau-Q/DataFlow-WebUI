@@ -61,18 +61,27 @@ def finalize_artifacts(config, result, cache_root=None):
             raise LibraryError('批次步骤尚未完整完成，不能固定训练产物')
         last = steps[-1]
         path = Path(last.get('file_path') or directory / f'dataflow_cache_step_step{last["index"]+1}.jsonl')
-        training = []
+        training, invalid = [], []
         simple = config.get('execution_options', {}).get('simple_training')
         for line in path.read_text('utf-8').splitlines():
             if line.strip():
                 row = json.loads(line)
                 sample = row.get('training_sample') if simple else {k: row.get(k, '') for k in ('instruction', 'input', 'output')}
-                # Validation has no filesystem dependency for text rows.
-                DataLibrary._validate_row(None, sample, simple['modality'] if simple else 'text', simple['training_type'] if simple else 'sft')
+                if simple and (sample is None or row.get('_training_issues')):
+                    invalid.append(dict(row_index=len(training)+len(invalid), reasons=row.get('_training_issues') or ['候选未通过训练格式校验'], source=row))
+                    continue
+                try:
+                    DataLibrary._validate_row(None, sample, simple['modality'] if simple else 'text', simple['training_type'] if simple else 'sft')
+                except LibraryError:
+                    invalid.append(dict(row_index=len(training)+len(invalid), reasons=['最终训练样本不符合契约'], source=row))
+                    continue
                 training.append(sample)
         add(path, 'training', last['index'], b''.join(_json_bytes(row)+b'\n' for row in training))
         if simple:
             artifacts[-1].update(**simple, media_bindings=config['execution_options'].get('input_snapshot', {}).get('media_bindings', {}))
+        if invalid:
+            add(path, 'invalid_samples', last['index'], b''.join(_json_bytes(row)+b'\n' for row in invalid))
+        result.setdefault('output', {})['sample_summary'] = dict(valid=len(training), invalid=len(invalid))
     result.setdefault('output', {})['artifacts'] = artifacts
     result['output']['progress_unit'] = 'batch'
     result['output']['completed_units'] = int(result['status'] == 'completed')

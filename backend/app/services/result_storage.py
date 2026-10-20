@@ -88,6 +88,8 @@ def persist(config, result):
                 if _hash(content) != item['sha256']:
                     raise LibraryError('任务产物校验失败')
                 item['path'] = write(f'artifacts/{item["id"]}.jsonl', content, item['kind'])
+                if item['kind'] == 'invalid_samples':
+                    output['invalid_samples_file'] = write('invalid_samples.jsonl', content, 'invalid_samples')
         output['artifacts'] = artifacts
         if result.get('status') == 'completed':
             training = [a for a in artifacts if a.get('kind') == 'training']

@@ -6,7 +6,7 @@ from jsonschema import validators
 from dataflow.core import OperatorABC
 from dataflow.utils.registry import OPERATOR_REGISTRY
 from dataflow.utils.storage import DataFlowStorage
-from app.services.simple_training_operators import parse_candidate
+from app.services.simple_training_operators import parse_candidate, row_issues, same_answer, image_data
 
 
 def required_columns(frame, *columns):
@@ -34,16 +34,20 @@ class TrainingQAExpander(OperatorABC):
         rows = []
         for _, row in frame.iterrows():
             pairs = row[input_key]
-            if not isinstance(pairs, list):
-                raise ValueError('多跳 QA 输出必须为列表')
+            if not isinstance(pairs, list) or not pairs:
+                pairs = [None]
             for pair in pairs:
                 if not isinstance(pair, dict) or not all(nonempty(pair.get(k)) for k in ('question', 'answer')):
-                    raise ValueError('多跳 QA 含无效问题或回答；请检查上一步输出')
+                    rec = row.to_dict()
+                    rec.update({output_key:{}, output_question_key:'', output_answer_key:'',
+                                '_training_issues':row_issues(row) + ['多跳 QA 含无效问题或回答']})
+                    rows.append(rec)
+                    continue
                 rec = row.to_dict()
                 rec.update({output_key: {'question': pair['question'], 'answer': pair['answer']},
                             output_question_key: pair['question'], output_answer_key: pair['answer']})
                 rows.append(rec)
-        columns = list(dict.fromkeys([*frame.columns, output_key, output_question_key, output_answer_key]))
+        columns = list(dict.fromkeys([*frame.columns, output_key, output_question_key, output_answer_key, '_training_issues']))
         storage.write(pd.DataFrame(rows, columns=columns))
         return [output_key, output_question_key, output_answer_key]
 
@@ -52,25 +56,70 @@ class TrainingQAExpander(OperatorABC):
 class TrainingPreferenceBuilder(OperatorABC):
     WEBUI_CATEGORY = ('core_text', 'refine')
 
+    def __init__(self, llm_serving=None, max_negative_retries: int = 2):
+        super().__init__()
+        if type(max_negative_retries) is not int or not 0 <= max_negative_retries <= 3:
+            raise ValueError('负例重试次数必须在 0–3 之间')
+        self.llm_serving, self.max_negative_retries = llm_serving, max_negative_retries
+
     @staticmethod
     def get_desc(lang='zh'):
-        return '组合独立生成的 A/B 回答，检查问题一致性；不预先指定优选回答。' if lang == 'zh' else 'Combine independently generated answers without preassigning preference.'
+        return '组合同题正负例；相同回答有界重生成负例，失败样本单独记录。' if lang == 'zh' else 'Build preference pairs with bounded negative regeneration and per-row isolation.'
+
+    def _negative(self, row, a, previous):
+        prompt = ('生成同题合成负例：故意改变一个明确的数值、事实或条件。不得复制正例或仅改变格式、单位。'
+                  '仅输出 JSON，question 必须逐字保留，answer 为负例回答。\n问题：' + a['question'] +
+                  '\n正例：' + a['answer'] + '\n上次无效负例：' + str(previous))
+        if row.get('media_ref'):
+            conversation = [{'role':'user','content':[{'type':'text','text':prompt},
+                {'type':'image_url','image_url':{'url':image_data(row['source'])}}]}]
+            return self.llm_serving.generate_from_conversations([conversation])[0]
+        return self.llm_serving.generate_from_input([prompt + '\n原始材料：' + str(row.get('text', ''))])[0]
 
     def run(self, storage: DataFlowStorage, input_key='candidate_a', input_alternative_key='candidate_b', output_key='alternatives'):
         frame = storage.read('dataframe')
         required_columns(frame, input_key, input_alternative_key)
-        values = []
-        for index, (_, row) in enumerate(frame.iterrows(), 1):
+        values, reports, attempts = [], [], []
+        for _, row in frame.iterrows():
+            errors, responses = row_issues(row), []
+            pair = dict(question='', answer_a='', answer_b='')
+            reason = '正例 JSON 无效'
             try:
-                a, b = parse_candidate(row[input_key]), parse_candidate(row[input_alternative_key])
-                if not all(nonempty(p.get(k)) for p in (a, b) for k in ('question', 'answer')):
-                    raise ValueError('缺少问题或回答')
-                if a['question'].strip() != b['question'].strip():
-                    raise ValueError('候选回答使用了不同问题')
-                values.append(dict(question=a['question'].strip(), answer_a=a['answer'].strip(), answer_b=b['answer'].strip()))
-            except (ValueError, TypeError, KeyError):
-                raise ValueError(f'第 {index} 条候选回答无法组成同题偏好对；请检查候选 A/B') from None
+                a = parse_candidate(row[input_key])
+                reason = '正例缺少问题或回答'
+                if not all(nonempty(a.get(k)) for k in ('question','answer')):
+                    raise ValueError('正例缺少问题或回答')
+                raw = row[input_alternative_key]
+                for attempt in range(self.max_negative_retries + 1):
+                    try:
+                        reason = '负例 JSON 无效'
+                        b = parse_candidate(raw)
+                        reason = '负例缺少问题或回答'
+                        if not all(nonempty(b.get(k)) for k in ('question','answer')):
+                            raise ValueError(reason)
+                        reason = '候选 A/B 使用了不同问题'
+                        if a['question'].strip() != b['question'].strip():
+                            raise ValueError(reason)
+                        reason = '正负回答相同或只有简单格式差异'
+                        if same_answer(a['answer'], b['answer']):
+                            raise ValueError('正负回答相同')
+                        pair = dict(question=a['question'].strip(), answer_a=a['answer'].strip(), answer_b=b['answer'].strip())
+                        break
+                    except (ValueError, TypeError, KeyError):
+                        if not self.llm_serving or attempt == self.max_negative_retries:
+                            raise ValueError('负例无效或与正例相同，已达到重试上限') from None
+                        try:
+                            raw = self._negative(row, a, raw)
+                            responses.append(raw)
+                        except Exception as exc:
+                            responses.append({'error_type': type(exc).__name__})
+            except Exception as exc:
+                # A malformed or exhausted row cannot discard the remaining batch.
+                errors.append(f'{reason}（{type(exc).__name__}；负例重试 {len(responses)} 次）')
+            values.append(pair); reports.append(errors); attempts.append(responses)
         frame[output_key] = values
+        frame['_training_issues'] = reports
+        frame['negative_retry_responses'] = attempts
         storage.write(frame)
         return [output_key]
 

@@ -55,7 +55,7 @@ export default {
  cancel(){return this.action(async()=>{await this.request('post',`/tasks/execution/${this.task.task_id}/kill`);await this.fetchTask(this.task.task_id);this.tasks=await this.request('get','/generation/tasks')})},
  retry(){return this.action(async()=>{const r=await this.request('post',`/generation/tasks/${this.task.task_id}/retry`);await this.fetchTask(r.task_id);this.tasks=await this.request('get','/generation/tasks');this.notice=r.reused?'完整批次产物已核对，可直接收集':'已创建新任务，旧失败记录保留'})},
  collect(a){return this.action(async()=>{if(!this.draftId)throw new Error('请选择收集目标草稿');const r=await this.request('post',`/generation/tasks/${this.task.task_id}/collect`,{draft_id:this.draftId,artifact_id:a.id});this.notice=`已收集 ${r.added} 条训练样本`})},
- artifactUrl(a){return `/api/v1/generation/tasks/${this.task.task_id}/artifacts/${a.id}`},statusLabel(s){return {queued:'排队中',running:'运行中',completed:'已完成',failed:'失败',cancelled:'已取消'}[s]||s},kindLabel(k){return {raw_response:'原始模型响应',candidate:'候选 / 中间结果',training:'训练产物'}[k]||k}
+ artifactUrl(a){return `/api/v1/generation/tasks/${this.task.task_id}/artifacts/${a.id}`},statusLabel(s){return {queued:'排队中',running:'运行中',completed:'已完成',failed:'失败',cancelled:'已取消'}[s]||s},kindLabel(k){return {raw_response:'原始模型响应',candidate:'候选 / 中间结果',training:'训练产物',invalid_samples:'无效样本记录'}[k]||k}
  }
 }
 </script>

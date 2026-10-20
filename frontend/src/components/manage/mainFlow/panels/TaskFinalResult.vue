@@ -5,6 +5,9 @@
         <template v-if="result && !loading">
             <h3>最终结果</h3>
             <p v-if="result.storage_error" role="alert" class="error">{{ result.storage_error }}</p>
+            <p v-if="result.sample_summary?.invalid" class="help" role="status">有效 {{ result.sample_summary.valid }} 条，无效 {{ result.sample_summary.invalid }} 条。无效样本已单独记录，不影响其余结果导出。</p>
+            <a v-if="result.invalid_artifact" :href="`/api/v1/generation/tasks/${encodeURIComponent(taskId)}/artifacts/${encodeURIComponent(result.invalid_artifact)}`" download>下载无效样本记录</a>
+            <p v-if="result.invalid_samples_file" class="help">无效样本记录：{{ result.invalid_samples_file }}</p>
             <details v-if="result.result_directory"><summary>本次结果目录</summary><p class="directory">{{ result.result_directory }}</p></details>
             <p>任务 {{ result.task_id }} · {{ statusLabel(result.status) }}</p>
             <p v-if="result.reason" class="help">{{ result.reason }}</p>
