@@ -62,3 +62,22 @@ def bundle_download(key:str):
     r=call(service().get,'bundles',key);p=Path(r['path'])
     if not p.is_file() or digest(p.read_bytes())!=r['archive_sha256']:raise HTTPException(409,'运行包缺失或已改动')
     return FileResponse(p,filename='dataflex-'+key+'.zip',media_type='application/zip')
+
+@router.get('/runs')
+def runs(): return ok(call(service().list,'runs'))
+@router.get('/runs/{attempt}')
+def run_detail(attempt:str):
+    from app.services.training_results import run_detail
+    return ok(call(run_detail,service(),attempt))
+@router.post('/results/import')
+def import_result(body:dict):
+    from app.services.training_results import import_result
+    return ok(call(import_result,service(),body))
+@router.post('/evaluations')
+def evaluation(body:dict):
+    from app.services.training_results import add_evaluation
+    return ok(call(add_evaluation,service(),body))
+@router.post('/compare')
+def comparison(body:dict):
+    from app.services.training_results import compare
+    return ok(call(compare,service(),body.get('attempts',[]),body.get('include_synthetic',False)))

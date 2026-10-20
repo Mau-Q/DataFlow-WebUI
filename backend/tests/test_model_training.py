@@ -92,3 +92,37 @@ def test_zip_and_symlink_guards(tmp_path):
     from app.services.training_bundles import safe_read
     (tmp_path/'file').write_text('x');(tmp_path/'link').symlink_to(tmp_path/'file')
     with pytest.raises(TrainingError,match='普通文件'):safe_read(tmp_path/'link')
+
+from app.services.training_results import import_result,run_detail,add_evaluation,compare
+from app.services.model_training import digest
+
+
+def result_fixture(service,attempt='attempt1',status='running',sequence=1):
+    p=TrainingPlan(model='fixture').model_dump()
+    if not service.list('bundles'):service.put('bundles',{'manifest_sha256':'a'*64,'plan_snapshot':p,'manifest':{'source':{'commit':'fixture','dirty':False}}},'bundle1')
+    return {'schema_version':1,'run_id':'run1','attempt_id':attempt,'input_manifest_sha256':'a'*64,'sequence':sequence,'synthetic':True,'status':status,'metrics':[{'step':1,'loss':2.0}],'strategy_metrics':[],'artifacts':[{'id':'model','sha256':'b'*64,'path':'/fixture/adapter','availability':'remote_registered','identity_scope':'adapter_config'}],'environment':{'fixture':True},'actual_config':p,'log':'synthetic'}
+
+
+def test_result_idempotency_increment_and_sealing(tmp_path):
+    s=ModelTraining(tmp_path);payload=result_fixture(s)
+    r=import_result(s,payload);assert import_result(s,payload)['idempotent']
+    bad=dict(payload,sequence=2,synthetic=False)
+    with pytest.raises(TrainingError,match='身份'):import_result(s,bad)
+    updated=dict(payload,sequence=2,metrics=payload['metrics']+[{'step':2,'loss':1}],status='failed')
+    import_result(s,updated)
+    assert run_detail(s,r['id'])['status']=='failed'
+    with pytest.raises(TrainingError,match='封存'):import_result(s,dict(updated,sequence=3))
+    assert not compare(s,[r['id']])['runs']
+    assert len(compare(s,[r['id']],True)['runs'])==1
+    with pytest.raises(TrainingError):import_result(s,dict(updated,metrics=[{'loss':float('nan')}]))
+
+
+def test_evaluation_requires_artifact_identity_and_partial_jsonl(tmp_path):
+    s=ModelTraining(tmp_path);r=import_result(s,result_fixture(s))
+    payload={'attempt_id':r['id'],'artifact_id':'model','artifact_sha256':'c'*64,'task':'qa','dataset_version':'heldout-v1','metric_definitions':{'acc':'exact match'},'metrics':{'acc':.5},'tool_version':'test-v1','config':{'seed':42}}
+    with pytest.raises(TrainingError,match='不匹配'):add_evaluation(s,payload)
+    payload['artifact_sha256']='b'*64
+    e=add_evaluation(s,payload);assert e['synthetic'];assert add_evaluation(s,payload)['id']==e['id']
+    from app.services.training_runtime.runner import read_metrics
+    p=tmp_path/'metrics.jsonl';p.write_text('{"current_steps":1,"loss":2}\n{"current_steps":2')
+    assert read_metrics(p)==[{'current_steps':1,'step':1,'loss':2}]

@@ -1,0 +1,8 @@
+<template><div><p v-if="!series.length">未提供可绘制的 {{kind==='training'?'训练':'策略'}} 指标。</p><canvas v-show="series.length" ref="canvas" :aria-label="kind==='training'?'训练指标曲线':'策略指标曲线'" role="img" /></div></template>
+<script>
+import {Chart,registerables} from 'chart.js'
+Chart.register(...registerables)
+function flatten(row,prefix=''){const out={};for(const [k,v] of Object.entries(row)){const name=prefix?prefix+'.'+k:k;if(typeof v==='number' && Number.isFinite(v))out[name]=v;else if(v && typeof v==='object')Object.assign(out,flatten(v,name))}return out}
+export default {props:{rows:{type:Array,default:()=>[]},kind:{default:'training'},theme:String},computed:{series(){const flat=this.rows.map(r=>flatten(r));const keys=[...new Set(flat.flatMap(Object.keys))].filter(k=>!['step','current_steps','global_step'].includes(k));return keys.map((key,i)=>({label:key,data:flat.map((r,index)=>({x:r.step??r.current_steps??r.global_step??index,y:r[key]??null})),borderColor:['#6676e4','#dc9350','#4dafa1','#b076cf'][i%4],pointRadius:2,tension:.1}))}},mounted(){this.draw()},beforeUnmount(){this.chart?.destroy()},watch:{rows:{deep:true,handler(){this.draw()}},theme(){this.draw()}},methods:{draw(){this.chart?.destroy();if(!this.$refs.canvas || !this.series.length)return;this.chart=new Chart(this.$refs.canvas,{type:'line',data:{datasets:this.series},options:{responsive:true,maintainAspectRatio:false,parsing:false,scales:{x:{type:'linear',title:{display:true,text:'step / record index'}},y:{beginAtZero:false}},plugins:{legend:{labels:{color:this.theme==='dark'?'#dfe5ef':'#25334c'}}}}})}}}
+</script>
+<style scoped>div{position:relative;min-height:80px}canvas{max-height:280px}</style>
