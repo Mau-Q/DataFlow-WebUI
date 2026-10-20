@@ -153,9 +153,14 @@ const paramsWrapper = (objs) => {
     return objs
 }
 let detailRequest = 0
+let detailKey = ''
 const getNodeDetail = async () => {
     if (props.data.externalTemplate || !props.data?.name || !props.data?.flowId) return
-    const id = props.id, name = props.data.name, request = ++detailRequest
+    const id = props.id, name = props.data.name
+    const key = JSON.stringify([id, name])
+    if (loading.value && detailKey === key) return
+    detailKey = key
+    const request = ++detailRequest
     loading.value = true
     emits('update-node-data', {id, data: {parameterLoading: true, parameterError: ''}})
     try {

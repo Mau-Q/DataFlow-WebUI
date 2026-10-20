@@ -97,3 +97,31 @@ test('primary pointer release opens details independently of a suppressed click'
  h.inspectPointer({button:0});assert.equal(opens,1)
  h.inspectPointer({button:2});assert.equal(opens,1)
 })
+
+test('repeated detail activation shares the pending request and keeps the inspector open', async()=>{
+ const props=reactive({id:'node',data:{name:'Operator',flowId:'flow'}})
+ let calls=0,opens=0,finish
+ const api={operators:{get_operator_detail_by_name(){calls++;return new Promise(resolve=>{finish=resolve})}}}
+ const emits=(kind,info)=>{if(kind==='update-node-data')props.data={...props.data,...info.data};else if(kind==='inspect-node')opens++}
+ const h=new Function('props','loading','emits','$api','paramsWrapper','watch',`${loader};return {getNodeDetail,inspect}`)(props,ref(false),emits,api,x=>x,()=>{})
+ const request=h.getNodeDetail()
+ h.inspect();h.inspect()
+ assert.equal(calls,1);assert.equal(opens,2)
+ finish({code:200,data:{parameter:{init:[],run:[]}}})
+ await request
+ assert.equal(props.data.parameterLoading,false)
+ assert(props.data.operatorParams)
+})
+
+test('a changed operator starts a new request and ignores the old response', async()=>{
+ const props=reactive({id:'node',data:{name:'Old',flowId:'flow'}})
+ const finishes={}
+ const api={operators:{get_operator_detail_by_name(name){return new Promise(resolve=>{finishes[name]=resolve})}}}
+ const emits=(kind,info)=>{if(kind==='update-node-data')props.data={...props.data,...info.data}}
+ const h=new Function('props','loading','emits','$api','paramsWrapper','watch',`${loader};return {getNodeDetail}`)(props,ref(false),emits,api,x=>x,()=>{})
+ const old=h.getNodeDetail();props.data.name='New';const current=h.getNodeDetail()
+ finishes.New({code:200,data:{parameter:{init:[{name:'new'}],run:[]}}});await current
+ finishes.Old({code:200,data:{parameter:{init:[{name:'old'}],run:[]}}});await old
+ assert.equal(props.data.operatorParams.init[0].name,'new')
+ assert.equal(props.data.parameterLoading,false)
+})
