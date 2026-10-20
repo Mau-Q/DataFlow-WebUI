@@ -34,3 +34,16 @@ def releases(): return ok(call(service().releases))
 def groups(): return ok(call(service().list,'groups'))
 @router.post('/groups')
 def group(body:ExperimentGroup): return ok(call(service().put,'groups',body.model_dump()))
+
+@router.get('/catalog')
+def components():
+    from app.services.training_compiler import catalog
+    return ok(call(catalog,service()))
+@router.post('/components')
+def component(body:dict):
+    from app.services.training_compiler import save_descriptor
+    return ok(call(save_descriptor,service(),body))
+@router.post('/plans/{key}/compile')
+def compile(key:str):
+    from app.services.training_compiler import compile_plan
+    return ok(call(compile_plan,service(),call(service().get,'plans',key)['plan']))
