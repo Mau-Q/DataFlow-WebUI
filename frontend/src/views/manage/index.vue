@@ -5,7 +5,7 @@
                 :theme="theme"
                 v-model="currentNav"
                 :title="''"
-                :options="navList"
+                :options="navigationOptions"
                 v-model:expand="isExpand"
                 :foreground="color"
                 :background="theme === 'dark' ? 'rgba(36, 36, 36, 1)' : ''"
@@ -32,7 +32,7 @@
                         :class="{
                             collapse: !isExpand,
                             'nav-group': x.item.type === 'header',
-                            'is-active': x.item.type !== 'header' && currentNav.key === x.item.key
+                            'is-active': x.item.type !== 'header' && (teamWorkspace?.active.value ? x.item.key === 'team-workspace' : currentNav.key === x.item.key)
                         }"
                         :title="x.valueTrigger(x.item.name)"
                     >
@@ -53,7 +53,15 @@
                     </div>
                 </template>
             </fv-navigation-view>
-            <router-view v-slot="{ Component }">
+            <div v-if="teamWorkspace?.active.value" class="team-workspace-content">
+                <TeamWorkspace
+                    :user="teamWorkspace.user.value"
+                    :project="teamWorkspace.project.value"
+                    :selection="teamWorkspace.selection.value"
+                    @refresh="teamWorkspace.refresh"
+                />
+            </div>
+            <router-view v-else v-slot="{ Component }">
                 <KeepAlive>
                     <component :is="Component" />
                 </KeepAlive>
@@ -68,9 +76,13 @@ import { useAppConfig } from '@/stores/appConfig'
 import { useTheme } from '@/stores/theme'
 
 import logo from '@/assets/logo/logo.png'
+import TeamWorkspace from '@/components/manage/team/TeamWorkspace.vue'
+import { team } from '@/components/manage/team/client'
 
 export default {
     name: 'ManageShell',
+    components: { TeamWorkspace },
+    inject: { teamWorkspace: { default: null } },
     data() {
         return {
             currentNav: {
@@ -147,6 +159,18 @@ export default {
         }
     },
     computed: {
+        navigationOptions() {
+            if (!team.enabled) return this.navList
+            const items = [...this.navList]
+            const index = items.findIndex(item => item.key === 'resources-heading')
+            items.splice(index, 0, {
+                key: 'team-workspace',
+                name: () => this.local('协作与人工评测'),
+                svg: 'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2 M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8 M22 21v-2a4 4 0 0 0-3-3.87 M16 3.13a4 4 0 0 1 0 7.75',
+                workspace: true
+            })
+            return items
+        },
         ...mapState(useAppConfig, ['local']),
         ...mapState(useTheme, ['color', 'gradient', 'theme'])
     },
@@ -155,7 +179,15 @@ export default {
     },
     methods: {
         handleItemClick(item) {
+            if (item.workspace) {
+                if (!this.teamWorkspace.show(true)) this.routeFormat()
+                return
+            }
             if (!item.route) return
+            if (this.teamWorkspace && !this.teamWorkspace.show(false)) {
+                this.currentNav = this.navigationOptions.find(item => item.workspace)
+                return
+            }
             // Navigation-view may emit selection while initializing. Keep canvas query state.
             if (item.route.replace(/\/$/, '') === this.$route.path.replace(/\/$/, '')) return
             this.$Go(`${item.route}`)
@@ -172,6 +204,7 @@ export default {
             }
         },
         handleSettingClick() {
+            if (this.teamWorkspace && !this.teamWorkspace.show(false)) return
             this.$Go('/m/settings')
         }
     }
@@ -185,6 +218,12 @@ export default {
     background: rgba(250, 250, 250, 1);
     display: flex;
     flex-direction: column;
+
+    .team-workspace-content {
+        flex: 1;
+        min-width: 0;
+        overflow: auto;
+    }
 
     &.dark {
         background: rgba(36, 36, 36, 1);

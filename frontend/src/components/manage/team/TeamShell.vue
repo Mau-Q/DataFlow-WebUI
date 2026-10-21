@@ -38,22 +38,11 @@
                     .map((r) => ({ manage: '管理', develop: '开发', review: '评测' })[r])
                     .join(' · ')
             }}</span>
-            <nav>
-                <button
-                    v-if="canDevelop"
-                    :class="{ selected: !workspace }"
-                    @click="showWorkspace(false)"
-                >
-                    生成与管理</button
-                ><button :class="{ selected: workspace }" @click="showWorkspace(true)">
-                    协作与人工评测
-                </button>
-            </nav>
             <select aria-label="主题" :value="theme.theme" @change="changeTheme"><option value="light">浅色</option><option value="dark">深色</option></select><span class="account">{{ user.name }}</span
             ><button @click="logout">退出</button>
         </header>
         <main>
-            <slot v-if="project && canDevelop && !workspace" /><TeamWorkspace
+            <slot v-if="project && canDevelop" /><TeamWorkspace
                 v-else-if="project"
                 :user="user"
                 :project="project"
@@ -73,7 +62,7 @@
     </div>
 </template>
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, provide } from 'vue'
 import { team, request } from './client'
 import { useTheme } from '@/stores/theme'
 import TeamWorkspace from './TeamWorkspace.vue'
@@ -90,7 +79,7 @@ const theme = useTheme(),
     workspace = ref(false)
 const selection = ref(null)
 const canLeave=()=>window.dispatchEvent(new Event('dataflow-before-workspace-change',{cancelable:true}))
-function showWorkspace(value){if(value===workspace.value||!canLeave())return;workspace.value=value}
+function showWorkspace(value){if(value===workspace.value)return true;if(!canLeave())return false;workspace.value=value;return true}
 const onOpen = (e) => {
     if(!canLeave())return
     selection.value = e.detail
@@ -101,6 +90,7 @@ onBeforeUnmount(() => window.removeEventListener('dataflow-team-open', onOpen))
 const project = computed(() => user.value.projects.find((p) => p.id === team.project)),
     roles = computed(() => project.value?.roles || []),
     canDevelop = computed(() => roles.value.some((r) => ['manage', 'develop'].includes(r)))
+provide('teamWorkspace', { active: workspace, user, project, selection, show: showWorkspace, refresh: load })
 async function action(fn) {
     busy.value = true
     error.value = ''
@@ -223,10 +213,6 @@ onMounted(async () => {
     color: var(--team-accent);
     letter-spacing: -0.5px;
 }
-.team-bar nav {
-    display: flex;
-    gap: 4px;
-}
 .team-bar .account {
     margin-left: auto;
 }
@@ -327,4 +313,4 @@ onMounted(async () => {
 }
 </style>
 
-<style>@media(max-width:900px){.team-bar{height:auto;min-height:54px;flex-wrap:wrap;padding:10px 14px;gap:8px}.team-bar .role{display:none}.team-bar nav{order:2;width:100%}.team-bar .account{margin-left:auto}}</style>
+<style>@media(max-width:900px){.team-bar{height:auto;min-height:54px;flex-wrap:wrap;padding:10px 14px;gap:8px}.team-bar .role{display:none}.team-bar .account{margin-left:auto}}</style>
