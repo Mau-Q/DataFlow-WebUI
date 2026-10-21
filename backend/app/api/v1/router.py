@@ -35,3 +35,6 @@ api_router.include_router(generation.router, prefix='/generation')
 
 from .endpoints import multimodal
 api_router.include_router(multimodal.router, prefix='/multimodal')
+
+from .endpoints import model_training
+api_router.include_router(model_training.router, prefix='/training')
