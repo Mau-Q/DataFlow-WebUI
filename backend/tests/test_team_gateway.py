@@ -8,13 +8,14 @@ PASS='isolated-password-test-123'
 
 
 class FakeWorkers:
-    def __init__(self):self.calls=[]
+    def __init__(self):self.calls=[];self.message="safe";self.error=False
     async def client(self,project):
         app=FastAPI()
         @app.api_route('/{path:path}',methods=['GET','POST','PUT','DELETE'])
         async def resource(path:str,request:Request):
             self.calls.append((project['id'],path))
-            return {'code':200,'data':{'project':project['id'],'api_key':'secret-that-must-not-leak'}}
+            if self.error:return {'success':False,'message':'missing','meta':{'http_status':404}}
+            return {'code':200,'data':{'project':project['id'],'api_key':'secret-that-must-not-leak','log_message':self.message}}
         return httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='http://worker')
     async def close(self):pass
 
@@ -81,3 +82,17 @@ def test_explicit_admin_entry_is_audited(tmp_path):
         assert client.post('/team/admin/projects/'+pid+'/enter',json={}).status_code==200
         assert client.get('/team/me').json()['project']==pid
         with s.tx() as c:assert c.execute("SELECT count(*) FROM audit WHERE action='system-admin-enter' AND project=?",(pid,)).fetchone()[0]==1
+
+
+def test_nested_credentials_embedded_logs_and_legacy_http_status(tmp_path):
+    import json
+    workers=FakeWorkers();legacy=tmp_path/'legacy';(legacy/'data').mkdir(parents=True)
+    secret='isolated-fixture-credential-value'
+    (legacy/'data/serving_registry.yaml').write_text(json.dumps({'service':{'params':[{'name':'api_key','value':secret}]}}))
+    app=create_gateway(tmp_path/'state',workers,secure=False);app.state.store.initialize('owner',PASS,legacy)
+    with TestClient(app) as client:
+        login(client);client.headers['X-Project-ID']='default';workers.message='Upstream error included '+secret
+        r=client.get('/api/v1/serving/')
+        assert secret not in r.text and '****' in r.text
+        workers.error=True
+        assert client.get('/api/v1/library/drafts/missing').status_code==404
