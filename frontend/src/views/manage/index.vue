@@ -88,6 +88,7 @@ export default {
                     svg: 'M3 3h6v6H3z M15 15h6v6h-6z M15 3h6v6h-6z M9 6h6 M6 9v9h9',
                     route: '/m/'
                 },
+                { key: 0.3, name: () => this.local('模型训练'), svg: 'M4 4h16v16H4z M8 8h8v8H8z M12 1v3 M12 20v3', route: '/m/training' },
                 { key: 'data-heading', name: () => this.local('数据'), type: 'header' },
                 {
                     key: 0.1,
