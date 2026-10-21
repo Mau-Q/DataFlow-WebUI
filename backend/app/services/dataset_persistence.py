@@ -83,7 +83,7 @@ def checkpoint(root):
     manager = _MANAGERS.get(root_key(root))
     if manager:
         try:
-            manager.snapshot(reason='mutation')
+            manager.request_snapshot()
         except Exception as exc:
             manager.last_error = str(exc)
             logger.error('Dataset saved, but automatic backup failed: {}', exc)
@@ -117,3 +117,12 @@ def defer_checkpoints(root):
             deferred.pop(key)
             if succeeded:
                 checkpoint(root)
+
+
+def locked_registry(method):
+    """Serialize the complete read/modify/replace cycle, including initializers."""
+    @functools.wraps(method)
+    def wrapped(self, *args, **kwargs):
+        with dataset_lock(self.path):
+            return method(self, *args, **kwargs)
+    return wrapped

@@ -23,10 +23,11 @@ class TrainingLifecycle:
         return ids
 
     def view(self, draft_id, offset=0, limit=20):
-        rec = self.lib._get('drafts', draft_id)
-        ids = self._members(rec)
-        return dict(self.lib._summary(rec), rows=rec['rows'][offset:offset+limit],
-                    sample_ids=ids[offset:offset+limit], offset=offset, limit=limit)
+        self.lib._path('drafts', draft_id)
+        rec = self.lib.db.draft_page(draft_id, offset, limit)
+        if rec is None:
+            raise LibraryError('记录不存在', 404)
+        return rec
 
     def _validate(self, rec):
         refs = set()
@@ -48,22 +49,41 @@ class TrainingLifecycle:
 
     def edit(self, draft_id, sample_id, row=None, delete=False, expected_updated_at=None):
         with self.lib._writing():
-            rec = self.lib._get('drafts', draft_id)
+            self.lib._path('drafts', draft_id)
+            summaries = self.lib.db.draft_summaries(draft_id)
+            if not summaries:
+                raise LibraryError('记录不存在', 404)
+            rec = summaries[0]
             if expected_updated_at is not None and expected_updated_at != rec.get('updated_at'):
                 raise LibraryError('数据集已在其他页面更新；当前编辑已保留，请重新打开样本后再保存。', 409)
-            ids = self._members(rec)
+            ids = rec.get('sample_ids', [])
+            # Old databases may not have persisted membership yet. Normalize once
+            # using the existing deterministic identity rule, inside this transaction.
+            if len(ids) != rec['row_count']:
+                rec = self.lib._get('drafts', draft_id)
+                ids = self._members(rec)
+                self.lib.db.put('drafts', rec)
             if sample_id not in ids:
                 raise LibraryError('样本不存在', 404)
             index = ids.index(sample_id)
-            if delete:
-                del rec['rows'][index]
-                del ids[index]
-                rec['sample_sources'].pop(sample_id, None)
-            else:
-                rec['rows'][index] = copy.deepcopy(row)
-                self._validate(rec)
-            rec['updated_at'] = _now()
-            self.lib._atomic(self.lib._path('drafts', draft_id), _json_bytes(rec))
+            with self.lib.db.transaction() as con:
+                if delete:
+                    con.execute('DELETE FROM samples WHERE draft_id=? AND position=?', (draft_id, index))
+                    positions = con.execute('SELECT position FROM samples WHERE draft_id=? AND position>? ORDER BY position',
+                                            (draft_id, index)).fetchall()
+                    for position, in positions:
+                        con.execute('UPDATE samples SET position=? WHERE draft_id=? AND position=?',
+                                    (position-1, draft_id, position))
+                    del ids[index]
+                    rec.setdefault('sample_sources', {}).pop(sample_id, None)
+                else:
+                    self._validate(dict(rec, rows=[row]))
+                    con.execute('UPDATE samples SET payload=? WHERE draft_id=? AND position=?',
+                                (self.lib.db.encode(row), draft_id, index))
+                rec['updated_at'] = _now()
+                metadata = {k:v for k,v in rec.items() if k not in
+                            ('rows', 'media_bindings', 'imports', 'row_count', 'fields')}
+                con.execute('UPDATE drafts SET metadata=? WHERE id=?', (self.lib.db.encode(metadata), draft_id))
         return self.view(draft_id)
 
     def map_fields(self, draft_id, mapping):

@@ -778,8 +778,6 @@ class DataFlowEngine:
                         "operator_logs": operator_logs # Sync logs to file
                     })
                     
-                    api_pipeline_path = os.path.join(settings.DATAFLOW_CORE_DIR, "api_pipelines")
-                    os.chdir(api_pipeline_path)
                     
                     # ✅ 捕获 stdout/stderr
                     f_stdout = io.StringIO()
@@ -801,7 +799,6 @@ class DataFlowEngine:
                                 if line.strip():
                                     add_log("run", f"[STDERR] {line}", op_key)
                                     
-                    os.chdir(settings.BASE_DIR)
                     
                     # ✅ 获取处理后的数据量
                     # 尝试从 output file 获取
@@ -887,7 +884,6 @@ class DataFlowEngine:
                         },
                         original_error=e
                     )
-            # os.chdir(settings.BASE_DIR)
             # 成功完成
             completed_at = datetime.now().isoformat()
             add_log("global", f"[{completed_at}] Pipeline execution completed successfully")

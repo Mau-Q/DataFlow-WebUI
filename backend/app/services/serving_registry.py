@@ -3,6 +3,7 @@ import importlib
 import inspect
 from typing import Dict, List, Any
 from app.core.config import settings
+from app.services.dataset_persistence import locked_registry, atomic_write
 """
 Registry Yaml Format:
 {
@@ -29,15 +30,17 @@ class ServingRegistry:
         self.path = path or settings.SERVING_REGISTRY
         self._ensure()
 
+    @locked_registry
     def _ensure(self):
         if not os.path.exists(self.path):
-            with open(self.path, 'w') as f:
-                yaml.dump({}, f)
+            atomic_write(self.path, yaml.safe_dump({}).encode('utf-8'))
                 
     def _get_all(self):
-        with open(self.path, 'r') as f:
+        with open(self.path, 'r', encoding='utf-8') as f:
             data = yaml.safe_load(f)
-        return data
+        if data is not None and not isinstance(data, dict):
+            raise ValueError(f"Invalid serving registry structure; original file preserved: {self.path}")
+        return data or {}
     
     def _get(self, id: str) -> Dict[str, Any] | None:
         data = self._get_all()
@@ -47,6 +50,7 @@ class ServingRegistry:
         item['id'] = id
         return item
                 
+    @locked_registry
     def _set(self, name: str, cls_name: str, params: List[Dict[str, Any]]) -> str:
         data = self._get_all() or {}
         id = os.urandom(8).hex()
@@ -55,10 +59,10 @@ class ServingRegistry:
             "cls_name": cls_name,
             "params": params
         }
-        with open(self.path, 'w') as f:
-            yaml.dump(data, f)
+        atomic_write(self.path, yaml.safe_dump(data, allow_unicode=True).encode('utf-8'))
         return id
 
+    @locked_registry
     def _update(self, id: str, name: str | None = None, cls_name: str | None = None, params: List[Dict[str, Any]] | None = None) -> bool:
         data = self._get_all()
         if id not in data:
@@ -84,17 +88,16 @@ class ServingRegistry:
                      
             data[id]["params"] = list(current_params_map.values())
             
-        with open(self.path, 'w') as f:
-            yaml.dump(data, f)
+        atomic_write(self.path, yaml.safe_dump(data, allow_unicode=True).encode('utf-8'))
         return True
 
+    @locked_registry
     def _delete(self, id: str) -> bool:
         data = self._get_all()
         if id not in data:
             return False
         del data[id]
-        with open(self.path, 'w') as f:
-            yaml.dump(data, f)
+        atomic_write(self.path, yaml.safe_dump(data, allow_unicode=True).encode('utf-8'))
         return True
 
     def get_serving_classes(self) -> List[Dict[str, Any]]:

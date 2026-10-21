@@ -8,7 +8,6 @@ import hashlib
 import io
 import json
 import re
-import threading
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -20,7 +19,6 @@ from PIL import Image
 from pypdf import PdfReader
 from app.core.config import settings
 from app.schemas.data_library import MaterialMetadata
-from app.services.platform_lock import exclusive_lock
 
 MAX_BYTES = 100 * 1024 * 1024
 MAX_IMPORT_BYTES = 20 * 1024 * 1024
@@ -68,17 +66,15 @@ class DataLibrary:
         self.drafts = self.root / 'drafts'
         self.materials.mkdir(exist_ok=True)
         self.drafts.mkdir(exist_ok=True)
-        self._lock = threading.RLock()
         self.db = DatasetDatabase(self.root.parent)
         self.db.import_library(self.root)
 
     @contextmanager
     def _writing(self):
-        with dataset_lock(self.root.parent), self._lock, (self.root / '.lock').open('a+') as handle:
-            with exclusive_lock(handle):
-                with self.db.transaction():
-                    yield
-                checkpoint(self.root.parent)
+        with dataset_lock(self.root.parent):
+            with self.db.transaction():
+                yield
+            checkpoint(self.root.parent)
 
     def _atomic(self, path, data):
         path = Path(path)
@@ -213,8 +209,8 @@ class DataLibrary:
             for release in self.db.list('releases'):
                 key = release['draft_id']
                 latest[key] = max(latest.get(key, 0), release['version'])
-            return [dict(self._summary(r), latest_release_version=latest.get(r['id']))
-                    for r in self._list(self.drafts)]
+            return [dict(r, latest_release_version=latest.get(r['id']))
+                    for r in sorted(self.db.draft_summaries(), key=lambda r: r['created_at'], reverse=True)]
 
     def get_draft(self, record_id, offset=0, limit=20):
         from app.services.training_lifecycle import TrainingLifecycle

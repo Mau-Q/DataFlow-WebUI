@@ -252,7 +252,8 @@ class TextGeneration:
         try:
             await ray_executor.submit_execution(config, runtime, task_id, self.c.pipeline_registry.path, self.c.task_registry.path)
         except Exception as exc:
-            patch_task(self.c.task_registry.path, task_id, {'status': 'failed', 'completed_at': _now(), 'output': {'error': f'任务提交失败: {type(exc).__name__}'}})
+            from app.services.task_store import fail_submission
+            fail_submission(self.c.task_registry.path, task_id, exc)
             raise LibraryError('任务提交失败，已记录失败原因', 503) from exc
         return {'task_id': task_id, 'status': 'queued', 'reused': False}
 

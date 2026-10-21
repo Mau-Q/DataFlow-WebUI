@@ -4,7 +4,7 @@ import hashlib
 import pandas
 import datetime
 from typing import Dict, List, Optional, Any, Tuple
-from app.services.task_store import patch_task
+from app.services.task_store import patch_task, fail_submission
 from app.services.resource_store import ResourceStore
 from app.core.container import container
 from app.core.config import settings
@@ -445,19 +445,24 @@ class TaskRegistry:
             if pipeline_id:
                 options['pipeline_name'] = pipeline.get('name', 'Pipeline')
         task_id, pipeline_config, initial_result = self.start_execution(config=pipeline_config)
-        if pipeline_id:
-            patch_task(self.path, task_id, {'pipeline_id': pipeline_id, 'name': pipeline.get('name', 'Pipeline')})
-        dataflow_runtime = DataFlowEngine.decode_hashed_arguments(pipeline_config, task_id)
-        
-        # 提交到 Ray 异步执行
-        await ray_executor.submit_execution(
-            pipeline_config=pipeline_config,
-            dataflow_runtime=dataflow_runtime,
-            task_id=task_id,
-            pipeline_registry_path=self.path,
-            pipeline_execution_path=self.path
-        )
-        
+        try:
+            if pipeline_id:
+                patch_task(self.path, task_id, {'pipeline_id': pipeline_id, 'name': pipeline.get('name', 'Pipeline')})
+            dataflow_runtime = DataFlowEngine.decode_hashed_arguments(pipeline_config, task_id)
+
+            # 提交到 Ray 异步执行
+            await ray_executor.submit_execution(
+                pipeline_config=pipeline_config,
+                dataflow_runtime=dataflow_runtime,
+                task_id=task_id,
+                pipeline_registry_path=self.path,
+                pipeline_execution_path=self.path
+            )
+
+        except BaseException as exc:
+            fail_submission(self.path, task_id, exc)
+            raise
+
         logger.info(f"Pipeline execution submitted to Ray: {task_id}")
         
         return {

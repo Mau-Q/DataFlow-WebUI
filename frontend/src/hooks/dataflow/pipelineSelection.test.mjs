@@ -51,3 +51,13 @@ test('existing custom Save calls update API with the same ID and preserves execu
  const s={...saveMethods,currentPipeline:{...custom,config:{file_path:'flow.py',execution_options:options}},nodes:[],sourceDatabase:{id:'dataset'},executionInfo:{},sortPipeline:()=>[],local:x=>x,getPipelines(){},markCanvasSaved(){},$barWarning(){},$api:{pipelines:{async update_pipeline(...args){calls.push(args);return {code:200}},create_pipeline(){throw Error('must not create')}}}}
  assert(await s.savePipeline());assert.equal(calls.length,1);assert.equal(calls[0][0],'saved');assert.equal(calls[0][1].config.execution_options,options)
 })
+
+test('execution selection and recovery release loading after render rejection', async()=>{
+ const methods=page.slice(page.indexOf('        async selectExecutionPipeline('),page.indexOf('        async handleWatchExecution('))
+ const selectedMethods=new Function('usePipelineOperation',`return ({${methods}})`)(()=>({async renderPipeline(){throw Error('fixture render failed')}}))
+ for(const method of ['selectExecutionPipeline','recoverPipeline']) {
+  const s={...selectedMethods,lock:{loading:true},currentPipeline:custom,async confirmCanvasChange(){return true}}
+  await assert.rejects(s[method]({}), /fixture render failed/)
+  assert.equal(s.lock.loading,true)
+ }
+})
