@@ -36,7 +36,7 @@ class ServingRegistry:
             atomic_write(self.path, yaml.safe_dump({}).encode('utf-8'))
                 
     def _get_all(self):
-        with open(self.path, 'r') as f:
+        with open(self.path, 'r', encoding='utf-8') as f:
             data = yaml.safe_load(f)
         return data or {}
     

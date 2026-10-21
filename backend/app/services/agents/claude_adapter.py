@@ -9,12 +9,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from typing import AsyncGenerator, Optional
 
 from app.core.logger_setup import get_logger
 
 from .base import AgentAdapter, NormalizedEvent, truncate_preview
-from .process_io import drain_stderr, reap
+from .process_io import drain_stderr, reap, terminate, kill_tree
 
 logger = get_logger(__name__)
 
@@ -25,6 +26,7 @@ class ClaudeAdapter(AgentAdapter):
     def __init__(self, **kw) -> None:
         super().__init__(**kw)
         self._process: Optional[asyncio.subprocess.Process] = None
+        self._termination_task = None
 
     @property
     def is_running(self) -> bool:
@@ -32,12 +34,13 @@ class ClaudeAdapter(AgentAdapter):
 
     def kill(self) -> None:
         proc = self._process
-        if proc and proc.returncode is None:
+        if proc and proc.returncode is None and self._termination_task is None:
             try:
-                proc.kill()
-            except Exception:
-                pass
-        self._process = None
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                kill_tree(proc)
+            else:
+                self._termination_task = loop.create_task(terminate(proc))
 
     async def chat_stream(
         self,
@@ -75,11 +78,14 @@ class ClaudeAdapter(AgentAdapter):
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=str(self.webui_root),
+            start_new_session=(os.name == "posix"),
             limit=10 * 1024 * 1024,  # 10 MB, fits large MCP tool results
         )
         self._process = process
+        self._termination_task = None
         stderr_task = asyncio.create_task(drain_stderr(process.stderr))
         emitted_session = False
+        cancelled = False
 
         try:
             assert process.stdout is not None
@@ -107,13 +113,14 @@ class ClaudeAdapter(AgentAdapter):
                 yield {"type": "error", "message": f"Agent process exited ({code}): {diagnostic}"}
             yield {"type": "done"}
         except asyncio.CancelledError:
+            cancelled = True
             raise
         except Exception as e:
             logger.error(f"ClaudeAdapter stream error: {e}", exc_info=True)
             yield {"type": "error", "message": str(e)}
             yield {"type": "done"}
         finally:
-            await reap(process, stderr_task)
+            await reap(process, stderr_task, self._termination_task, stop_tree=cancelled)
             if self._process is process:
                 self._process = None
 

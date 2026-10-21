@@ -249,3 +249,99 @@ else:
             process.wait()
     if kind=='serving': assert len(ServingRegistry(str(path))._get_all())==15
     else: assert len(json.loads(path.read_text())['pipelines'])==16
+
+
+def test_serving_unicode_roundtrip_on_non_utf8_system_locale(tmp_path, monkeypatch):
+    import builtins
+    registry=ServingRegistry(str(tmp_path/'serving.yaml'))
+    sid=registry._set('中文模型', 'APILLMServing_request', [])
+    original=builtins.open
+    def locale_open(file, mode='r', *args, **kwargs):
+        if 'b' not in mode and not args and 'encoding' not in kwargs:
+            kwargs['encoding']='cp1252'
+        return original(file,mode,*args,**kwargs)
+    monkeypatch.setattr(builtins,'open',locale_open)
+    assert registry._get(sid)['name']=='中文模型'
+
+
+def test_scoped_recovery_preserves_runtime_symlinks_and_empty_directories(tmp_path):
+    from app.services.data_library import DataLibrary
+    from app.services.dataset_backups import DatasetBackups
+    from app.schemas.data_library import DraftCreate
+    root=tmp_path/'data';lib=DataLibrary(root/'library')
+    lib.create_draft(DraftCreate(name='Protected'))
+    target=tmp_path/'runtime-target';target.mkdir();(target/'template.txt').write_text('runtime')
+    runtime=root/'dataflow_core'
+    try: runtime.symlink_to(target,target_is_directory=True)
+    except OSError: pytest.skip('Directory symlinks are unavailable on this platform')
+    (root/'empty-runtime-cache').mkdir()
+    (root/'broken-runtime-link').symlink_to('absent-runtime-file')
+    manager=DatasetBackups(root,tmp_path/'backups');archive=manager.snapshot()
+    manager.recover_if_needed(archive)
+    assert runtime.is_symlink() and runtime.resolve()==target
+    assert (runtime/'template.txt').read_text()=='runtime'
+    assert (root/'empty-runtime-cache').is_dir()
+    assert (root/'broken-runtime-link').is_symlink()
+    assert (target/'template.txt').read_text()=='runtime'
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='POSIX inherited-pipe process-group regression')
+@pytest.mark.parametrize('adapter_name', ['codex', 'claude'])
+@pytest.mark.parametrize('kill_before_cancel', [False, True])
+def test_agent_cancel_with_descendant_holding_pipes_finishes(tmp_path, adapter_name, kill_before_cancel):
+    import signal
+    from app.services.agents.codex_adapter import CodexAdapter
+    from app.services.agents.claude_adapter import ClaudeAdapter
+    pid_file=tmp_path/'child.pid';cli=tmp_path/'fixture-cli'
+    cli.write_text('#!'+sys.executable+'\nimport subprocess,sys,time,pathlib\n'
+                   'child=subprocess.Popen([sys.executable,"-c","import time;time.sleep(30)"])\n'
+                   f'pathlib.Path({str(pid_file)!r}).write_text(str(child.pid))\n'
+                   'time.sleep(30)\n');cli.chmod(0o755)
+    adapter=(CodexAdapter if adapter_name=='codex' else ClaudeAdapter)(cli_path=str(cli),webui_root=tmp_path,
+                mcp_config_path=tmp_path/'unused',system_prompt='fixture',allowed_tools='')
+    async def exercise():
+        async def consume():
+            return [event async for event in adapter.chat_stream('fixture')]
+        consumer=asyncio.create_task(consume())
+        try:
+            async def ready():
+                while not pid_file.exists(): await asyncio.sleep(.01)
+            await asyncio.wait_for(ready(),5)
+            if kill_before_cancel:
+                adapter.kill()
+            consumer.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(asyncio.shield(consumer),2)
+        finally:
+            if pid_file.exists():
+                try: os.kill(int(pid_file.read_text()),signal.SIGKILL)
+                except ProcessLookupError: pass
+            if not consumer.done():
+                try: await asyncio.wait_for(consumer,5)
+                except (asyncio.CancelledError, asyncio.TimeoutError): pass
+    asyncio.run(exercise())
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='POSIX background-child lifetime check')
+@pytest.mark.parametrize('adapter_name', ['codex', 'claude'])
+def test_successful_agent_turn_preserves_detached_output_background_child(tmp_path, adapter_name):
+    import signal
+    from app.services.agents.codex_adapter import CodexAdapter
+    from app.services.agents.claude_adapter import ClaudeAdapter
+    pid_file=tmp_path/'background.pid';cli=tmp_path/'fixture-cli'
+    cli.write_text('#!'+sys.executable+'\nimport subprocess,sys,pathlib\n'
+                   'child=subprocess.Popen([sys.executable,"-c","import time;time.sleep(60)"],'
+                   'stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)\n'
+                   f'pathlib.Path({str(pid_file)!r}).write_text(str(child.pid))\n')
+    cli.chmod(0o755)
+    adapter=(CodexAdapter if adapter_name=='codex' else ClaudeAdapter)(cli_path=str(cli),webui_root=tmp_path,
+                mcp_config_path=tmp_path/'unused',system_prompt='fixture',allowed_tools='')
+    async def collect(): return [event async for event in adapter.chat_stream('fixture')]
+    try:
+        events=asyncio.run(asyncio.wait_for(collect(),5))
+        assert events==[{'type':'done'}]
+        os.kill(int(pid_file.read_text()),0)
+    finally:
+        if pid_file.exists():
+            try: os.kill(int(pid_file.read_text()),signal.SIGKILL)
+            except ProcessLookupError: pass

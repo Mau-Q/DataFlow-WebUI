@@ -287,10 +287,19 @@ class DatasetBackups:
                     for existing in self.root.rglob('*'):
                         relative = existing.relative_to(self.root)
                         destination = target/'data'/relative
-                        if (existing.is_file() and not destination.exists()
-                                and relative.parts[0] != 'library'
-                                and not existing.name.startswith('datasets.sqlite3')):
-                            destination.parent.mkdir(parents=True, exist_ok=True)
+                        if (relative.parts[0] == 'library' or relative.as_posix() in
+                                {'datasets.sqlite3', 'datasets.sqlite3-wal', 'datasets.sqlite3-shm', 'datasets.sqlite3-journal'}):
+                            continue
+                        if destination.exists() or destination.is_symlink():
+                            continue
+                        destination.parent.mkdir(parents=True, exist_ok=True)
+                        if existing.is_symlink():
+                            # Preserve even broken links without following or copying
+                            # external runtime trees into the dataset recovery scope.
+                            destination.symlink_to(os.readlink(existing), target_is_directory=existing.is_dir())
+                        elif existing.is_dir():
+                            destination.mkdir(exist_ok=True)
+                        elif existing.is_file():
                             shutil.copy2(existing, destination)
                 quarantine = self.directory/('quarantine-'+stamp())
                 if self.root.exists():
