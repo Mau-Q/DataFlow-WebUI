@@ -1,5 +1,7 @@
 # 本地数据生成平台使用与交付
 
+文中的 `DATAFLOW_WORKSPACE` 指 Finetune-DataFlow 集成仓库根目录；这些集成脚本不属于独立 WebUI 检出。执行前设置该环境变量为实际路径。
+
 2026-10-19，M1–M6 本地交付。每位使用者独立部署，默认保留现有文件存储、服务和执行器。文本接入既有 13 步论文流程；图片 VQA 当前提供配置与运行拦截。真实文本小 PDF / 模型试跑和真实视觉调用均未在本次集成验收中执行，任务完成也不代表样本质量通过。
 
 ## 启动与更新
@@ -7,11 +9,11 @@
 在已有 DataFlow 工作区根目录执行：
 
 ```sh
-./scripts/webui.sh --daemon
-./scripts/webui.sh --status
+${DATAFLOW_WORKSPACE}/scripts/webui.sh --daemon
+${DATAFLOW_WORKSPACE}/scripts/webui.sh --status
 ```
 
-打开 `http://127.0.0.1:8000/`。封装脚本固定本机监听与工作区 `.venvs/dataflow/bin/python`；后台日志为 `repos/dataflow-webui/.backend.log`。前台运行使用 `./scripts/webui.sh`，Ctrl+C 停止；后台启动对应 `./scripts/webui.sh --stop`。状态检查只证明 WebUI API 可访问，不证明模型端点、MinerU 或 Ray worker 可用。
+打开 `http://127.0.0.1:8000/`。封装脚本固定本机监听与工作区 `.venvs/dataflow/bin/python`；后台日志为 `repos/dataflow-webui/.backend.log`。前台运行使用 `${DATAFLOW_WORKSPACE}/scripts/webui.sh`，Ctrl+C 停止；后台启动对应 `${DATAFLOW_WORKSPACE}/scripts/webui.sh --stop`。状态检查只证明 WebUI API 可访问，不证明模型端点、MinerU 或 Ray worker 可用。
 
 修改前端后，在 `repos/dataflow-webui/frontend` 运行 `npm run build`，再刷新页面。后端从 `frontend/dist` 提供静态页面；旧标签若引用已替换的资源，应重新加载。后台模式修改 Python 后需在没有任务写入时重启。单独使用 WebUI 仓库时，按 [WebUI 安装说明](profiles/webui.md) 配置环境，通过 `scripts/start.sh` 启动；不要重装已有可用环境。
 
@@ -66,7 +68,7 @@ Prompt / Schema 编辑影响未来提交；已固定任务继续使用旧内容�
 
 ## 可重复的本地验收
 
-在工作区根目录运行 `./scripts/test-local.sh`；前端在 `frontend` 运行 `npm run build`。该回归不请求真实模型，不代表真实 Ray 集群、真实 PDF 生成或数据质量通过。浏览器复核时使用独立的「验收」材料和草稿，保留旧配置：
+在工作区根目录运行 `${DATAFLOW_WORKSPACE}/scripts/test-local.sh`；前端在 `frontend` 运行 `npm run build`。该回归不请求真实模型，不代表真实 Ray 集群、真实 PDF 生成或数据质量通过。浏览器复核时使用独立的「验收」材料和草稿，保留旧配置：
 
 1. 导入一份新 PDF；相同字节重复导入应提示已有材料。刷新后能查看原文件并在文本向导选择它。
 2. 保存无服务的文本配置，检查/提交应拒绝且不增加任务。打开画布保存并返回，核对同一个 ID、13 步、材料与重试参数。

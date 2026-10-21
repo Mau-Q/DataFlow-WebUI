@@ -1,5 +1,7 @@
 # 原始材料与训练数据集（M1）
 
+文中的 `DATAFLOW_WORKSPACE` 指 Finetune-DataFlow 集成仓库根目录；这些集成脚本不属于独立 WebUI 检出。执行前设置该环境变量为实际路径。
+
 侧栏提供「原始数据集」和「生成数据集」两个入口，分别对应 `/#/m/materials` 和 `/#/m/training-datasets`。旧 DataFlow Hub、输入数据集和 Pipeline 保留原有入口与注册语义。
 
 ## 原始材料
@@ -69,7 +71,7 @@ API 前缀为 `/api/v1/library`，使用现有 ApiResponse 封装。业务失败
 | 草稿详情与分页 | GET `/drafts/{id}?offset=0&limit=20` |
 | 导入训练文件（file + media_bindings JSON 字符串） | POST `/drafts/{id}/import` |
 
-开发验证：从 backend 执行 `python -m pytest tests/test_data_library.py -q`；前端执行 `npm run build`。工作区完整回归入口为 `./scripts/test-local.sh`。
+开发验证：从 backend 执行 `python -m pytest tests/test_data_library.py -q`；前端执行 `npm run build`。工作区完整回归入口为 `${DATAFLOW_WORKSPACE}/scripts/test-local.sh`。
 
 ## 数据集入口与精简视图（2026-10-19 更新）
 

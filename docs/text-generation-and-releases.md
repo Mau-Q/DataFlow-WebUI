@@ -1,5 +1,7 @@
 # 文本任务、训练草稿与发布版本
 
+文中的 `DATAFLOW_WORKSPACE` 指 Finetune-DataFlow 集成仓库根目录；这些集成脚本不属于独立 WebUI 检出。执行前设置该环境变量为实际路径。
+
 当前适用于每位使用者独立运行的单用户 WebUI。入口为「文本生成」和「生成数据集」。
 
 ## 配置与提交
@@ -46,4 +48,4 @@
 
 备份应同时覆盖 `backend/data/` 和需要保留的 `backend/cache_local/`；仅备份任务注册表不足以恢复原始响应、产物或输入。复制前停止任务写入，按文件核对哈希。发布版本不依赖原任务缓存继续存在，但任务复用依赖完整产物。
 
-开发验证使用工作区根目录 `./scripts/test-local.sh`，前端在 `frontend/` 运行 `npm run build`。离线测试与真实模型调用分别记录；任务完成不代表数据质量已经通过人工或专项验证。
+开发验证使用工作区根目录 `${DATAFLOW_WORKSPACE}/scripts/test-local.sh`，前端在 `frontend/` 运行 `npm run build`。离线测试与真实模型调用分别记录；任务完成不代表数据质量已经通过人工或专项验证。
