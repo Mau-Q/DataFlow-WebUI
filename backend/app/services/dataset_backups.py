@@ -8,6 +8,7 @@ import sqlite3
 import tempfile
 import threading
 import zipfile
+from contextlib import closing
 from datetime import datetime, timezone
 from loguru import logger
 from app.services.dataset_database import DatasetDatabase
@@ -80,7 +81,7 @@ class DatasetBackups:
         records = []
         self.unresolved_external = []
         if database.exists():
-            with sqlite3.connect(f'file:{database}?mode=ro', uri=True) as con:
+            with closing(sqlite3.connect(f'file:{database}?mode=ro', uri=True)) as con:
                 records = [json.loads(r[0]) for r in con.execute('SELECT payload FROM source_datasets')]
         else:
             import yaml
@@ -140,7 +141,8 @@ class DatasetBackups:
                     raise ValueError('Files changed during backup; retry required')
                 self.verify(temporary)
                 # Never copy an open SQLite/WAL file: the DB above is an online backup image.
-                with temporary.open('rb') as handle:
+                # Windows requires a writable descriptor for os.fsync.
+                with temporary.open('r+b') as handle:
                     os.fsync(handle.fileno())
                 target = self.directory / ('snapshot-'+manifest['created_at']+'.zip')
                 os.replace(temporary,target)
@@ -177,7 +179,7 @@ class DatasetBackups:
             if manifest and 'data/datasets.sqlite3' in manifest['files']:
                 raise ValueError('Dataset database is missing')
             return
-        with sqlite3.connect(f'file:{db}?mode=ro',uri=True) as con:
+        with closing(sqlite3.connect(f'file:{db}?mode=ro',uri=True)) as con:
             if con.execute('PRAGMA integrity_check').fetchone()[0]!='ok' or con.execute('PRAGMA foreign_key_check').fetchall():
                 raise ValueError('Dataset database integrity check failed')
             materials = {rid:json.loads(payload) for rid,payload in con.execute('SELECT id,payload FROM materials')}

@@ -1,5 +1,4 @@
 """Shared cross-process dataset transaction lock and durable file replacement."""
-import fcntl
 import functools
 import os
 from pathlib import Path
@@ -7,6 +6,7 @@ import tempfile
 import threading
 from contextlib import contextmanager
 from loguru import logger
+from app.services.platform_lock import exclusive_lock
 
 _LOCKS = {}
 _LOCKS_GUARD = threading.Lock()
@@ -36,17 +36,21 @@ def dataset_lock(root):
             return
         path = Path(key)
         path.parent.mkdir(parents=True, exist_ok=True)
-        with (path.parent / ('.' + path.name + '-datasets.lock')).open('a') as handle:
-            fcntl.flock(handle, fcntl.LOCK_EX)
-            depths[key] = 1
-            try:
-                yield
-            finally:
-                depths.pop(key)
-                fcntl.flock(handle, fcntl.LOCK_UN)
+        with (path.parent / ('.' + path.name + '-datasets.lock')).open('a+') as handle:
+            with exclusive_lock(handle):
+                depths[key] = 1
+                try:
+                    yield
+                finally:
+                    depths.pop(key)
 
 
 def sync_directory(path):
+    # Windows does not allow opening a directory with os.open for fsync.
+    # The file itself is flushed before os.replace; directory fsync is a
+    # Unix-only durability enhancement.
+    if os.name == 'nt':
+        return
     fd = os.open(str(path), os.O_RDONLY)
     try:
         os.fsync(fd)

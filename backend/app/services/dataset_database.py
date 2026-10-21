@@ -187,10 +187,14 @@ class DatasetDatabase:
 
     def backup(self, destination):
         # The SQLite backup API includes committed WAL pages in a consistent image.
-        with self.reading() as source, sqlite3.connect(destination) as target:
-            source.backup(target)
-            if target.execute('PRAGMA integrity_check').fetchone()[0] != 'ok':
-                raise ValueError('SQLite backup integrity check failed')
+        with self.reading() as source:
+            target = sqlite3.connect(destination)
+            try:
+                source.backup(target)
+                if target.execute('PRAGMA integrity_check').fetchone()[0] != 'ok':
+                    raise ValueError('SQLite backup integrity check failed')
+            finally:
+                target.close()
 
 
     def refresh_source_members(self):

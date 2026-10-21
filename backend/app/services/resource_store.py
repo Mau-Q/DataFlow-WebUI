@@ -1,12 +1,12 @@
 """Atomic, locked JSON resource records; always read current disk state."""
 import copy
-import fcntl
 import json
 import os
 import tempfile
 import threading
 from contextlib import contextmanager
 from pathlib import Path
+from app.services.platform_lock import exclusive_lock
 
 
 class ResourceStore:
@@ -25,9 +25,8 @@ class ResourceStore:
 
     @contextmanager
     def writing(self):
-        with self._lock, self.path.with_suffix('.lock').open('a') as handle:
-            fcntl.flock(handle, fcntl.LOCK_EX)
-            try:
+        with self._lock, self.path.with_suffix('.lock').open('a+') as handle:
+            with exclusive_lock(handle):
                 data = self.read()
                 yield data
                 fd, temporary = tempfile.mkstemp(dir=self.path.parent, prefix='.pending-')
@@ -39,8 +38,6 @@ class ResourceStore:
                     os.replace(temporary, self.path)
                 finally:
                     Path(temporary).unlink(missing_ok=True)
-            finally:
-                fcntl.flock(handle, fcntl.LOCK_UN)
 
     def get(self, key):
         return copy.deepcopy(self.read().get(key))

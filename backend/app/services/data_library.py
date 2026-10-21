@@ -4,7 +4,6 @@ Each record is an atomic JSON document. Media are owned copies addressed by UUID
 filenames never determine identity. A process/thread lock serializes mutations.
 """
 import copy
-import fcntl
 import hashlib
 import io
 import json
@@ -21,6 +20,7 @@ from PIL import Image
 from pypdf import PdfReader
 from app.core.config import settings
 from app.schemas.data_library import MaterialMetadata
+from app.services.platform_lock import exclusive_lock
 
 MAX_BYTES = 100 * 1024 * 1024
 MAX_IMPORT_BYTES = 20 * 1024 * 1024
@@ -74,14 +74,11 @@ class DataLibrary:
 
     @contextmanager
     def _writing(self):
-        with dataset_lock(self.root.parent), self._lock, (self.root / '.lock').open('a') as handle:
-            fcntl.flock(handle, fcntl.LOCK_EX)
-            try:
+        with dataset_lock(self.root.parent), self._lock, (self.root / '.lock').open('a+') as handle:
+            with exclusive_lock(handle):
                 with self.db.transaction():
                     yield
                 checkpoint(self.root.parent)
-            finally:
-                fcntl.flock(handle, fcntl.LOCK_UN)
 
     def _atomic(self, path, data):
         path = Path(path)
