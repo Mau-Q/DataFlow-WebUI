@@ -26,12 +26,7 @@
         </div>
     </section>
     <div v-else class="team-shell" :class="{ dark: theme.theme === 'dark' }">
-        <header class="team-bar">
-            <strong>DataFlow</strong>
-            <span class="workspace-name">{{ project?.name || '默认工作区' }}</span>
-            <span class="account">{{ user.name }}</span>
-            <button @click="logout">退出</button>
-        </header>
+        <button v-if="!project || !canDevelop" class="team-standalone-logout" @click="logout">退出</button>
         <main>
             <slot v-if="project && canDevelop" /><TeamWorkspace
                 v-else-if="project"
@@ -81,7 +76,7 @@ onBeforeUnmount(() => window.removeEventListener('dataflow-team-open', onOpen))
 const project = computed(() => user.value.projects.find((p) => p.id === team.project)),
     roles = computed(() => project.value?.roles || []),
     canDevelop = computed(() => roles.value.some((r) => ['manage', 'develop'].includes(r)))
-provide('teamWorkspace', { active: workspace, user, project, selection, show: showWorkspace, refresh: load })
+provide('teamWorkspace', { active: workspace, user, project, selection, show: showWorkspace, refresh: load, logout })
 async function action(fn) {
     busy.value = true
     error.value = ''
@@ -177,28 +172,7 @@ onMounted(async () => {
     display: flex;
     flex-direction: column;
 }
-.team-bar {
-    height: 54px;
-    flex-shrink: 0;
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    padding: 0 22px;
-    border-bottom: 1px solid var(--team-border);
-    background: var(--team-panel);
-}
-.team-bar strong {
-    font-size: 19px;
-    color: var(--team-accent);
-    letter-spacing: -0.5px;
-}
-.team-bar .account {
-    margin-left: auto;
-}
-.team-bar .workspace-name {
-    font-size: 12px;
-    color: var(--team-muted);
-}
+.team-standalone-logout { position: fixed; top: 12px; right: 18px; z-index: 10; }
 .team-shell > main {
     position: relative;
     flex: 1;
@@ -291,5 +265,3 @@ onMounted(async () => {
     color: var(--team-muted);
 }
 </style>
-
-<style>@media(max-width:900px){.team-bar{height:auto;min-height:54px;flex-wrap:wrap;padding:10px 14px;gap:8px}.team-bar .account{margin-left:auto}}</style>

@@ -1,6 +1,7 @@
 <template>
     <div class="manage-container" :class="[{ dark: theme === 'dark' }]">
         <div class="manage-content-block">
+            <aside class="manage-sidebar" :style="{ width: isExpand ? '240px' : '50px' }">
             <fv-navigation-view
                 :theme="theme"
                 v-model="currentNav"
@@ -53,6 +54,14 @@
                     </div>
                 </template>
             </fv-navigation-view>
+            <div v-if="teamWorkspace && teamEnabled" class="sidebar-account" :class="{ compact: !isExpand }">
+                <span v-if="isExpand" class="sidebar-account-name">{{ teamWorkspace.user.value.name }}</span>
+                <button type="button" title="退出登录" aria-label="退出登录" @click="teamWorkspace.logout">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M9 4H4v16h5 M13 8l4 4-4 4 M8 12h13" /></svg>
+                    <span v-if="isExpand">退出</span>
+                </button>
+            </div>
+            </aside>
             <div v-if="teamWorkspace?.active.value" class="team-workspace-content">
                 <TeamWorkspace
                     :user="teamWorkspace.user.value"
@@ -159,6 +168,7 @@ export default {
         }
     },
     computed: {
+        teamEnabled() { return team.enabled },
         navigationOptions() {
             if (!team.enabled) return this.navList
             const items = [...this.navList]
@@ -218,6 +228,30 @@ export default {
     background: rgba(250, 250, 250, 1);
     display: flex;
     flex-direction: column;
+
+    .manage-sidebar {
+        display: flex;
+        flex-direction: column;
+        flex-shrink: 0;
+        min-height: 0;
+        .navigation-view { flex: 1; min-height: 0; height: 0; }
+    }
+    .sidebar-account {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 14px;
+        min-height: 54px;
+        border-top: 1px solid #e0e4ed;
+        color: #67738a;
+        font-size: 13px;
+        .sidebar-account-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+        button { display: flex; align-items: center; gap: 6px; padding: 6px; background: transparent; border: 0; border-radius: 6px; color: inherit; cursor: pointer; font: inherit; }
+        button:hover { color: #535fd6; background: #ebeefd; }
+        svg { width: 17px; height: 17px; }
+        &.compact { padding: 10px 8px; justify-content: center; }
+    }
+    &.dark .sidebar-account { border-color: #394052; color: #a0abc2; button:hover { background: #323c61; color: #b7c0ff; } }
 
     .team-workspace-content {
         flex: 1;

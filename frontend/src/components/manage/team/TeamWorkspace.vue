@@ -23,7 +23,7 @@
         <template v-if="tab === 'sources'">
             <div class="tools">
                 <label
-                    >生成情况<select v-model="filter" @change="loadSources">
+                    >生成情况<select v-model="filter" @change="offset = 0; loadSources()">
                         <option value="">全部来源</option>
                         <option v-for="(name, k) in filters" :key="k" :value="k">{{ name }}</option>
                     </select></label
@@ -637,7 +637,7 @@ const tab = ref(canDevelop.value ? 'sources' : 'reviews'),
     error = ref(''),
     notice = ref(''),
     expanded = ref(''),
-    filter = ref(''),
+    filter = ref('generated'),
     offset = ref(0),
     sources = ref({ items: [], total: 0 }),
     drafts = ref([]),
@@ -1019,7 +1019,7 @@ watch(
     (value) => {
         if (value) {
             tab.value = value.tab || 'reviews'
-            if(value.tab==='sources')expanded.value=value.source||''
+            if(value.tab==='sources'){expanded.value=value.source||'';if(value.source)filter.value=''}
             reviewForm.value.source = value.source || ''
             exportForm.value.source = value.source || ''
             refresh()
