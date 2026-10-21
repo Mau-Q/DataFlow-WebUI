@@ -85,7 +85,7 @@ class TeamStore:
                 raise LibraryError('管理员已初始化', 409)
             uid = 'u_' + secrets.token_hex(12)
             c.execute('INSERT INTO users(id,name,password,admin,preferences) VALUES(?,?,?,1,?)', (uid, name, hashed, json.dumps(preferences)))
-            c.execute('INSERT INTO projects VALUES(?,?,?)', ('default', '历史导入 · 默认项目', str(Path(legacy_root).resolve())))
+            c.execute('INSERT INTO projects VALUES(?,?,?)', ('default', '默认工作区', str(Path(legacy_root).resolve())))
             c.execute('INSERT INTO members(project,user,roles) VALUES(?,?,?)', ('default', uid, 'manage,develop,review'))
             self.audit(c, uid, 'default', 'migration-v1', 'legacy-import')
             return uid

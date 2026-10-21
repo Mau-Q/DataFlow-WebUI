@@ -27,19 +27,10 @@
     </section>
     <div v-else class="team-shell" :class="{ dark: theme.theme === 'dark' }">
         <header class="team-bar">
-            <strong>DataFlow</strong
-            ><select :value="project?.id || ''" aria-label="当前项目" @change="switchProject">
-                <option value="" disabled>选择项目</option>
-                <option v-for="p in user.projects" :key="p.id" :value="p.id">
-                    {{ p.name }}
-                </option></select
-            ><span class="role">{{
-                roles
-                    .map((r) => ({ manage: '管理', develop: '开发', review: '评测' })[r])
-                    .join(' · ')
-            }}</span>
-            <select aria-label="主题" :value="theme.theme" @change="changeTheme"><option value="light">浅色</option><option value="dark">深色</option></select><span class="account">{{ user.name }}</span
-            ><button @click="logout">退出</button>
+            <strong>DataFlow</strong>
+            <span class="workspace-name">{{ project?.name || '默认工作区' }}</span>
+            <span class="account">{{ user.name }}</span>
+            <button @click="logout">退出</button>
         </header>
         <main>
             <slot v-if="project && canDevelop" /><TeamWorkspace
@@ -110,7 +101,6 @@ async function load() {
     theme.reviseTheme(preferences.theme||'light')
     ready.value = true
 }
-async function changeTheme(event){await action(async()=>{const preferences=await request('/api/v1/preferences/');preferences.theme=event.target.value;await request('/api/v1/preferences/',preferences);theme.reviseTheme(preferences.theme)})}
 async function login() {
     await action(async () => {
         const r = await request('/team/login', { name: name.value, password: password.value })
@@ -129,17 +119,6 @@ async function accept() {
         invitation.value = ''
         password.value = ''
         error.value = '账号已设置，请登录。'
-    })
-}
-async function switchProject(event) {
-    if(!canLeave()){event.target.value=team.project;return}
-    if (!window.confirm('切换项目会关闭当前页面，请先保存编辑。是否继续？')) {
-        event.target.value = team.project
-        return
-    }
-    await action(async () => {
-        await request('/team/project', { project: event.target.value })
-        window.location.reload()
     })
 }
 async function logout() {
@@ -216,7 +195,7 @@ onMounted(async () => {
 .team-bar .account {
     margin-left: auto;
 }
-.team-bar .role {
+.team-bar .workspace-name {
     font-size: 12px;
     color: var(--team-muted);
 }
@@ -313,4 +292,4 @@ onMounted(async () => {
 }
 </style>
 
-<style>@media(max-width:900px){.team-bar{height:auto;min-height:54px;flex-wrap:wrap;padding:10px 14px;gap:8px}.team-bar .role{display:none}.team-bar .account{margin-left:auto}}</style>
+<style>@media(max-width:900px){.team-bar{height:auto;min-height:54px;flex-wrap:wrap;padding:10px 14px;gap:8px}.team-bar .account{margin-left:auto}}</style>
