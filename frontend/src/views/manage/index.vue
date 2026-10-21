@@ -96,7 +96,7 @@ export default {
                 { key: 'flow-heading', name: () => this.local('流程'), type: 'header' },
                 {
                     key: 0,
-                    name: () => this.local('DataFlow Hub'),
+                    name: () => this.local('数据工作流'),
                     svg: 'M3 3h6v6H3z M15 15h6v6h-6z M15 3h6v6h-6z M9 6h6 M6 9v9h9',
                     route: '/m/'
                 },
