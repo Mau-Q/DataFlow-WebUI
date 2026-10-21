@@ -81,7 +81,7 @@ class DatasetBackups:
         records = []
         self.unresolved_external = []
         if database.exists():
-            with closing(sqlite3.connect(f'file:{database}?mode=ro', uri=True)) as con:
+            with closing(sqlite3.connect(database.resolve().as_uri() + '?mode=ro', uri=True)) as con:
                 records = [json.loads(r[0]) for r in con.execute('SELECT payload FROM source_datasets')]
         else:
             import yaml
@@ -179,7 +179,7 @@ class DatasetBackups:
             if manifest and 'data/datasets.sqlite3' in manifest['files']:
                 raise ValueError('Dataset database is missing')
             return
-        with closing(sqlite3.connect(f'file:{db}?mode=ro',uri=True)) as con:
+        with closing(sqlite3.connect(db.resolve().as_uri() + '?mode=ro',uri=True)) as con:
             if con.execute('PRAGMA integrity_check').fetchone()[0]!='ok' or con.execute('PRAGMA foreign_key_check').fetchall():
                 raise ValueError('Dataset database integrity check failed')
             materials = {rid:json.loads(payload) for rid,payload in con.execute('SELECT id,payload FROM materials')}

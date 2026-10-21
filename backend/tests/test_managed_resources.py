@@ -261,6 +261,12 @@ def test_both_real_executors_render_frozen_prompt_with_list_bindings(resources, 
     monkeypatch.setattr(OPERATOR_REGISTRY, '_get_all', lambda: None)
     original_get = OPERATOR_REGISTRY.get
     monkeypatch.setattr(OPERATOR_REGISTRY, 'get', lambda name: FixtureGenerator if name == 'FormatStrPromptedGenerator' else original_get(name))
+    # These direct executor calls bypass application startup initialization.
+    # Keep their required working directory local to the test on clean clones.
+    core_dir = tmp_path / 'core'
+    (core_dir / 'api_pipelines').mkdir(parents=True)
+    monkeypatch.setattr(settings, 'DATAFLOW_CORE_DIR', str(core_dir))
+    monkeypatch.chdir(tmp_path)
     input_file = tmp_path / 'input.jsonl'
     input_file.write_text('{"text":"hello"}\n')
     monkeypatch.setattr(container, 'dataset_registry', SimpleNamespace(get=lambda _: {'root':str(input_file)}))
