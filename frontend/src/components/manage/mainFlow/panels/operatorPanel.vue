@@ -1,12 +1,16 @@
 <template>
     <baseDrawer v-model="thisValue" :title="title" length="min(480px, 100vw)" :theme="theme">
         <template #content>
-            <section class="operator-catalog" :class="{ dark: theme === 'dark' }" aria-label="算子库">
+            <section v-if="thisValue" class="operator-catalog" :class="{ dark: theme === 'dark' }" aria-label="算子库">
                 <nav class="catalog-tabs" aria-label="算子类型">
                     <button v-for="item in categories" :key="item.key" type="button"
                         :aria-pressed="category === item.key" :class="{ active: category === item.key }"
                         @click="category = item.key">{{ item.name }}</button>
                 </nav>
+                <div class="catalog-library-tools">
+                    <select v-model="groupFilter" aria-label="算子分组"><option value="">全部分组</option><option v-for="group in availableGroups" :key="group.key" :value="group.key">{{ group.name }}</option></select>
+                    <div class="catalog-shortcuts"><button v-for="item in shortcuts" :key="item.key" :class="{ active: scope === item.key }" :aria-pressed="scope === item.key" @click="scope = item.key">{{ item.label }}</button></div>
+                </div>
                 <div class="catalog-search">
                     <i class="ms-Icon ms-Icon--Search" aria-hidden="true"></i>
                     <input v-model="searchText" type="search" aria-label="搜索算子" :placeholder="local('Search Operators ...')" />
@@ -30,14 +34,19 @@
                                     <span class="operator-kind">{{ typeName(op.type?.level_2) }}</span>
                                     <span class="operator-chevron" aria-hidden="true">{{ expandedOperator === op.label ? '−' : '+' }}</span>
                                 </button>
+                                <div class="operator-actions">
+                                    <button class="favorite-button" :aria-pressed="favorites.includes(op.label)" :aria-label="`${favorites.includes(op.label) ? '取消收藏' : '收藏'} ${op.label}`" @click="toggleFavorite(op)">{{ favorites.includes(op.label) ? '★' : '☆' }}</button>
+                                    <fv-button :theme="theme" :border-radius="6" :aria-label="`添加 ${op.label} 到画布`" @click="addOperator(op)">＋ 添加</fv-button>
+                                </div>
                                 <div v-if="expandedOperator === op.label" class="operator-documentation">
                                     <mdTextBlock :modelValue="op.description || (language === 'cn' ? '暂无说明' : 'No description')" />
+                                    <button class="collapse-description" @click="expandedOperator = ''">收起说明 ↑</button>
                                 </div>
                             </article>
                         </details>
                         <div v-if="!totalVisible" class="catalog-empty" role="status">
                             <p>{{ language === 'cn' ? '没有匹配的算子' : 'No matching operators' }}</p>
-                            <button v-if="searchText || category !== 'all'" @click="searchText = ''; category = 'all'">{{ language === 'cn' ? '清除筛选' : 'Clear filters' }}</button>
+                            <button v-if="searchText || category !== 'all' || groupFilter || scope !== 'all'" @click="searchText = ''; category = 'all'; groupFilter = ''; scope = 'all'">{{ language === 'cn' ? '清除筛选' : 'Clear filters' }}</button>
                         </div>
                     </template>
                 </div>
@@ -54,15 +63,16 @@ import { mapState, mapActions } from 'pinia'
 import { useAppConfig } from '@/stores/appConfig'
 import { useDataflow } from '@/stores/dataflow'
 import { useTheme } from '@/stores/theme'
+import { readWorkspaceState, writeWorkspaceState } from '@/hooks/dataflow/workspaceState'
 import baseDrawer from '@/components/general/baseDrawer.vue'
 import mdTextBlock from '@/components/general/mdTextBlock.vue'
 
 export default {
     components: { baseDrawer, mdTextBlock },
     props: { modelValue: { default: false }, title: { default: '算子库' } },
-    emits: ['update:modelValue'],
+    emits: ['update:modelValue', 'add'],
     data() {
-        return { thisValue: this.modelValue, searchText: '', category: 'all', expandedOperator: '', loading: false, loadError: '' }
+        return { thisValue: this.modelValue, searchText: '', category: 'all', expandedOperator: '', groupFilter: '', scope: 'all', favorites: [], recent: [], loading: false, loadError: '' }
     },
     computed: {
         ...mapState(useAppConfig, ['local', 'language']),
@@ -70,24 +80,33 @@ export default {
         ...mapState(useTheme, ['theme']),
         categories() {
             return [['all', 'All'], ['filter', 'Filter'], ['generate', 'Generate'], ['eval', 'Evaluate'], ['refine', 'Refine']]
-                .map(([key, name]) => ({ key, name: this.local(name) }))
+                .map(([key, name]) => ({ key, name: key === 'refine' && this.language === 'cn' ? '改写与整理' : this.local(name) }))
         },
+        shortcuts() { return [{key:'all',label:'全部'}, {key:'recent',label:'最近'}, {key:'favorites',label:'收藏'}] },
+        availableGroups() { return Object.values(this.groupOperators).map(({key,name}) => ({key,name})) },
+        libraryPreferences() { return { searchText: this.searchText, category: this.category, groupFilter: this.groupFilter, scope: this.scope, favorites: this.favorites, recent: this.recent } },
         visibleGroups() {
             const query = this.searchText.trim().toLowerCase()
-            return Object.values(this.groupOperators).map(group => ({ ...group, items: group.items.filter(op => {
+            return Object.values(this.groupOperators).filter(group => !this.groupFilter || group.key === this.groupFilter).map(group => ({ ...group, items: group.items.filter(op => {
                 const type = op.type?.level_2 || ''
-                return (this.category === 'all' || type === this.category) &&
+                return (this.scope === 'all' || (this.scope === 'favorites' ? this.favorites : this.recent).includes(op.label)) && (this.category === 'all' || type === this.category) &&
                     (!query || [op.label, op.name, op.status, op.type?.level_1, type, this.typeName(type), op.description]
                         .some(value => String(value || '').toLowerCase().includes(query)))
-            }) })).filter(group => group.items.length)
+            }) })).map(group => ({ ...group, items: this.scope === 'recent' ? group.items.slice().sort((a,b) => this.recent.indexOf(a.label) - this.recent.indexOf(b.label)) : group.items })).filter(group => group.items.length)
         },
         totalVisible() { return this.visibleGroups.reduce((total, group) => total + group.items.length, 0) }
     },
     watch: {
+        libraryPreferences: { deep: true, handler(value) { writeWorkspaceState('operator-library', value) } },
         modelValue(value) { this.thisValue = value; if (value) this.loadOperators() },
         thisValue(value) { this.$emit('update:modelValue', value) }
     },
-    mounted() { if (this.modelValue) this.loadOperators() },
+    mounted() {
+        const saved = readWorkspaceState('operator-library', {})
+        for (const key of ['searchText','category','groupFilter','scope']) if (typeof saved[key] === 'string') this[key] = saved[key]
+        for (const key of ['favorites','recent']) if (Array.isArray(saved[key])) this[key] = saved[key].filter(value => typeof value === 'string')
+        if (this.modelValue) this.loadOperators()
+    },
     methods: {
         ...mapActions(useDataflow, ['getOperators']),
         async loadOperators() {
@@ -97,6 +116,9 @@ export default {
             catch (error) { this.loadError = this.language === 'cn' ? '算子加载失败，请重试。' : 'Unable to load operators. Please retry.' }
             finally { this.loading = false }
         },
+        rememberOperator(op) { this.recent = [op.label, ...this.recent.filter(name => name !== op.label)].slice(0, 12) },
+        toggleFavorite(op) { this.favorites = this.favorites.includes(op.label) ? this.favorites.filter(name => name !== op.label) : [...this.favorites, op.label] },
+        addOperator(op) { this.rememberOperator(op); this.$emit('add', op); this.thisValue = false },
         typeName(type) {
             const names = { filter: 'Filter', generate: 'Generate', eval: 'Evaluate', refine: 'Refine', parser: 'Parser' }
             return names[type] ? this.local(names[type]) : (this.language === 'cn' ? '自定义' : 'Custom')
@@ -107,6 +129,7 @@ export default {
         },
         toggleDetails(op) { this.expandedOperator = this.expandedOperator === op.label ? '' : op.label },
         dragStart(event, item) {
+            this.rememberOperator(item)
             if (event.dataTransfer) {
                 event.dataTransfer.effectAllowed = 'copy'
                 event.dataTransfer.setData('application/vueflow', JSON.stringify(item))
@@ -159,6 +182,10 @@ export default {
         &:hover { background: var(--catalog-hover); }
     }
 }
+.catalog-library-tools { display:flex; gap:10px; justify-content:space-between; align-items:center; flex-wrap:wrap; flex-shrink:0; select { flex:1; min-width:100px; max-width:200px; border:1px solid var(--catalog-border); border-radius:6px; padding:6px; background:var(--catalog-panel); color:inherit; font:inherit; font-size:12px; } }
+.catalog-shortcuts { display:flex; gap:3px; button { border:0; border-radius:5px; padding:6px 8px; background:transparent; color:var(--catalog-muted); font-size:12px; &.active { color:var(--catalog-accent); background:var(--catalog-hover); } } }
+.operator-actions { display:flex; justify-content:flex-end; gap:8px; align-items:center; padding:0 6px 8px; .favorite-button { border:0; background:transparent; color:var(--catalog-accent); padding:4px 7px; font-size:20px; line-height:1; } .fv-button { height:26px; min-width:70px; font-size:11px; } }
+.collapse-description { margin-top:12px; border:0; background:transparent; color:var(--catalog-accent); padding:4px 0; font-size:12px; }
 .catalog-search {
     display: flex;
     align-items: center;

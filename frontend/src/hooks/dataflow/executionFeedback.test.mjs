@@ -15,9 +15,9 @@ function harness(status,{switchTask=false}={}) {
         $barWarning:(...args)=>notices.push(args),local:x=>x}
     return {state,notices,cleared,watch:reveal=>watchExecution.call(state,reveal),tick:()=>tick()}
 }
-test('completion opens the matching final-result panel without collecting data',async()=>{
+test('completion retains the matching result action without opening a modal',async()=>{
     const h=harness('completed');h.watch();await h.tick()
-    assert.equal(h.state.historyTaskId,'new-task');assert.equal(h.state.show.taskPanel,true)
+    assert.equal(h.state.historyTaskId,'new-task');assert.equal(h.state.show.taskPanel,false)
     assert.equal(h.state.lock.running,true);assert.equal(h.notices.length,1);assert.equal(h.cleared.at(-1),7)
 })
 test('viewing a historical flow does not reopen the results panel',async()=>{
@@ -35,7 +35,11 @@ test('completion reports automatic collection from the lightweight status respon
     const h=harness('completed');h.state.execution.auto_collection={status:'collected'}
     h.watch();await h.tick();assert(h.notices[0][0].includes('已自动收录'));assert.equal(h.notices[0][1].status,'correct')
 })
-test('database errors show a warning while still opening the generated result',async()=>{
+test('collection errors show a warning while preserving the inline result action',async()=>{
     const h=harness('completed');h.state.execution.auto_collection={status:'failed'}
-    h.watch();await h.tick();assert.equal(h.notices[0][1].status,'warning');assert.equal(h.state.show.taskPanel,true)
+    h.watch();await h.tick();assert.equal(h.notices[0][1].status,'warning');assert.equal(h.state.show.taskPanel,false)
+})
+
+test('poll failures retain the last known execution and keep the task retryable',async()=>{
+ const h=harness('running');h.state.getExecution=async()=>{throw Error('offline')};h.watch();await h.tick();assert.equal(h.state.execution.status,'running');assert(h.state.pollError.includes('继续重试'));assert.equal(h.state.lock.running,false);assert.equal(h.notices.length,0)
 })

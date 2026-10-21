@@ -2,7 +2,7 @@
     <div class="df-main-flow-container">
         <VueFlow class="main-flow" :id="id" v-model:nodes="thisNodes" v-model:edges="thisEdges" @dragover="dragOver"
             @drop="drop" @dragleave="dragLeave" @connect="$emit('edited');$emit('connect', $event)"
-            @node-drag-stop="$emit('edited')" @edges-change="changes => {if(changes.some(c=>c.type==='remove'))$emit('edited')}"
+            @move-end="$emit('viewport-change')" @node-drag-stop="$emit('edited')" @edges-change="changes => {if(changes.some(c=>c.type==='remove'))$emit('edited')}"
             @connect-end="$emit('connect-end', $event)" @connect-start="$emit('connect-start', $event)"
             @node-click="selectOperator" @nodes-initialized="$emit('nodes-ready')">
             <Background variant="dots" gap="20" size="3" :color="'rgba(200, 200, 200, 0.3)'" :style="{
@@ -38,7 +38,7 @@
 </template>
 
 <script setup>
-import { ref, watch, computed, onDeactivated } from 'vue'
+import { ref, watch, computed, onDeactivated, nextTick } from 'vue'
 import { VueFlow, useVueFlow } from '@vue-flow/core'
 import { useGlobal } from '@/hooks/general/useGlobal'
 import { useTheme } from '@/stores/theme'
@@ -59,6 +59,7 @@ const _theme = useTheme()
 const theme = computed(() => _theme.theme)
 const emits = defineEmits([
     'edited',
+    'viewport-change',
     'switch-database',
     'nodes-ready',
     'update:nodes',
@@ -159,34 +160,30 @@ const dragOver = (event) => {
     event.preventDefault()
     isDragOver.value = true
 }
+const addOperator = async (data, position = null) => {
+    const existing = canvasFlow.nodes.value || thisNodes.value
+    const last = existing.at(-1)
+    const node = {
+        id: $Guid(), type: 'operator-node',
+        position: position || { x: last ? last.position.x + 320 : 280, y: last?.position.y || 160 },
+        data: { ...JSON.parse(JSON.stringify(data)), flowId: props.id, enableDelete: true }
+    }
+    canvasFlow.addNodes(node)
+    emits('edited')
+    await nextTick()
+    if (!position) inspectOperator(node.id)
+    return node.id
+}
 const drop = (event) => {
     event.preventDefault()
-    let data = event.dataTransfer.getData('application/vueflow')
-    let offsetX = event.dataTransfer.getData('event/offsetX')
-    if (!data) return
-    data = JSON.parse(data)
-    data.enableDelete = true
-    const flow = useVueFlow(props.id)
-    const { screenToFlowCoordinate } = useVueFlow(props.id)
-    const position = screenToFlowCoordinate({
-        x: event.clientX - offsetX,
-        y: event.clientY - 30
-    })
-    const newNode = {
-        id: $Guid(),
-        type: 'operator-node',
-        position: position,
-        data: {
-            flowId: props.id,
-            ...data
-        }
-    }
-    flow.addNodes(newNode)
-    emits('edited')
-    console.log(data)
-
-    isDragOver.value = false
+    const raw = event.dataTransfer.getData('application/vueflow')
+    if (!raw) return
+    try {
+        const position = canvasFlow.screenToFlowCoordinate({ x: event.clientX - Number(event.dataTransfer.getData('event/offsetX') || 0), y: event.clientY - 30 })
+        addOperator(JSON.parse(raw), position)
+    } finally { isDragOver.value = false }
 }
+defineExpose({ addOperator, inspectOperator, closeInspector })
 const dragLeave = (event) => {
     event.preventDefault()
     isDragOver.value = false

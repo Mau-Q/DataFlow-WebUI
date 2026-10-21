@@ -1,5 +1,5 @@
 <template>
-    <div class="df-flow-default-node" :class="[{ 'dark': theme === 'dark' }, { selected: selected }, { compact: thisData.compact }]" :style="{
+    <div class="df-flow-default-node" :class="[{ 'dark': theme === 'dark' }, { selected: selected }, { compact: thisData.compact }, { 'has-validation-error': thisData.validationError }]" :style="{
         '--node-background': thisData.background,
         '--node-icon-color': thisData.iconColor,
         '--node-border-color': thisData.borderColor,
@@ -123,6 +123,7 @@ const y = computed(() => `${Math.round(props.position.y)}px`)
 
 <style lang="scss">
 .df-flow-default-node {
+    &.has-validation-error { outline:2px solid #d98a51; outline-offset:3px; }
     --node-background: rgba(252, 252, 252, 0.8);
     --node-title-color: rgba(100, 108, 126, 1);
     --node-status-color: rgba(168, 170, 176, 1);

@@ -37,6 +37,7 @@ def _param_to_dict(p: inspect.Parameter) -> Dict[str, Any]:
     return {
         "name": p.name,
         "default_value": _safe_json_val(p.default),
+        "required": p.default is inspect.Parameter.empty and p.kind not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD),
         "kind": p.kind.name,
     }
 

@@ -90,6 +90,7 @@ async function action(fn) {
 }
 async function load() {
     user.value = await request('/team/me')
+    team.viewer = user.value.id
     team.csrf = user.value.csrf
     team.project = user.value.project || ''
     const preferences=await request('/api/v1/preferences/')

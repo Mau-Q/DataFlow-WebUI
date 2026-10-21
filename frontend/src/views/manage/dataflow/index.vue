@@ -5,7 +5,7 @@
             :before-change="confirmCanvasChange" :flow-id="flowId" class="df-pipeline-container" @confirm-dataset="confirmDataset($event, true)"
             @select-pipeline="selectPipelineCallback"></pipeline>
         <div class="df-flow-container">
-            <mainFlow @edited="markCanvasEdited" :id="flowId" v-model:nodes="nodes" v-model:edges="edges" @switch-database="openInputSettings"
+            <mainFlow ref="canvas" @viewport-change="scheduleWorkspaceSave" @edited="markCanvasEdited" :id="flowId" v-model:nodes="nodes" v-model:edges="edges" @switch-database="openInputSettings"
                 @connect="onConnect" @connect-start="onConnectStart" @connect-end="onConnectEnd"
                 @update-run-value="useEdgeSync.syncRunValue($event, flowId)" @show-details="showExecDetails"
                 @download-data="downloadData" @nodes-ready="fitPlatformWhenReady" @click="show.pipeline = false">
@@ -61,10 +61,11 @@
                         <i v-show="false" class="ms-Icon"
                             :class="[`ms-Icon--${currentServing ? 'DialShape4' : 'More'}`]"></i>
                     </fv-button>
+                    <fv-button :theme="theme" border-radius="6" style="width:86px;height:30px" @click="inspectPreflight">检查配置</fv-button>
                     <fv-button theme="dark"
                         background="rgba(69, 98, 213, 1)"
                         foreground="rgba(255, 255, 255, 1)" border-color="rgba(255, 255, 255, 0.3)"
-                        border-radius="6" :disabled="!currentPipeline || runPreparing || !lock.running" :reveal-background-color="[
+                        border-radius="6" :disabled="(!currentPipeline && !nodes.some(n => n.type === 'operator-node')) || runPreparing || !lock.running" :reveal-background-color="[
                             'rgba(255, 255, 255, 0.5)',
                             'rgba(103, 105, 251, 0.6)'
                         ]" style="width: 120px;" @click="openRunConfirm">
@@ -88,10 +89,17 @@
 
                 </div>
             </div>
+            <section v-if="showPreflight" class="canvas-preflight" :class="{ dark: theme === 'dark' }" aria-label="运行前检查">
+                <header><strong>{{ preflightIssues.length ? `需要处理 ${preflightIssues.length} 项配置` : '配置检查通过' }}</strong><button @click="showPreflight = false" aria-label="关闭配置检查">×</button></header>
+                <p v-if="!preflightIssues.length">输入、节点连接与已知必填参数检查通过，运行时仍由后端校验。</p>
+                <button v-for="(issue,index) in preflightIssues" :key="index" class="preflight-issue" @click="focusIssue(issue)"><span>{{ issue.name }}</span>{{ issue.message }} →</button>
+            </section>
+            <ExecutionProgress v-if="executionInfo.task_id" :task-id="executionInfo.task_id" :execution="currentExecution" :theme="theme" :poll-error="pollError" :stopping="stopping"
+                @resize="fitExecutionView" @focus-step="focusExecutionStep" @result="openExecutionResult" @stop="stopExecution" @refresh="refreshExecution" />
         </div>
         <page-loading :model-value="!lock.loading" title="Loading..."></page-loading>
         <datasetPanel v-model="show.dataset" :title="local('原始数据集')" @confirm="confirmDataset"></datasetPanel>
-        <operatorPanel v-model="show.operator" :title="local('Operator')"></operatorPanel>
+        <operatorPanel v-model="show.operator" :title="local('Operator')" @add="addOperator"></operatorPanel>
         <fv-right-menu :theme="theme" v-model="show.serving" class="serving-menu" ref="servingMenu"
             :rightMenuWidth="250" :background="theme === 'dark' ? 'rgba(30, 30, 30, 1)' : 'rgba(255, 255, 255, 0.3)'"
             :fullExpandAnimation="true" style="z-index: 6">
@@ -139,6 +147,10 @@ import { useEdgeSync } from '@/hooks/dataflow/useEdgeSync'
 import { usePipelineOperation } from '@/hooks/dataflow/usePipelineOperation'
 import { nativeMMGraph, readNativeMM } from '@/hooks/dataflow/nativeMM'
 import { buildSnakeLayout } from '@/hooks/dataflow/useAutoLayout'
+import { checkPipeline } from '@/hooks/dataflow/preflight'
+import { readWorkspaceState, writeWorkspaceState } from '@/hooks/dataflow/workspaceState'
+import { terminalStatuses } from '@/hooks/dataflow/executionProgress'
+import ExecutionProgress from '@/components/manage/mainFlow/panels/ExecutionProgress.vue'
 
 import mainFlow from '@/components/manage/mainFlow/index.vue'
 import pipeline from '@/components/manage/mainFlow/pipeline/index.vue'
@@ -163,12 +175,13 @@ import http from 'axios'
 export default {
     setup(){
         const state=useVueFlow('df-main-flow')
-        useUnsavedChanges(vm=>vm.canvasDirty,vm=>{vm.canvasBaseline='';vm.canvasEdited=false})
+        useUnsavedChanges(vm=>vm.canvasDirty && !vm.persistWorkspace(),vm=>{vm.canvasBaseline='';vm.canvasEdited=false})
         return {canvasNodes:()=>state.nodes.value,canvasEdges:()=>state.edges.value}
     },
     name: "dataflowPage",
     components: {
         mainFlow,
+        ExecutionProgress,
         pipeline,
         pipelinePanel,
         datasetPanel,
@@ -182,6 +195,7 @@ export default {
     data() {
         return {
             flowId: 'df-main-flow', canvasBaseline:'', canvasEdited:false,
+            showPreflight:false, preflightLoading:false, pollError:'', stopping:false, uiSaveTimer:null, workspaceRestoring:false, viewportRestored:false, workspaceNotice:'',
             historyTaskId: '',
             mmRecord: null,
             platformFitKey: '',
@@ -275,6 +289,10 @@ export default {
         }
     },
     watch: {
+        preflightIssues() { this.syncValidationErrors() },
+        showPreflight() { this.syncValidationErrors() },
+        canvasFingerprint() { this.scheduleWorkspaceSave() },
+        'executionInfo.task_id'() { this.scheduleWorkspaceSave() },
         'show.pipelinePanel'(visible) { if (!visible) this.pendingRun = false },
         $route(to, from) {
             if (to.path.replace(/\/$/, '') !== '/m') return
@@ -284,7 +302,7 @@ export default {
         },
         sourceDatabase: {
             handler(newVal, oldVal) {
-                if (newVal !== oldVal) {
+                if (newVal !== oldVal && !this.workspaceRestoring) {
                     this.updateDatabaseNode()
                 }
             },
@@ -292,7 +310,7 @@ export default {
         },
         currentPipeline() {
             this.getTasks()
-            this.clearExecution()
+            if (!this.workspaceRestoring) { clearInterval(this.timer.exec); this.executionInfo.task_id = null; this.clearExecution(); this.lock.running = true }
         },
         isAutoConnection(val) {
             if (val) {
@@ -302,6 +320,8 @@ export default {
 
     },
     computed: {
+        currentExecution() { return this.execution.task_id === this.executionInfo.task_id ? this.execution : {} },
+        preflightIssues() { return checkPipeline(this.canvasNodes(), this.canvasEdges(), this.sourceDatabase) },
         canvasFingerprint(){
             const nodes=this.canvasNodes(),edges=this.canvasEdges()
             return JSON.stringify([this.sourceDatabase?.id,nodes.map(n=>({id:n.id,type:n.type,position:{x:n.position.x,y:n.position.y},params:Object.fromEntries(['init','run'].map(kind=>[kind,(n.data?.operatorParams?.[kind] || []).map(p=>({name:p.name,value:p.value}))]))})).sort((a,b)=>a.id.localeCompare(b.id)),edges.map(e=>({source:e.source,target:e.target,sourceHandle:e.sourceHandle,targetHandle:e.targetHandle})).sort((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b)))])
@@ -370,11 +390,113 @@ export default {
         if (this.$route.query.task) this.openTaskHistory(this.$route.query.task)
         else if (this.$route.query.workflow) this.loadPlatformWorkflow()
         else if (this.$route.query.pipeline) this.loadLinkedPipeline(this.$route.query.pipeline)
+        else this.restoreWorkspace()
+        window.addEventListener('pagehide', this.persistWorkspace)
     },
+    activated() { if (this.executionInfo.task_id) this.watchExecution(false) },
+    deactivated() { this.persistWorkspace(); clearInterval(this.timer.exec) },
     beforeUnmount() {
-        // 兜底清理拖拽监听，避免组件销毁后仍挂在 window 上
+        this.persistWorkspace()
+        clearInterval(this.timer.exec); clearTimeout(this.uiSaveTimer)
+        window.removeEventListener('pagehide', this.persistWorkspace)
     },
     methods: {
+        scheduleWorkspaceSave() { if (this.workspaceRestoring || this.loadingPlatform || this.loadingLinkedPipeline) return; clearTimeout(this.uiSaveTimer); this.uiSaveTimer = setTimeout(() => this.persistWorkspace(), 600) },
+        persistWorkspace() {
+            if (this.workspaceRestoring || this.isMM || this.loadingPlatform || this.loadingLinkedPipeline) return
+            const flow = useVueFlow(this.flowId)
+            const nodes = flow.nodes.value.map(node => ({id:node.id,type:node.type,position:node.position,data:Object.fromEntries(Object.entries(node.data || {}).filter(([key]) => !['operatorLogs','operator_logs','loading','parameterLoading','parameterError','validationError'].includes(key)))}))
+            return writeWorkspaceState('canvas', { nodes, edges:flow.edges.value.map(edge=>({id:edge.id,source:edge.source,target:edge.target,sourceHandle:edge.sourceHandle,targetHandle:edge.targetHandle,type:edge.type,data:edge.data})), sourceId:this.sourceDatabase?.id,
+                pipeline:this.currentPipeline, taskId:this.executionInfo.task_id, viewport:flow.viewport.value, dirty:this.canvasDirty, route:this.$route.fullPath })
+        },
+        async restoreWorkspace() {
+            const saved = readWorkspaceState('canvas')
+            if (!saved?.nodes?.length && !saved?.taskId) { await this.$nextTick(); this.markCanvasSaved(); return }
+            this.workspaceRestoring = true
+            try {
+                await Promise.all([this.getDatasets(), this.getOperators('zh')])
+                if (saved.pipeline?.id) {
+                    const response = await this.$api.pipelines.get_pipeline(saved.pipeline.id)
+                    if (!response.success) throw new Error('保存的流程已不可用，请重新选择。')
+                }
+                this.currentPipeline = saved.pipeline || null
+                this.sourceDatabase = this.datasets.find(dataset => dataset.id === saved.sourceId) || null
+                const flow = useVueFlow(this.flowId)
+                flow.$reset(); await this.$nextTick()
+                flow.addNodes(saved.nodes.map(node => ({...node,data:{...node.data,flowId:this.flowId}})))
+                flow.addEdges(saved.edges || [])
+                if (saved.viewport) { flow.setViewport(saved.viewport); this.viewportRestored = true }
+                await this.$nextTick()
+                this.markCanvasSaved()
+                if (saved.dirty) { this.canvasBaseline = 'recovered-draft'; this.canvasEdited = true; this.$barWarning('已恢复本机未保存的流程草稿。', {status:'correct'}) }
+                if (saved.taskId) {
+                    this.executionInfo.task_id = saved.taskId
+                    this.lock.running = false
+                    await this.refreshExecution()
+                    if (!terminalStatuses.has(this.currentExecution.status)) this.watchExecution(false)
+                }
+            } catch (error) { this.$barWarning(error.message || '无法恢复本地流程，请重新选择。', {status:'warning'}) }
+            finally { this.workspaceRestoring = false }
+        },
+        async addOperator(operator) {
+            const nodeId = await this.$refs.canvas.addOperator(operator)
+            await this.autoLayoutPipeline()
+            this.$refs.canvas.inspectOperator(nodeId)
+        },
+        syncValidationErrors() {
+            const ids = new Set(this.showPreflight ? this.preflightIssues.map(issue => issue.nodeId) : [])
+            const flow = useVueFlow(this.flowId)
+            for (const node of flow.nodes.value) if (!!node.data.validationError !== ids.has(node.id)) flow.updateNodeData(node.id, {validationError:ids.has(node.id)})
+        },
+        async inspectPreflight() {
+            this.showPreflight = true
+            if (this.preflightLoading) return
+            this.preflightLoading = true
+            const flow = useVueFlow(this.flowId), requests = new Map()
+            try {
+                await Promise.all(flow.nodes.value.filter(node => node.type === 'operator-node' && node.data.operatorParams).map(async node => {
+                    const name = node.data.name
+                    if (!requests.has(name)) requests.set(name,this.$api.operators.get_operator_detail_by_name(name))
+                    const response = await requests.get(name)
+                    if (response.code !== 200) return
+                    const metadata = response.data?.parameter || {}
+                    const current = flow.findNode(node.id)
+                    if (!current || current.data.name !== name) return
+                    const params = Object.fromEntries(['init','run'].map(kind=>[kind,(current.data.operatorParams[kind] || []).map(param=>({...param,required:(metadata[kind] || []).find(item=>item.name===param.name)?.required ?? param.required}))]))
+                    flow.updateNodeData(node.id, {operatorParams:params})
+                }))
+            } catch (error) { this.$barWarning('部分参数定义暂时无法更新，运行时仍会再次校验。', {status:'warning'}) }
+            finally { this.preflightLoading = false }
+        },
+        focusIssue(issue) {
+            if (issue.kind === 'input') { this.openInputSettings(); return }
+            if (!issue.nodeId) { if(issue.kind==='operator')this.show.operator = true; return }
+            this.focusCanvasNode(issue.nodeId)
+        },
+        focusCanvasNode(id) {
+            const flow = useVueFlow(this.flowId), node = flow.findNode(id)
+            if (!node) return
+            flow.setCenter(node.position.x + 130, node.position.y + 60, {zoom:Math.max(flow.viewport.value.zoom,0.85),duration:250})
+            this.$refs.canvas?.inspectOperator(id)
+        },
+        async fitExecutionView() {
+            await this.$nextTick()
+            await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+            const flow=useVueFlow(this.flowId)
+            if(flow.nodes.value.length)flow.fitView({padding:0.18,minZoom:0.15,maxZoom:1.1,duration:200})
+        },
+        focusExecutionStep(step) {
+            const nodes = this.canvasNodes().filter(node => node.type === 'operator-node')
+            const node = nodes.find(node => node.data.pipeline_idx === step.index + 1 && node.data.name === step.name)
+            if (node) this.focusCanvasNode(node.id)
+        },
+        openExecutionResult() { this.historyTaskId = this.executionInfo.task_id; this.show.taskPanel = true },
+        async refreshExecution() {
+            const taskId = this.executionInfo.task_id
+            if (!taskId) return
+            try { await this.getExecution(taskId); if(taskId===this.executionInfo.task_id){this.pollError='';this.lock.running=terminalStatuses.has(this.execution.status)} }
+            catch(error) { if(taskId===this.executionInfo.task_id)this.pollError='状态更新失败，将继续重试；当前显示上次状态。' }
+        },
         async confirmCanvasChange(){if(!this.canvasDirty)return true;if(!await confirmDiscard(this))return false;this.canvasBaseline='';this.canvasEdited=false;return true},
         markCanvasEdited(){if(this.lock.loading && !this.loadingLinkedPipeline && !this.loadingPlatform)this.canvasEdited=true},
         markCanvasSaved(){this.canvasBaseline=this.canvasFingerprint;this.canvasEdited=false},
@@ -384,11 +506,12 @@ export default {
                 const task = await this.platformRequest('get', `/tasks/execution/${encodeURIComponent(taskId)}/final-result`)
                 if (this.$route.query.task !== taskId) return
                 if (task.pipeline_id) await this.loadLinkedPipeline(task.pipeline_id)
+                await this.handleWatchExecution({task_id:taskId})
                 this.show.taskPanel = true
             } catch (e) { this.$barWarning(e.message, {status: 'error'}) }
         },
         async fitPlatformWhenReady() {
-            if (!this.currentPipeline && !this.isMM) return
+            if (this.workspaceRestoring || this.viewportRestored || (!this.currentPipeline && !this.isMM)) return
             const flow = useVueFlow(this.flowId)
             const count = this.isMM ? this.mmRecord?.config.steps.length : this.currentPipeline?.config?.operators.length
             const inputNodes = flow.findNode('db-node') ? 1 : 0
@@ -636,6 +759,7 @@ export default {
             results.forEach((node) => {
                 if (node.id === 'db-node') return
                 let oriNode = flow.findNode(node.id)
+                flow.updateNodeData(oriNode.id, { pipeline_idx: nodeOperators.length + 1 })
                 nodeOperators.push({
                     name: oriNode.data.name,
                     params: oriNode.data.operatorParams,
@@ -808,7 +932,9 @@ export default {
                 .then((data) => ({code: 200, data}))
                 .then((res) => {
                     if (res.code === 200) {
+                        this.clearExecution()
                         this.executionInfo.task_id = res.data.task_id
+                        this.refreshExecution()
                         this.watchExecution()
                         this.$barWarning(this.local('Pipeline has been executed'), {
                             status: 'correct'
@@ -834,6 +960,8 @@ export default {
             if (this.isMM) { this.$barWarning('图片流程当前未启用运行', {status:'warning'}); return }
             this.runPreparing = true
             try {
+                await this.inspectPreflight()
+                if (this.preflightIssues.length) { this.focusIssue(this.preflightIssues[0]); return }
                 const saved = await this.handleSaveClick()
                 if (saved) this.show.runConfirm = true
                 else if (this.show.pipelinePanel) this.pendingRun = true
@@ -887,6 +1015,7 @@ export default {
             this.clearExecution()
             this.executionInfo.task_id = null
             this.show.pipeline = false
+            this.viewportRestored = false
             await this.$nextTick()
             await this.autoLayoutPipeline()
             this.markCanvasSaved()
@@ -939,17 +1068,28 @@ export default {
             }
         },
         async handleWatchExecution({ task_id }) {
+            if (!await this.confirmCanvasChange()) return
             this.executionInfo.task_id = task_id
-            await this.getExecution(this.executionInfo.task_id)
-            await this.selectExecutionPipeline(this.execution.pipeline_config)
-            this.watchExecution(false)
+            this.lock.running = false
+            try {
+                await this.getExecution(task_id)
+                if(this.executionInfo.task_id !== task_id)return
+                await this.selectExecutionPipeline(this.execution.pipeline_config)
+                await this.autoLayoutPipeline()
+                this.markCanvasSaved()
+                this.lock.running = terminalStatuses.has(this.execution.status)
+            } catch(error) { this.pollError = '暂时无法加载任务详情，将继续重试。' }
+            finally { if(this.executionInfo.task_id === task_id)this.watchExecution(false) }
         },
         watchExecution(revealResult = true) {
             if (!this.executionInfo.task_id) return
             const taskId = this.executionInfo.task_id
             clearInterval(this.timer.exec)
+            let fetching = false
             this.timer.exec = setInterval(async () => {
-                await this.getExecution(taskId)
+                if(fetching)return
+                fetching = true
+                try { await this.getExecution(taskId); this.pollError = '' } catch(error) { this.pollError = '状态更新失败，将继续重试；当前显示上次状态。'; return } finally { fetching = false }
                 if (this.executionInfo.task_id !== taskId) return
                 this.lock.running = false
                 if (this.execution.status === 'completed') {
@@ -957,9 +1097,8 @@ export default {
                     this.lock.running = true
                     if (revealResult) {
                         this.historyTaskId = taskId
-                        this.show.taskPanel = true
                         const collection = this.execution.auto_collection
-                        this.$barWarning(collection?.status === 'collected' ? '运行完成，已自动收录到生成数据集。' : '运行完成，最终结果已打开；自动收录状态见结果面板。', {status: collection?.status === 'failed' ? 'warning' : 'correct'})
+                        this.$barWarning(collection?.status === 'collected' ? '运行完成，已自动收录到生成数据集。' : '运行完成，可在底部查看结果、收录或下载。', {status: collection?.status === 'failed' ? 'warning' : 'correct'})
                     }
                 } else if (this.execution.status === "cancelled") {
                     clearInterval(this.timer.exec)
@@ -969,7 +1108,7 @@ export default {
                     this.lock.running = true
                     this.$barWarning(
                         this.local(
-                            'Pipeline execution failed:' + JSON.stringify(this.execution.output)
+                            'Pipeline execution failed:' + (Object.values(this.execution.operators_detail || {}).find(step=>step.error)?.error || '请在底部运行面板查看失败步骤与日志。')
                         ),
                         {
                             status: 'error',
@@ -982,20 +1121,21 @@ export default {
         stopExecution() {
             if (!this.currentPipeline || !this.currentPipeline.config) return
             if (!this.executionInfo.task_id) return
-            if (this.execution.status !== 'running') {
+            if (!['running','pending','queued','initializing'].includes(this.execution.status)) {
                 this.$barWarning(this.local('Pipeline execution not running'), {
                     status: 'warning'
                 })
                 return
             }
+            this.stopping = true
             this.$api.tasks.kill_execution(this.executionInfo.task_id).then((res) => {
                 if (res.code === 200) {
-                    this.lock.running = true
+                    this.refreshExecution()
                     this.$barWarning(this.local('Pipeline execution stopped'), {
                         status: 'correct'
                     })
                 }
-            })
+            }).catch(error=>this.$barWarning(error.message || '停止失败，请重试', {status:'error'})).finally(()=>{this.stopping=false})
         },
         onConnect(connection) {
             if (this.isMM) { this.$barWarning('MM 模板步骤顺序固定，请在参数面板修改字段绑定', {status:'warning'}); return }
@@ -1321,3 +1461,7 @@ export default {
 </style>
 
 <style scoped>.wizard-return{position:absolute;top:12px;right:24px;z-index:20;background:white;padding:8px 16px;border-radius:8px;color:#4e5bd5}</style>
+
+<style scoped>
+.canvas-preflight{position:absolute;top:108px;left:16px;z-index:4;width:min(420px,calc(100% - 32px));max-height:45%;overflow:auto;padding:14px;background:#fafafa;border:1px solid #e0e4ed;border-radius:8px;box-shadow:0 4px 18px #26304714;color:#39465d;font-size:12px}.canvas-preflight.dark{background:#242424;color:#dce1ed;border-color:#3d414b}.canvas-preflight header{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}.canvas-preflight header button{background:transparent;border:0;color:inherit;font-size:20px;cursor:pointer}.canvas-preflight p{line-height:1.7;color:#78849a}.preflight-issue{display:block;width:100%;padding:9px 0;text-align:left;border:0;border-top:1px solid #80808022;background:transparent;color:inherit;cursor:pointer;line-height:1.6;font:inherit}.preflight-issue span{display:block;font-weight:600;color:#b36c36}
+</style>

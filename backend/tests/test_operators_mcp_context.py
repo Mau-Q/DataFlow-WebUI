@@ -105,3 +105,15 @@ def test_recommend_operator_categories_returns_bounded_suggestions(monkeypatch):
     assert len(data["recommended_categories"]) <= 2
     assert data["recommended_categories"][0]["category"] == "core_text"
     assert data["query_budget"]["max_category_queries"] == 2
+
+
+def test_parameter_metadata_distinguishes_required_from_optional_null():
+    import inspect
+    from app.services.operator_registry import _param_to_dict
+    required = _param_to_dict(inspect.Parameter('input_key', inspect.Parameter.POSITIONAL_OR_KEYWORD))
+    optional = _param_to_dict(inspect.Parameter('optional', inspect.Parameter.KEYWORD_ONLY, default=None))
+    zero = _param_to_dict(inspect.Parameter('n', inspect.Parameter.KEYWORD_ONLY, default=0))
+    assert required['required'] is True
+    assert optional['required'] is False
+    assert zero['default_value'] == 0
+    assert _param_to_dict(inspect.Parameter('kwargs', inspect.Parameter.VAR_KEYWORD))['required'] is False

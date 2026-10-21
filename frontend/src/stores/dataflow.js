@@ -236,37 +236,21 @@ export const useDataflow = defineStore('useDataflow', () => {
 
     const execution = ref({})
     const executionStep = ref(null)
+    let executionRequest = 0
     const getExecution = async (task_id) => {
-        await proxy.$api.tasks.get_execution_status(task_id).then((res) => {
-            if (res.code === 200) {
-                execution.value = res.data
-                try {
-                    if (execution.value.status === 'running') {
-                        for (let key in execution.value.operators_detail) {
-                            let { index, status } = execution.value.operators_detail[key]
-                            if (status === 'running') {
-                                executionStep.value = index
-                                break
-                            }
-                        }
-                    } else {
-                        for (let key in execution.value.operators_detail) {
-                            let { index, status } = execution.value.operators_detail[key]
-                            if (status === 'completed') {
-                                if (index > executionStep.value || executionStep.value === null) {
-                                    executionStep.value = index
-                                }
-                            }
-                        }
-                    }
-                } catch (error) {
-                    executionStep.value = null
-                }
-            }
-        })
+        const version = ++executionRequest
+        const res = await proxy.$api.tasks.get_execution_status(task_id)
+        if (version !== executionRequest) return
+        if (res.code !== 200 || !res.data) throw new Error(res.message || '无法获取任务状态')
+        execution.value = res.data
+        const steps = Object.values(res.data.operators_detail || {})
+        executionStep.value = steps.find(step => step.status === 'running')?.index ??
+            steps.filter(step => step.status === 'completed').reduce((last, step) => Math.max(last ?? -1, step.index), null)
     }
     const clearExecution = () => {
+        executionRequest++
         execution.value = {}
+        executionStep.value = null
     }
 
     const isAutoConnection = ref(false)

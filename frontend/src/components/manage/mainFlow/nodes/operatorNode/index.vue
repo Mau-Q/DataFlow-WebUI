@@ -7,6 +7,7 @@
         <div class="operator-compact-summary" @mousedown.stop>
             <div class="operator-summary-row">
                 <span class="step-pill">{{ stepLabel }}</span>
+                <span v-if="reportedStep" class="node-execution-state" :class="reportedStep.status">{{ ({running:'运行中',completed:'已完成',failed:'失败',initializing:'初始化',initialized:'就绪'})[reportedStep.status] || reportedStep.status }}</span>
                 <span class="parameter-count">{{ initParamCount }} init · {{ runParamCount }} run</span>
             </div>
             <button class="details-button nodrag nopan" type="button" :aria-label="`${thisData.label} 参数详情`" @pointerdown.stop @pointerup.stop="inspectPointer" @mousedown.stop @dblclick.stop @click.stop="inspect">
@@ -106,10 +107,15 @@ const compactDescription = computed(() => {
     text = text.replace(/[\s,'"”]+$/, '')
     return /[。！？.!?]$/.test(text) ? text : `${text}。`
 })
+const reportedStep = computed(() => {
+    const index = (thisData.value.pipeline_idx || 0) - 1
+    return Object.values(dataflow.execution?.operators_detail || {}).find(step => step.index === index && step.name === thisData.value.name)
+})
 const displayData = computed(() => ({
     ...thisData.value,
     nodeInfo: compactDescription.value,
-    compact: true
+    compact: true,
+    executionStatus: reportedStep.value?.status || ''
 }))
 const visibleRunParams = computed(() => thisData.value.operatorParams?.run?.filter(hiddenParam) || [])
 const initParamCount = computed(() => thisData.value.operatorParams?.init?.filter((item) => item.show).length || 0)
@@ -208,7 +214,7 @@ const syncLoading = () => {
     if (!dataflow.execution.task_id) return null
     let pipeline_idx = thisData.value.pipeline_idx - 1
     let current_step = dataflow.executionStep
-    const loading = current_step === pipeline_idx && dataflow.execution.status !== 'completed'
+    const loading = current_step === pipeline_idx && ['running', 'pending', 'queued'].includes(dataflow.execution.status)
     emits('update-node-data', {
         id: props.id,
         data: { ...props.data, loading }
@@ -224,6 +230,7 @@ onMounted(async () => {
 
 <style lang="scss">
 .df-flow-default-node {
+    .node-execution-state { font-size:10px; color:#78849a; &.running {color:#5965d8} &.completed {color:#299668} &.failed {color:#d65663} }
     .fv-loading-block {
         @include HcenterVcenter;
     }

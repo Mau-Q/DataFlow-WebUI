@@ -1,6 +1,6 @@
 <template>
     <div class="value-input">
-        <fv-text-box :theme="theme" v-if="computedUIType === 'text'" v-model="thisValue"
+        <fv-text-box :theme="theme" v-if="computedUIType === 'text'" v-model="textValue"
             :placeholder="local('Please input') + ` ${itemObj.name}`" font-size="12" border-radius="3" border-width="2"
             :reveal-border="true" :border-color="thisData.shadowColor" :focus-border-color="thisData.borderColor"
             underline style="width: 100%; height: 35px"></fv-text-box>
@@ -24,7 +24,7 @@
                 :reveal-background-color="[thisData.shadowColor, 'rgba(255, 255, 255, 1)']"
                 :reveal-border-color="thisData.borderColor" border-radius="8"
                 style="width: 100%; margin-bottom: 4px"></fv-combobox>
-            <fv-text-box :theme="theme" v-model="thisValue"
+            <fv-text-box :theme="theme" v-model="textValue"
                 :placeholder="local('…or paste JSON Schema directly')"
                 font-size="12" border-radius="3" border-width="2"
                 :reveal-border="true" :border-color="thisData.shadowColor"
@@ -32,7 +32,7 @@
                 style="width: 100%; height: 35px"></fv-text-box>
             <router-link :to="{path:'/m/schemas', query:{relation:'compatible', ...( $route.query.pipeline ? {pipeline:'pipeline:'+$route.query.pipeline} : {} )}}">管理 Schema</router-link>
         </div>
-        <kv-input v-if="computedUIType === 'kv_input'" v-model="thisValue"></kv-input>
+        <kv-input v-if="computedUIType === 'kv_input'" v-model="kvValue"></kv-input>
     </div>
 </template>
 
@@ -88,6 +88,11 @@ export default {
         }
     },
     computed: {
+        kvValue: { get() { return Array.isArray(this.thisValue) ? this.thisValue : [] }, set(value) { this.thisValue=value } },
+        textValue: {
+            get() { const value=this.thisValue; return value == null ? '' : typeof value === 'object' ? JSON.stringify(value) : String(value) },
+            set(value) { this.thisValue=value }
+        },
         ...mapState(useAppConfig, ['local']),
         ...mapState(useDataflow, ['servingList', 'currentServing', 'dataManagerList', 'jsonSchemaList']),
         computedUIType() {

@@ -34,7 +34,7 @@ test('Save and Run update an existing custom pipeline without opening Create',as
  assert(await s.handleSaveClick());assert.deepEqual(s.updates,['saved']);assert(!s.show.pipelinePanel)
  const methods=page.slice(page.indexOf('        async openRunConfirm()'),page.indexOf('        showExecDetails('))
  Object.assign(s,new Function(`return ({${methods}})`)(),{lock:{running:true},runPreparing:false,pendingRun:false})
- await s.openRunConfirm();assert(s.show.runConfirm);assert(!s.show.pipelinePanel);assert.deepEqual(s.updates,['saved','saved'])
+ s.preflightIssues=[];s.inspectPreflight=async()=>{};await s.openRunConfirm();assert(s.show.runConfirm);assert(!s.show.pipelinePanel);assert.deepEqual(s.updates,['saved','saved'])
 })
 test('unsaved flows and templates still request a named copy',async()=>{
  for(const currentPipeline of [null,{id:null},template]){

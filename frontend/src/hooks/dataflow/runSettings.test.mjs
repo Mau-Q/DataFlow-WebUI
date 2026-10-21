@@ -4,7 +4,7 @@ import {readFileSync} from 'node:fs'
 const page=readFileSync(new URL('../../views/manage/dataflow/index.vue',import.meta.url),'utf8')
 const methods=page.slice(page.indexOf('        async openRunConfirm()'),page.indexOf('        showExecDetails('))
 const run=new Function(`return ({${methods}})`)()
-function state(saved=true) {return {...run,show:{runConfirm:false,pipelinePanel:false},lock:{running:true},runPreparing:false,pendingRun:false,isMM:false,saves:0,submits:[],async handleSaveClick(){this.saves++;if(!saved)this.show.pipelinePanel=true;return saved},async executePipeline(o){this.submits.push(o)},$barWarning(){},local:x=>x}}
+function state(saved=true) {return {...run,preflightIssues:[],async inspectPreflight(){this.showPreflight=true},focusIssue(){},show:{runConfirm:false,pipelinePanel:false},lock:{running:true},runPreparing:false,pendingRun:false,isMM:false,saves:0,submits:[],async handleSaveClick(){this.saves++;if(!saved)this.show.pipelinePanel=true;return saved},async executePipeline(o){this.submits.push(o)},$barWarning(){},local:x=>x}}
 test('one Run confirmation saves once and submits chosen target once',async()=>{
  const s=state();await s.openRunConfirm();await s.openRunConfirm();assert.equal(s.saves,1);assert(s.show.runConfirm)
  const o={output_root:'/results',collection_target:{mode:'append',draft_id:'chosen'}}
@@ -149,4 +149,8 @@ test('automatic graph initialization is clean, actual edits are guarded, and rev
  assert.equal(dirty.call(vm),false)
  vm.canvasEdited=true;assert.equal(dirty.call(vm),true)
  vm.canvasFingerprint='initial';assert.equal(dirty.call(vm),false)
+})
+
+test('preflight problems block save and submission and focus the affected field',async()=>{
+ const s=state();const issue={nodeId:'op',message:'缺少模型服务'};s.preflightIssues=[issue];s.focusIssue=value=>{s.focused=value};await s.openRunConfirm();assert.equal(s.saves,0);assert.equal(s.submits.length,0);assert.equal(s.focused,issue);assert(s.showPreflight)
 })
