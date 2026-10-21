@@ -8,6 +8,7 @@ import hashlib
 from typing import List, Optional, Dict, Any, Tuple, Union
 from app.core.logger_setup import get_logger
 from app.core.config import settings
+from app.services.dataset_persistence import locked_registry, atomic_write
 from app.schemas.pipelines import PipelineValidationIssue, PipelineValidationResult
 # from app.services.operator_registry import _op_registry
 from app.core.container import container
@@ -29,8 +30,34 @@ class PipelineFileAnalyzer:
 
     def operators(self) -> List[Dict[str, Any]]:
         """返回 [{'name': class_name, 'params': {}}...]"""
-        names = self.execution_order()
-        return [{"name": n, "params": {}} for n in names]
+        return [{"name": step["name"], "params": {}} for step in self.execution_steps()]
+
+    def execution_steps(self) -> List[Dict[str, Any]]:
+        """Bind each run occurrence to its own constructor and keyword arguments."""
+        steps = []
+        for class_node in self._iter_class_defs():
+            instances = {}
+            init = self._find_method(class_node, "__init__")
+            for stmt in init.body if init else []:
+                name, kwargs = self._parse_self_assign_call(stmt)
+                if name:
+                    for target in stmt.targets:
+                        if self._is_self_attr(target):
+                            instances[target.attr] = (name, kwargs)
+            forward = self._find_method(class_node, "forward")
+            def visit(node):
+                if isinstance(node, ast.Call) and self._is_self_var_run_call(node):
+                    instance = instances.get(node.func.value.attr)
+                    if instance:
+                        name, kwargs = instance
+                        steps.append({"name": name, "params": {}, "init": dict(kwargs),
+                                      "run": {kw.arg: self._node_to_value(kw.value)
+                                              for kw in node.keywords if kw.arg is not None}})
+                for child in ast.iter_child_nodes(node):
+                    visit(child)
+            for stmt in forward.body if forward else []:
+                visit(stmt)
+        return steps
 
     def execution_order(self) -> List[str]:
         """按 forward() 中 self.xxx.run() 的出现顺序提取 operator 类名"""
@@ -252,9 +279,9 @@ class PipelineRegistry:
 
     def _write(self, data: Dict):
         """写入注册表文件"""
-        with open(self.path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)    
+        atomic_write(self.path, json.dumps(data, indent=2, ensure_ascii=False).encode("utf-8"))
 
+    @locked_registry
     def _init_registry_file(self):
         """
         Ensure registry file exists, and load all py files in api_pipelines directory
@@ -397,6 +424,7 @@ class PipelineRegistry:
         
         return ""
 
+    @locked_registry
     def _update_all_api_pipelines_operators(self):
         """
         更新所有api pipeline的operators列表和input_dataset，
@@ -1129,6 +1157,7 @@ class PipelineRegistry:
         # 直接返回，因为 pipelines 已经在初始化/更新时 enriched
         return pipelines
     
+    @locked_registry
     def create_pipeline(self, pipeline_data: Dict[str, Any]) -> Dict[str, Any]:
         """创建一个新的Pipeline"""
         data = self._read()
@@ -1167,6 +1196,7 @@ class PipelineRegistry:
         logger.info(f"Successfully created pipeline: {pipeline_id} with name: {pipeline_data.get('name', '')}")
         return enriched_pipeline
     
+    @locked_registry
     def get_pipeline(self, pipeline_id: str) -> Optional[Dict[str, Any]]:
         """
         根据ID获取Pipeline
@@ -1260,6 +1290,7 @@ class PipelineRegistry:
         return old_op_info
         
     
+    @locked_registry
     def update_pipeline(self, pipeline_id: str, pipeline_data: Dict[str, Any]) -> Dict[str, Any]:
         """更新指定的Pipeline"""
         data = self._read()
@@ -1332,6 +1363,7 @@ class PipelineRegistry:
         logger.info(f"Updated pipeline: {pipeline_id}")
         return updated_pipeline
     
+    @locked_registry
     def delete_pipeline(self, pipeline_id: str) -> bool:
         """删除指定的Pipeline"""
         data = self._read()
@@ -1360,16 +1392,13 @@ class PipelineRegistry:
         
         # 从 pipeline 文件中提取实际参数值（init 和 run）
         file_path = config.get("file_path")
-        pipeline_init_params = {}
-        pipeline_run_params = {}
+        pipeline_steps = []
         if file_path and os.path.exists(file_path):
             analyzer = PipelineFileAnalyzer.from_file(file_path)
-            pipeline_init_params = analyzer.init_params_by_class()
-            pipeline_run_params = analyzer.run_params_by_class()
-            logger.info(f"Extracted init params for {len(pipeline_init_params)} operators, run params for {len(pipeline_run_params)} operators")
-        
+            pipeline_steps = analyzer.execution_steps()
+
         enriched_operators = []
-        for op in operators:
+        for index, op in enumerate(operators):
             op_copy = op.copy()
             op_name = op.get("name")
             stored_params = op.get("params", {})
@@ -1385,8 +1414,9 @@ class PipelineRegistry:
             op_details = container.operator_registry.get_op_details(op_name)
             
             # 获取该 operator 在 pipeline 代码中的实际参数值
-            actual_init_params = pipeline_init_params.get(op_name, {})
-            actual_run_params = pipeline_run_params.get(op_name, {})
+            step = pipeline_steps[index] if index < len(pipeline_steps) and pipeline_steps[index]["name"] == op_name else {}
+            actual_init_params = step.get("init", {})
+            actual_run_params = step.get("run", {})
             
             enriched_params = {
                 "init": [],

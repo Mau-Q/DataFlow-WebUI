@@ -579,9 +579,6 @@ def dataflow_pipeline_execute(pipeline_config: Dict[str, Any], dataflow_runtime:
                     "operator_logs": operator_logs
                 })
                 
-                api_pipeline_path = os.path.join(settings.DATAFLOW_CORE_DIR, "api_pipelines")
-                print(api_pipeline_path)
-                os.chdir(api_pipeline_path)
                 
                 # ✅ 捕获 stdout/stderr
                 # 使用自定义 LogStream 以支持实时进度捕获
@@ -618,7 +615,6 @@ def dataflow_pipeline_execute(pipeline_config: Dict[str, Any], dataflow_runtime:
                     if last_progress_info:
                         operators_detail[op_key]["progress"] = last_progress_info
 
-                os.chdir(settings.BASE_DIR)
 
                 # ✅ 获取处理后的数据量
                 # 尝试从 output file 获取
@@ -702,7 +698,6 @@ def dataflow_pipeline_execute(pipeline_config: Dict[str, Any], dataflow_runtime:
                     },
                     original_error=e
                 )
-        # os.chdir(settings.BASE_DIR)
         # 成功完成
         completed_at = datetime.now().isoformat()
         add_log("global", f"[{completed_at}] Pipeline execution completed successfully")

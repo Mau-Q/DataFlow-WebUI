@@ -140,13 +140,15 @@ def test_backup_hash_rejects_tampering_and_recovery_preserves_changed_external(t
     assert (root/'datasets.sqlite3').read_bytes()==b'broken database'
 
 
-def test_mutations_create_automatic_backups_and_retention_keeps_baseline(tmp_path):
+def test_mutations_coalesce_backups_and_retention_keeps_baseline(tmp_path):
     root,lib,_,_,_,_,_=seed(tmp_path)
     manager=DatasetBackups(root,tmp_path/'backups',keep=2)
     baseline=manager.snapshot();baseline.rename(baseline.with_name(baseline.stem+'-baseline.zip'))
     register_backups(root,manager)
     for i in range(3):lib.create_draft(DraftCreate(name=f'new-{i}'))
-    assert len(manager.archives())==3
+    assert len(manager.archives())==1
+    manager.flush_pending()
+    assert len(manager.archives())==2
     archive,manifest=manager.latest()
     restored=manager.restore(archive,tmp_path/'latest-restore')
     with sqlite3.connect(restored/'data/datasets.sqlite3') as con:

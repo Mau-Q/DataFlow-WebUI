@@ -14,3 +14,12 @@ def patch_task(path, task_id, updates=None, partial_output=None, create=False):
         if partial_output:
             task.setdefault('output', {}).update(partial_output)
         return dict(task)
+
+
+def fail_submission(path, task_id, error):
+    """Persist one terminal submission failure without copying credentials into history."""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    return patch_task(path, task_id, {'status': 'failed', 'completed_at': now,
+                                     'finished_at': now,
+                                    }, partial_output={'error': f'任务提交失败: {type(error).__name__}'})

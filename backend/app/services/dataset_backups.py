@@ -36,6 +36,8 @@ class DatasetBackups:
         self.last_error = None
         self.last_recovery = None
         self._stop = threading.Event()
+        self._dirty = threading.Event()
+        self._wake = threading.Event()
         self._thread = None
 
     @staticmethod
@@ -73,10 +75,14 @@ class DatasetBackups:
         return None, None
 
     def _files(self):
-        files = {p.resolve():'data/'+p.relative_to(self.root).as_posix()
-                 for p in self.root.rglob('*') if p.is_file()
-                 and not p.name.endswith(('.lock','-wal','-shm'))
-                 and not p.name.startswith('.pending-') and p.name != 'datasets.sqlite3'}
+        # Dataset-owned blobs and the legacy import source only. Runtime templates,
+        # model/service configuration and task history are outside dataset recovery.
+        candidates = list((self.root / 'library').rglob('*'))
+        candidates.append(self.root / 'data_registry.yaml')
+        files = {p.resolve(): 'data/' + p.relative_to(self.root).as_posix()
+                 for p in candidates if p.is_file()
+                 and not p.name.endswith(('.lock', '-wal', '-shm'))
+                 and not p.name.startswith('.pending-')}
         database = self.root / 'datasets.sqlite3'
         records = []
         self.unresolved_external = []
@@ -93,7 +99,8 @@ class DatasetBackups:
             if path not in files:
                 if not path.is_file():
                     raise ValueError(f'Registered file is missing: {path}')
-                files[path] = 'external/'+digest(str(path).encode())[:16]+'/'+path.name
+                files[path] = ('data/' + path.relative_to(self.root).as_posix() if path.is_relative_to(self.root)
+                               else 'external/'+digest(str(path).encode())[:16]+'/'+path.name)
         for record in records:
             path = Path(record['root']).resolve()
             add(path)
@@ -274,6 +281,17 @@ class DatasetBackups:
                         path = Path(info['original_path'])
                         if path.exists() and digest(path.read_bytes())!=info['sha256']:
                             raise RuntimeError(f'External file changed; preserved for manual recovery: {path}')
+                # Recovery replaces dataset-owned paths, while preserving unrelated
+                # runtime/config/history files absent from the scoped snapshot.
+                if self.root.exists():
+                    for existing in self.root.rglob('*'):
+                        relative = existing.relative_to(self.root)
+                        destination = target/'data'/relative
+                        if (existing.is_file() and not destination.exists()
+                                and relative.parts[0] != 'library'
+                                and not existing.name.startswith('datasets.sqlite3')):
+                            destination.parent.mkdir(parents=True, exist_ok=True)
+                            shutil.copy2(existing, destination)
                 quarantine = self.directory/('quarantine-'+stamp())
                 if self.root.exists():
                     os.replace(self.root,quarantine)
@@ -293,13 +311,37 @@ class DatasetBackups:
                 logger.warning('Dataset storage recovered; original damaged files retained in {}',quarantine)
                 return self.last_recovery
 
+    def request_snapshot(self):
+        # Foreground writes only mark dirty; one periodic worker coalesces them.
+        self._dirty.set()
+        self._wake.set()
+
+    def flush_pending(self):
+        if self._dirty.is_set():
+            self._dirty.clear()
+            try:
+                return self.snapshot(reason='mutation')
+            except Exception:
+                self._dirty.set()
+                raise
+
     def start(self):
         self.snapshot(reason='startup')
         register_backups(self.root,self)
         def worker():
-            while not self._stop.wait(self.interval):
+            while not self._stop.is_set():
+                changed = self._wake.wait(self.interval)
+                self._wake.clear()
+                if self._stop.is_set():
+                    break
+                # Briefly coalesce a burst of successful foreground mutations.
+                if changed and self._stop.wait(min(1.0, self.interval)):
+                    break
                 try:
-                    self.snapshot(reason='periodic')
+                    if self._dirty.is_set():
+                        self.flush_pending()
+                    else:
+                        self.snapshot(reason='periodic')
                 except Exception as exc:
                     self.last_error = str(exc)
                     logger.error('Periodic dataset backup failed: {}',exc)
@@ -308,5 +350,7 @@ class DatasetBackups:
 
     def stop(self):
         self._stop.set()
+        self._wake.set()
         if self._thread:
             self._thread.join(timeout=10)
+        self.flush_pending()

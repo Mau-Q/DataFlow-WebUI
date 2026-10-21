@@ -31,6 +31,7 @@ from typing import AsyncGenerator, Optional
 from app.core.logger_setup import get_logger
 
 from .base import AgentAdapter, NormalizedEvent, truncate_preview
+from .process_io import drain_stderr, reap
 
 logger = get_logger(__name__)
 
@@ -98,6 +99,7 @@ class CodexAdapter(AgentAdapter):
             limit=10 * 1024 * 1024,
         )
         self._process = process
+        stderr_task = asyncio.create_task(drain_stderr(process.stderr))
         emitted_session = False
 
         try:
@@ -127,21 +129,21 @@ class CodexAdapter(AgentAdapter):
                 async for evt in self._translate(chunk):
                     yield evt
 
+            code = await process.wait()
+            diagnostic = await stderr_task
+            if code:
+                yield {"type": "error", "message": f"Agent process exited ({code}): {diagnostic}"}
             yield {"type": "done"}
         except asyncio.CancelledError:
-            yield {"type": "done"}
             raise
         except Exception as e:
             logger.error(f"CodexAdapter stream error: {e}", exc_info=True)
             yield {"type": "error", "message": str(e)}
             yield {"type": "done"}
         finally:
-            if process.returncode is None:
-                try:
-                    process.kill()
-                except Exception:
-                    pass
-            self._process = None
+            await reap(process, stderr_task)
+            if self._process is process:
+                self._process = None
 
     async def _translate(self, chunk: dict) -> AsyncGenerator[NormalizedEvent, None]:
         # Codex events are typed via msg.type per the docs.

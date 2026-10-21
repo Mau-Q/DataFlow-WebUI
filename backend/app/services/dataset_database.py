@@ -148,20 +148,74 @@ class DatasetDatabase:
     def put(self, kind, record):
         with self.transaction() as con:
             if kind == 'drafts':
+                from app.services.data_library import _hash, _json_bytes
+                ids = list(record.get('sample_ids', []))
+                for i in range(len(ids), len(record['rows'])):
+                    ids.append('sample_' + _hash(_json_bytes([record['id'], i, record['rows'][i], record.get('updated_at')])))
+                record = dict(record, sample_ids=ids)
                 metadata = {k:v for k,v in record.items() if k not in ('rows','media_bindings','imports')}
                 con.execute('INSERT INTO drafts VALUES (?,?) ON CONFLICT(id) DO UPDATE SET metadata=excluded.metadata', (record['id'],self.encode(metadata)))
-                for table in ('samples','draft_media','draft_imports'):
-                    con.execute(f'DELETE FROM {table} WHERE draft_id=?', (record['id'],))
                 ids = record.get('sample_ids', [])
-                con.executemany('INSERT INTO samples VALUES (?,?,?,?)', [(record['id'],i,ids[i] if i<len(ids) else None,self.encode(row)) for i,row in enumerate(record['rows'])])
-                con.executemany('INSERT INTO draft_media VALUES (?,?,?)', [(record['id'],ref,mid) for ref,mid in record.get('media_bindings',{}).items()])
-                con.executemany('INSERT INTO draft_imports VALUES (?,?,?)', [(record['id'],i,self.encode(row)) for i,row in enumerate(record.get('imports',[]))])
+                self._sync_rows(con, 'samples', record['id'], ('position', 'sample_id', 'payload'),
+                                [(i, ids[i] if i < len(ids) else None, self.encode(row))
+                                 for i, row in enumerate(record['rows'])])
+                self._sync_rows(con, 'draft_media', record['id'], ('reference', 'material_id'),
+                                list(record.get('media_bindings', {}).items()))
+                self._sync_rows(con, 'draft_imports', record['id'], ('position', 'payload'),
+                                [(i, self.encode(row)) for i, row in enumerate(record.get('imports', []))])
             elif kind == 'materials':
                 con.execute('INSERT INTO materials VALUES (?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload', (record['id'],self.encode(record)))
             elif kind == 'releases':
                 con.execute('INSERT INTO releases VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET draft_id=excluded.draft_id,payload=excluded.payload', (record['id'],record['draft_id'],self.encode(record)))
             else:
                 raise ValueError(f'Unsupported dataset object: {kind}')
+
+    @staticmethod
+    def _sync_rows(con, table, draft_id, columns, rows):
+        # Compare by stable table key and mutate only changed records.
+        old = {row[0]: tuple(row) for row in con.execute(
+            f"SELECT {','.join(columns)} FROM {table} WHERE draft_id=?", (draft_id,))}
+        incoming = {row[0]: tuple(row) for row in rows}
+        for key in old.keys() - incoming.keys():
+            con.execute(f'DELETE FROM {table} WHERE draft_id=? AND {columns[0]}=?', (draft_id, key))
+        names = ','.join(('draft_id', *columns))
+        placeholders = ','.join('?' for _ in range(len(columns)+1))
+        updates = ','.join(f'{name}=excluded.{name}' for name in columns[1:])
+        for key, row in incoming.items():
+            if old.get(key) != row:
+                con.execute(f'INSERT INTO {table} ({names}) VALUES ({placeholders}) '
+                            f'ON CONFLICT(draft_id,{columns[0]}) DO UPDATE SET {updates}', (draft_id, *row))
+
+    def draft_summaries(self, rid=None):
+        with self.reading() as con:
+            query = 'SELECT id,metadata FROM drafts' + (' WHERE id=?' if rid else '')
+            records = con.execute(query, (rid,) if rid else ()).fetchall()
+            result = []
+            for did, metadata in records:
+                rec = json.loads(metadata)
+                rec['row_count'] = con.execute('SELECT COUNT(*) FROM samples WHERE draft_id=?', (did,)).fetchone()[0]
+                rec['fields'] = sorted(r[0] for r in con.execute(
+                    'SELECT DISTINCT j.key FROM samples s, json_each(s.payload) j WHERE s.draft_id=?', (did,)))
+                rec['media_bindings'] = dict(con.execute('SELECT reference,material_id FROM draft_media WHERE draft_id=?', (did,)))
+                rec['imports'] = [json.loads(r[0]) for r in con.execute('SELECT payload FROM draft_imports WHERE draft_id=? ORDER BY position', (did,))]
+                result.append(rec)
+            return result
+
+    def draft_page(self, rid, offset, limit):
+        from app.services.data_library import _hash, _json_bytes
+        with self.reading() as con:
+            summaries = self.draft_summaries(rid)
+            if not summaries:
+                return None
+            rec = summaries[0]
+            rows = con.execute('SELECT position,sample_id,payload FROM samples WHERE draft_id=? ORDER BY position LIMIT ? OFFSET ?',
+                               (rid, limit, offset)).fetchall()
+            ids = rec.get('sample_ids', [])
+            rec['rows'] = [json.loads(row[2]) for row in rows]
+            rec['sample_ids'] = [ids[pos] if pos < len(ids) else sid or 'sample_' + _hash(_json_bytes(
+                [rid, pos, json.loads(payload), rec.get('updated_at')])) for pos,sid,payload in rows]
+            rec.setdefault('sample_sources', {})
+            return dict(rec, offset=offset, limit=limit)
 
     def get(self, kind, rid):
         if kind not in ('materials','drafts','releases'):

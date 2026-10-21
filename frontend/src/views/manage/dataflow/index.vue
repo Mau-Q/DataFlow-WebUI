@@ -984,20 +984,23 @@ export default {
             console.log(config)
             if (!this.lock.loading) return
             this.lock.loading = false
-            const confirmDatasetCall = (_, dataset) => {
-                this.confirmDataset(dataset, true)
+            try {
+                const confirmDatasetCall = (_, dataset) => {
+                    this.confirmDataset(dataset, true)
+                }
+                await usePipelineOperation().renderPipeline(
+                    config,
+                    this.flowId,
+                    this.datasets,
+                    this.flatFormatedOperators,
+                    this,
+                    this.$nextTick,
+                    confirmDatasetCall,
+                    this.$Guid
+                )
+            } finally {
+                this.lock.loading = true
             }
-            await usePipelineOperation().renderPipeline(
-                config,
-                this.flowId,
-                this.datasets,
-                this.flatFormatedOperators,
-                this,
-                this.$nextTick,
-                confirmDatasetCall,
-                this.$Guid
-            )
-            this.lock.loading = true
         },
         async recoverPipeline() {
             if(!await this.confirmCanvasChange())return
@@ -1005,21 +1008,24 @@ export default {
                 return
             }
             this.lock.loading = false
-            const confirmDatasetCall = (_, dataset) => {
-                this.confirmDataset(dataset, true)
+            try {
+                const confirmDatasetCall = (_, dataset) => {
+                    this.confirmDataset(dataset, true)
+                }
+                await usePipelineOperation().renderPipeline(
+                    this.currentPipeline.config,
+                    this.flowId,
+                    this.datasets,
+                    this.flatFormatedOperators,
+                    this,
+                    this.$nextTick,
+                    confirmDatasetCall,
+                    this.$Guid
+                )
+                await this.selectPipelineCallback()
+            } finally {
+                this.lock.loading = true
             }
-            await usePipelineOperation().renderPipeline(
-                this.currentPipeline.config,
-                this.flowId,
-                this.datasets,
-                this.flatFormatedOperators,
-                this,
-                this.$nextTick,
-                confirmDatasetCall,
-                this.$Guid
-            )
-            await this.selectPipelineCallback()
-            this.lock.loading = true
         },
         async handleWatchExecution({ task_id }) {
             this.executionInfo.task_id = task_id
