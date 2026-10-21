@@ -34,6 +34,10 @@ Not sure which? The [root README](../README.md) has a 30-second comparison, or r
 | [migration/from-setup-scripts.md](migration/from-setup-scripts.md) | From `scripts/setup_all.sh` / `setup_agent.sh` |
 | [migration/from-dataflow-skills.md](migration/from-dataflow-skills.md) | From the `OpenDCAI/DataFlow-Skills` repo |
 
+## Local data platform
+
+[Local data generation platform](local-data-platform.md) covers materials, text tasks, image VQA configuration, releases, startup, persistence, backup and acceptance boundaries.
+
 ## Other
 
 | | |

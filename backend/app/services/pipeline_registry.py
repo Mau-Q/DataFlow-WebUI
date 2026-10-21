@@ -736,6 +736,8 @@ class PipelineRegistry:
                     refs.append((param_name, value))
                 elif isinstance(value, list):
                     refs.extend((param_name, item) for item in value if isinstance(item, str))
+                    refs.extend((param_name, item.get("value")) for item in value
+                                if isinstance(item, dict) and isinstance(item.get("value"), str))
                 elif isinstance(value, dict):
                     refs.extend((param_name, item) for item in value.values() if isinstance(item, str))
                 continue
@@ -754,6 +756,7 @@ class PipelineRegistry:
                 refs.append((param_name, value))
             elif isinstance(value, list):
                 refs.extend((param_name, item) for item in value if isinstance(item, str))
+
         return refs
 
     @staticmethod
@@ -809,6 +812,12 @@ class PipelineRegistry:
     def validate_pipeline_config(self, config: Dict[str, Any]) -> PipelineValidationResult:
         errors: List[PipelineValidationIssue] = []
         warnings: List[PipelineValidationIssue] = []
+
+        from app.services.resource_resolution import resolve_pipeline_resources, ResourceReferenceError
+        try:
+            config, _ = resolve_pipeline_resources(config)
+        except (ResourceReferenceError, ValueError) as exc:
+            errors.append(self._make_validation_issue(level='error', code='invalid_resource_reference', message=str(exc)))
 
         dataset_id = self._extract_dataset_id(config.get("input_dataset"))
         available_fields: List[str] = []
@@ -1000,7 +1009,7 @@ class PipelineRegistry:
                         ))
                 elif isinstance(prompt_template_value, dict):
                     cls_name = prompt_template_value.get("cls_name")
-                    if cls_name and allowed_prompts and cls_name not in allowed_prompts:
+                    if cls_name and allowed_prompts and cls_name not in allowed_prompts and not prompt_template_value.get("resource_template"):
                         errors.append(self._make_validation_issue(
                             level="error",
                             code="invalid_prompt_template_class",
@@ -1197,7 +1206,7 @@ class PipelineRegistry:
     def _update_pipeline_op_info(self, new_op_info: Dict[str, Any], old_op_info: Dict[str, Any]) -> Dict[str, Any]:
         """
         new_op_info: 新的算子信息（字典格式）
-        new_op_info 中包含 name, params, location 三个字段
+        new_op_info 中包含 name, params, location, pipeline_role 字段
             - single_param_format: {'name': xxx, 'value': yyy}
         old_op_info: 旧的算子信息（字典格式），我们假设其中的所有参数是全的。
         return: 更新后的算子信息（字典格式）
@@ -1211,6 +1220,11 @@ class PipelineRegistry:
         # Update the locations
         if "location" in new_op_info:
             old_op_info["location"] = new_op_info.get("location")
+
+        # Keep the human-authored explanation tied to this concrete pipeline.
+        # It must not be replaced by the operator registry's generic description.
+        if "pipeline_role" in new_op_info:
+            old_op_info["pipeline_role"] = new_op_info.get("pipeline_role")
         
         # Parse new params
         new_params = new_op_info.get("params", {})
@@ -1275,7 +1289,8 @@ class PipelineRegistry:
                         old_op_info = {
                             "name": op.get("name"),
                             "params": op_details.get("parameter", {"init": [], "run": []}) if op_details else {"init": [], "run": []},
-                            "location": op.get("location", (0, 0))
+                            "location": op.get("location", (0, 0)),
+                            "pipeline_role": op.get("pipeline_role")
                         }
                     
                     # 更新 operator 信息
@@ -1393,12 +1408,14 @@ class PipelineRegistry:
                     # 1. actual value from pipeline code (__init__)
                     # 2. stored params (user customized)
                     # 3. default value from operator definition
-                    p_val = actual_init_params.get(p_name)
+                    stored_value = stored_params.get(p_name)
+                    is_resource = (isinstance(stored_value, str) and stored_value.startswith(('user_prompt:', 'schema_ref:'))) or (isinstance(stored_value, dict) and 'ref' in stored_value)
+                    p_val = stored_value if is_resource else actual_init_params.get(p_name)
                     if p_val is None:
                         p_val = stored_params.get(p_name)
                     if p_val is None:
                         p_val = param_def.get("default_value")
-                    if p_val is None and param_def.get("name") == "prompt_template":
+                    if p_val is None and param_def.get("name") == "prompt_template" and op_name != "AlpagasusSampleEvaluator":
                         # Get @prompt_restrict decorator from operator class
                         if op_details.get("allowed_prompts"):
                             p_val = op_details["allowed_prompts"][0]

@@ -13,7 +13,7 @@
         :teleport="teleport"
     >
         <template v-slot:container>
-            <div class="base-panel-container" @keyup.enter="$emit('confirm')">
+            <div ref="content" class="base-panel-container" tabindex="-1" @keyup.enter="confirmFromKeyboard">
                 <slot name="content"></slot>
             </div>
         </template>
@@ -30,6 +30,8 @@
 <script>
 export default {
     props: {
+        busy:{type:Boolean,default:false},
+        beforeClose:{type:Function,default:null},
         modelValue: {
             default: true
         },
@@ -52,6 +54,9 @@ export default {
             default: 'light'
         }
     },
+    emits:['update:modelValue','confirm'],
+    mounted(){if(this.thisValue)this.$nextTick(this.activateDialog)},
+    beforeUnmount(){this.releaseDialog()},
     data() {
         return {
             thisValue: this.modelValue
@@ -60,13 +65,53 @@ export default {
     watch: {
         modelValue(val) {
             this.thisValue = val
+            if(val)this.$nextTick(this.activateDialog);else this.releaseDialog()
         },
-        thisValue(val) {
+        async thisValue(val) {
+            if(!val && this.modelValue && this.beforeClose){
+                if(this.checkingClose)return
+                this.checkingClose=true
+                let allowed=false
+                try{allowed=!this.busy && await this.beforeClose()}finally{this.checkingClose=false}
+                if(!allowed){this.thisValue=true;return}
+            }
             this.$emit('update:modelValue', val)
+            if(val)this.$nextTick(this.activateDialog);else this.releaseDialog()
         }
     },
     methods: {
+        confirmFromKeyboard(event){if(event.target.tagName==='TEXTAREA' || event.target.closest('form') || event.target.closest('[role="button"]'))return;this.$emit('confirm')},
+        activateDialog(){
+            if(this.dialogHandler || !this.thisValue)return
+            const content=this.$refs.content
+            if(!content)return
+            const panel=content.closest('.fv-panel-container') || content
+            panel.setAttribute('role','dialog');panel.setAttribute('aria-modal','true');panel.setAttribute('aria-label',this.title)
+            this.previousFocus=document.activeElement
+            const focusables=()=>[...panel.querySelectorAll('button:not(:disabled),input:not(:disabled),textarea:not(:disabled),select:not(:disabled),a[href],[tabindex="0"]')].filter(el=>el.getClientRects().length && el.getAttribute('aria-disabled')!=='true')
+            this.dialogHandler=event=>{
+                // A nested confirmation dialog owns its own keyboard interaction.
+                if(!panel.contains(document.activeElement))return
+                if(event.key==='Escape'){event.preventDefault();event.stopPropagation();this.close()}
+                if(event.key==='Tab'){
+                    const items=focusables(),first=items[0]||content,last=items.at(-1)||content
+                    if(!items.length || event.shiftKey && document.activeElement===first || !event.shiftKey && document.activeElement===last){event.preventDefault();(event.shiftKey?last:first).focus()}
+                }
+            }
+            panel.addEventListener('keydown',this.dialogHandler)
+            this.dialogElement=panel
+            const close=panel.querySelector('.control-btn')
+            if(close){close.setAttribute('role','button');close.setAttribute('aria-label','关闭');close.tabIndex=0;close.onkeydown=e=>{if(['Enter',' '].includes(e.key)){e.preventDefault();close.click()}}}
+            ;(focusables().find(el=>el.matches('input,textarea')) || focusables()[0] || content).focus()
+        },
+        releaseDialog(){
+            this.dialogElement?.removeEventListener('keydown',this.dialogHandler)
+            this.dialogHandler=null;this.dialogElement=null
+            if(this.previousFocus?.isConnected)this.previousFocus.focus()
+            this.previousFocus=null
+        },
         close() {
+            if(this.busy)return
             this.thisValue = false
         }
     }
@@ -74,6 +119,7 @@ export default {
 </script>
 
 <style lang="scss">
+.fv-panel-container:has(.base-panel-container) { max-width:calc(100vw - 24px); max-height:calc(100dvh - 24px); }
 .base-panel-container {
     position: relative;
     width: 100%;

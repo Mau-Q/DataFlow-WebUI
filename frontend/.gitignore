@@ -31,5 +31,5 @@ coverage
 *.tsbuildinfo
 
 
-package-lock.json
+# npm is the supported installer; commit its lockfile for clean installs.
 yarn.lock

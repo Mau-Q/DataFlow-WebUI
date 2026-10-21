@@ -39,6 +39,7 @@ class PipelineOperator(BaseModel): # 画布上的pipeline类
     name: str = Field(..., description="算子名称")
     params: Any = Field(default_factory=dict, description="算子参数配置")
     location: tuple[float, float] = Field(default=(0, 0), description="算子在画布上的位置, 包含x和y两个坐标值")
+    pipeline_role: Optional[str] = Field(None, description="算子在当前 Pipeline 中承担的作用")
     # @field_validator('name')
     # def validate_operator_name(cls, v: str) -> str:
     #     """验证算子名称格式"""
@@ -51,9 +52,11 @@ class PipelineInputDataset(BaseModel):
     """Pipeline输入数据集模型"""
     id: str = Field(..., description="数据集ID")
     location: tuple[float, float] = Field(default=(0, 0), description="数据集在画布上的位置")
+    pipeline_role: Optional[str] = Field(None, description="数据集在当前 Pipeline 中承担的作用")
 
 class PipelineConfig(BaseModel):
     """Pipeline配置模型"""
+    execution_options: Dict[str, Any] = Field(default_factory=dict)
     file_path: str = Field(..., description="Pipeline文件路径")
     input_dataset: Union[str, PipelineInputDataset] = Field(..., description="输入数据集ID或配置")
     # 用 list 的顺序代表算子执行顺序
@@ -111,6 +114,8 @@ class PipelineExecutionResult(BaseModel):
     task_id: str = Field(..., description="执行会话唯一标识符")
     pipeline_id: Optional[str] = Field(None, description="Pipeline ID")
     pipeline_config: Optional[Dict[str, Any]] = Field(None, description="Pipeline配置快照")
+    pipeline_source_config: Optional[Dict[str, Any]] = None
+    resource_snapshots: List[Dict[str, Any]] = Field(default_factory=list)
     status: ExecutionStatus = Field(..., description="执行状态")
     output: Dict[str, Any] = Field(default_factory=dict, description="执行输出结果")
     logs: List[str] = Field(default_factory=list, description="执行日志列表")

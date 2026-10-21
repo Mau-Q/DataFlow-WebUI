@@ -6,6 +6,20 @@ export default {
     path: '/m',
     component: () => AsyncLoad(() => import('@/views/manage/index.vue')),
     children: [
+        { path: 'multimodal', component: () => AsyncLoad(() => import('@/views/manage/multimodal/index.vue')), meta: { title: '图片 VQA' } },
+        { path: 'generation', component: () => AsyncLoad(() => import('@/views/manage/generation/index.vue')), meta: { title: '文本生成' } },
+        {
+            path: 'materials',
+            component: () => AsyncLoad(() => import('@/views/manage/library/index.vue')),
+            props: { mode: 'materials' },
+            meta: { title: '原始数据集' }
+        },
+        {
+            path: 'training-datasets',
+            component: () => AsyncLoad(() => import('@/views/manage/library/index.vue')),
+            props: { mode: 'drafts' },
+            meta: { title: '生成数据集' }
+        },
         {
             path: '',
             component: () => AsyncLoad(() => import('@/views/manage/dataflow/index.vue'))

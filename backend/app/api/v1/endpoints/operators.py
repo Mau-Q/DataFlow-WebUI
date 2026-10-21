@@ -42,7 +42,7 @@ def _build_operator_agent_tips(op: Dict[str, Any]) -> tuple[list[str], str | Non
     if any(name in init_params for name in ("llm_serving", "embedding_serving")):
         tips.append("这是依赖 serving 的算子；先调用 list_serving，填真实 id，不要留空也不要写占位符。")
     if "prompt_template" in init_params:
-        tips.append("如果需要 prompt_template，只能传类名字符串或包含 cls_name 的结构化对象；优先直接用 system_prompt。")
+        tips.append("Prompt 可保留内置类，也可按 /prompts/contracts 选择受支持的 user_prompt 引用；不要用 system_prompt 绕过算子协议。")
     if any(name in init_params for name in ("process_fn", "filter_rules")):
         tips.append("动态代码参数只接受 lambda/def 字符串、带 code 字段的对象，或这两种形式组成的列表。")
     if any(name in run_params for name in ("input_key", "input_keys")):
@@ -256,6 +256,13 @@ def get_operator_detail_by_name(op_name: str, lang: str = "zh"):
     - Then match name in all buckets and return.
     """
     try:
+        # Managed slots evolve with installed constructors; never hide them behind old ops.json.
+        from app.services.prompt_contracts import CONTRACTS
+        if (op_name in CONTRACTS or op_name in {'TrainingPairFormatter', 'TrainingQAExpander', 'TrainingPreferenceBuilder', 'TrainingReviewParser'}) and callable(getattr(container.operator_registry, 'get_op_details', None)):
+            current = container.operator_registry.get_op_details(op_name, lang=lang)
+            if current:
+                tips, field_hint, context_hint = _build_operator_agent_tips(current)
+                return ok(dict(current, agent_tips=tips, field_binding_hint=field_hint, mcp_context_hint=context_hint))
         # Ensure cache exists
         ops_json_path = OPS_JSON_PATH.with_suffix(f'.{lang}.json')
         if not ops_json_path.exists():

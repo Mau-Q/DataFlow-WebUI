@@ -1,5 +1,5 @@
 <template>
-    <div class="df-flow-default-node" :class="[{ 'dark': theme === 'dark' }, { selected: selected }]" :style="{
+    <div class="df-flow-default-node" :class="[{ 'dark': theme === 'dark' }, { selected: selected }, { compact: thisData.compact }]" :style="{
         '--node-background': thisData.background,
         '--node-icon-color': thisData.iconColor,
         '--node-border-color': thisData.borderColor,
@@ -108,7 +108,8 @@ const defaultData = {
     defaultSourceHandleTop: '',
     defaultTargetHandleTop: '',
     useSourceHandle: true,
-    useTargetHandle: true
+    useTargetHandle: true,
+    compact: false
 }
 const thisData = computed(() => {
     return {
@@ -151,6 +152,32 @@ const y = computed(() => `${Math.round(props.position.y)}px`)
         0px 0px 1px var(--node-shadow-color),
         3px 6px 16px transparent,
         -3px 6px 16px transparent;
+
+    &.compact {
+        height: 142px;
+        padding: 8px 0px;
+        box-sizing: border-box;
+
+        .node-info {
+            min-height: 30px;
+            max-height: 30px;
+            font-size: 10px;
+            line-height: 1.45;
+            overflow: hidden;
+
+            p {
+                display: -webkit-box;
+                -webkit-line-clamp: 2;
+                -webkit-box-orient: vertical;
+            }
+        }
+
+        .remain-content-block {
+            flex: 1;
+            min-height: 0;
+            margin-top: 2px;
+        }
+    }
 
     &.dark {
         --node-background: rgba(40, 40, 40, 0.8);

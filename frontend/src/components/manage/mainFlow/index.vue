@@ -1,8 +1,10 @@
 <template>
     <div class="df-main-flow-container">
         <VueFlow class="main-flow" :id="id" v-model:nodes="thisNodes" v-model:edges="thisEdges" @dragover="dragOver"
-            @drop="drop" @dragleave="dragLeave" @connect="$emit('connect', $event)"
-            @connect-end="$emit('connect-end', $event)" @connect-start="$emit('connect-start', $event)">
+            @drop="drop" @dragleave="dragLeave" @connect="$emit('edited');$emit('connect', $event)"
+            @node-drag-stop="$emit('edited')" @edges-change="changes => {if(changes.some(c=>c.type==='remove'))$emit('edited')}"
+            @connect-end="$emit('connect-end', $event)" @connect-start="$emit('connect-start', $event)"
+            @node-click="selectOperator" @nodes-initialized="$emit('nodes-ready')">
             <Background variant="dots" gap="20" size="3" :color="'rgba(200, 200, 200, 0.3)'" :style="{
                 backgroundColor: isDragOver ? 'rgba(87, 99, 206, 0.05)' : 'transparent',
                 transition: 'background-color 0.2s ease'
@@ -16,7 +18,7 @@
             </template>
             <template #node-operator-node="nodeProps">
                 <operatorNode v-bind="nodeProps" @delete-node="deleteNode" @update-node-data="updateNodeData"
-                    @update-run-value="updateRunValue" @show-details="showDetails" @download-data="downloadData" />
+                    @update-run-value="updateRunValue" @show-details="showDetails" @download-data="downloadData" @inspect-node="inspectOperator" />
             </template>
 
             <template #connection-line="connectionLineProps">
@@ -26,11 +28,17 @@
                 <baseEdge v-bind="edgeProps" />
             </template>
         </VueFlow>
+        <slot v-if="!thisNodes.length" name="empty" />
+        <Teleport to="body">
+            <operator-detail-panel @edited="emits('edited')" v-if="selectedOperator" :key="selectedOperator.id" v-model="showInspector"
+                :node-id="selectedOperator.id" :data="selectedOperator.data" :theme="theme"
+                @update-run-value="updateRunValue" @show-details="showDetails" @download-data="downloadData" />
+        </Teleport>
     </div>
 </template>
 
 <script setup>
-import { ref, watch, computed } from 'vue'
+import { ref, watch, computed, onDeactivated } from 'vue'
 import { VueFlow, useVueFlow } from '@vue-flow/core'
 import { useGlobal } from '@/hooks/general/useGlobal'
 import { useTheme } from '@/stores/theme'
@@ -40,21 +48,27 @@ import baseNode from './nodes/baseNode.vue'
 import baseEdge from './edges/baseEdge.vue'
 import databaseNode from './nodes/databaseNode.vue'
 import operatorNode from './nodes/operatorNode/index.vue'
+import operatorDetailPanel from './panels/operatorDetailPanel.vue'
 import baseConnectionLine from './edges/baseConnectionLine.vue'
+
+defineOptions({ name: 'DataflowCanvas' })
 
 const { $Guid, $infoBox } = useGlobal()
 const appConfig = useAppConfig()
 const _theme = useTheme()
 const theme = computed(() => _theme.theme)
 const emits = defineEmits([
+    'edited',
     'switch-database',
+    'nodes-ready',
     'update:nodes',
     'update:edges',
     'connect',
     'connect-end',
     'connect-start',
     'update-run-value',
-    'show-details'
+    'show-details',
+    'download-data'
 ])
 
 const props = defineProps({
@@ -72,12 +86,17 @@ const props = defineProps({
     }
 })
 
+const canvasFlow = useVueFlow(props.id)
 const thisNodes = ref(props.nodes)
 const thisEdges = ref(props.edges)
+const selectedOperatorId = ref(null)
+const selectedOperator = computed(() => canvasFlow.findNode(selectedOperatorId.value) || thisNodes.value.find(n => n.id === selectedOperatorId.value) || null)
+const showInspector = ref(false)
 watch(
     () => props.nodes,
     (newNodes) => {
         thisNodes.value = newNodes
+        if (selectedOperatorId.value && !newNodes.some(n => n.id === selectedOperatorId.value) && !canvasFlow.findNode(selectedOperatorId.value)) { selectedOperatorId.value = null; closeInspector() }
     }
 )
 watch(
@@ -112,8 +131,28 @@ const updateNodeData = (nodeInfo) => {
 }
 
 const updateRunValue = (runValue) => {
+    emits('edited')
     emits('update-run-value', runValue)
 }
+
+const selectOperator = ({ node }) => {
+    if (!node || node.type !== 'operator-node') {
+        closeInspector()
+        return
+    }
+    selectedOperatorId.value = node.id
+    showInspector.value = true
+}
+
+const inspectOperator = (nodeId) => {
+    selectOperator({ node: canvasFlow.findNode(nodeId) || thisNodes.value.find(n => n.id === nodeId) })
+}
+
+const closeInspector = () => {
+    showInspector.value = false
+}
+
+onDeactivated(closeInspector)
 
 const isDragOver = ref(false)
 const dragOver = (event) => {
@@ -143,6 +182,7 @@ const drop = (event) => {
         }
     }
     flow.addNodes(newNode)
+    emits('edited')
     console.log(data)
 
     isDragOver.value = false
@@ -159,6 +199,11 @@ const deleteNode = (nodeInfo) => {
         confirm: () => {
             const flow = useVueFlow(props.id)
             flow.removeNodes(nodeInfo.id)
+            emits('edited')
+            if (selectedOperator.value?.id === nodeInfo.id) {
+                selectedOperatorId.value = null
+                showInspector.value = false
+            }
         }
     })
 }

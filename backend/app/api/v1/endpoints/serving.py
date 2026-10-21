@@ -16,6 +16,7 @@ from app.schemas.serving import (
     ServingUpdateSchema
 )
 from app.services.serving_registry import SERVING_CLS_REGISTRY
+from app.services.serving_params import expand_serving_configs
 
 router = APIRouter(tags=["serving"])
 
@@ -276,6 +277,9 @@ def test_serving_instance(id: str, body: ServingTestSchema):
             for params in serving_info['params']:
                  params_dict[params['name']] = params.get('value') if params.get('value') is not None else params.get('default_value')
 
+        params_dict = expand_serving_configs(params_dict)
+        if (params_dict.get("response_format") or {}).get("type") == "json_object":
+            prompt += '\n请只返回一个 JSON 对象，例如 {"ok": true}。'
         serving_instance = SERVING_CLS_REGISTRY[serving_info['cls_name']](**params_dict)
         responses = serving_instance.generate_from_input([prompt])
         if not serving_instance:

@@ -1,7 +1,8 @@
-import { ref, computed } from 'vue'
+import { ref, computed, onScopeDispose } from 'vue'
 import { defineStore } from 'pinia'
 import { getCurrentInstance } from 'vue'
 import axios from 'axios'
+import {subscribeChanges} from '@/components/manage/forms/changes'
 
 export const useDataflow = defineStore('useDataflow', () => {
     const instance = getCurrentInstance()
@@ -128,12 +129,16 @@ export const useDataflow = defineStore('useDataflow', () => {
     }
 
     const datasets = ref([])
+    const visibleDatasets = computed(() => datasets.value.filter(item => item.is_visible !== false))
+    let datasetVersion=0
     const getDatasets = async () => {
+        const version=++datasetVersion
         let res = await proxy.$api.datasets.list_datasets().catch((err) => {
             proxy.$barWarning(err, {
                 status: 'error'
             })
         })
+        if(version!==datasetVersion || !res)return
         if (res.success) {
             let _datasets = res.data
             _datasets.forEach((item) => {
@@ -276,9 +281,11 @@ export const useDataflow = defineStore('useDataflow', () => {
     // JSON Schemas — available schemas users saved on the "schemas" page.
     // These power the json_schema value-input on operator params.
     const jsonSchemaList = ref([])
+    let schemaVersion=0
     const getJsonSchemaList = async () => {
+        const version=++schemaVersion
         try {
-            const res = await axios.get('/api/v1/json_schemas/')
+            const res = await axios.get('/api/v1/json_schemas?include_builtin=true')
             const payload = res.data && res.data.data ? res.data.data : res.data
             const list = Array.isArray(payload) ? payload : []
             // normalise for fv-combobox consumption
@@ -286,19 +293,24 @@ export const useDataflow = defineStore('useDataflow', () => {
                 item.key = item.id
                 item.text = item.name
             })
-            jsonSchemaList.value = list
+            if(version===schemaVersion)jsonSchemaList.value = list
         } catch (e) {
             // silent — schemas page is optional
         }
     }
 
+    const stopChanges=subscribeChanges(change=>{if(change.topic==='resources')getJsonSchemaList();if(change.topic==='datasets')getDatasets()})
+    onScopeDispose(stopChanges)
+
     return {
+        operatorStyleDict,
         operators,
         groupOperators,
         getOperators,
         promptInfo,
         getPromptInfo,
         datasets,
+        visibleDatasets,
         getDatasets,
         text2sqlDatasets,
         getText2SqlDatasets,

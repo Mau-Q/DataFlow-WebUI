@@ -31,7 +31,7 @@
                     </div>
                 </div>
                 <hr />
-                <fv-button :theme="theme" icon="Add"
+                <fv-button v-if="choosenPivot?.key === 'custom'" :theme="theme" icon="Add"
                     :background="theme === 'dark' ? 'rgba(40, 40, 40, 0.6)' : 'rgba(255, 255, 255, 0.6)'"
                     :foreground="theme === 'dark' ? 'rgba(255, 255, 255, 1)' : 'rgba(90, 90, 90, 1)'" border-radius="8"
                     :is-box-shadow="true" style="width: calc(100% - 20px); height: 40px; margin-left: 10px"
@@ -42,8 +42,8 @@
                 </div>
                 <div class="pipeline-list-block" :class="[{ dark: theme === 'dark' }]">
                     <div v-show="item.show" v-for="(item, index) in filteredPipelines" :key="item.id"
-                        class="pipeline-item" :class="[{ choosen: thisPipeline && thisPipeline.id === item.id }]"
-                        @click="selectPipeline(item)" @contextmenu="showRightMenu($event, item)">
+                        class="pipeline-item" :class="[{ choosen: item.workflow ? $route.query.workflow === item.workflow : thisPipeline && thisPipeline.id === item.id }]"
+                        @click="selectPipeline(item)" @contextmenu="item.workflow ? $event.preventDefault() : showRightMenu($event, item)">
                         <div class="pipeline-item-main">
                             <div class="main-icon" :style="{
                                 background:
@@ -59,14 +59,14 @@
                             <div class="content-block">
                                 <div class="row-item">
                                     <p class="pipeline-name" :title="item.name">{{ item.name }}</p>
-                                    <exec-label :model-value="item"></exec-label>
+                                    <exec-label v-if="!item.workflow" :model-value="item"></exec-label>
                                 </div>
                                 <div class="row-item">
                                     <p class="pipeline-info">
                                         {{ local('Total') }}: {{ item.config.operators.length }}
                                         {{ local('operators') }}
                                     </p>
-                                    <time-rounder :model-value="new Date(item.updated_at)" :foreground="color"
+                                    <time-rounder v-if="item.updated_at" :model-value="new Date(item.updated_at)" :foreground="color"
                                         style="width: auto"></time-rounder>
                                 </div>
                             </div>
@@ -108,6 +108,7 @@ import pipelinePanel from '@/components/manage/mainFlow/panels/piplinePanel.vue'
 import execLabel from '@/components/manage/mainFlow/pipeline/execLabel.vue'
 
 import pipelineIcon from '@/assets/flow/pipeline.svg'
+import { PLATFORM_PIPELINES } from '@/hooks/dataflow/platformEntries'
 
 export default {
     name: 'pipeline',
@@ -117,6 +118,7 @@ export default {
         execLabel
     },
     props: {
+        beforeChange:{type:Function,default:async()=>true},
         modelValue: {
             default: false
         },
@@ -135,19 +137,14 @@ export default {
             thisValue: this.modelValue,
             thisLoading: this.loading,
             searchText: '',
-            thisPipeline: null,
+            thisPipeline: this.pipeline,
             currentContextItem: null,
             addPanelMode: 'add',
-            choosenPivot: null,
+            choosenPivot: { key: 'custom', name: () => this.local('Custom Pipeline') },
             pivotItems: [
-                {
-                    key: 'template',
-                    name: () => this.local('Template')
-                },
-                {
-                    key: 'custom',
-                    name: () => this.local('Custom Pipeline')
-                }
+                { key: 'custom', name: () => this.local('Custom Pipeline') },
+                { key: 'template', name: () => this.local('Template') },
+                { key: 'workflow', name: () => this.local('Preset Workflows') }
             ],
             show: {
                 add: false,
@@ -201,13 +198,10 @@ export default {
             return operators
         },
         filteredPipelines() {
-            let mode = this.choosenPivot ? this.choosenPivot.key : 'template'
-            if (mode === 'template')
-                return this.pipelines.filter((item) => item.tags && item.tags.includes('template'))
-            else
-                return this.pipelines.filter(
-                    (item) => !item.tags || !item.tags.includes('template')
-                )
+            const mode = this.choosenPivot?.key || 'custom'
+            const items = mode === 'workflow' ? PLATFORM_PIPELINES : this.pipelines.filter(item =>
+                mode === 'template' ? item.tags?.includes('template') : !item.tags?.includes('template'))
+            return items.map(item => ({...item, show: this.isSearchShowItem(item)}))
         },
         totalNumVisible() {
             return this.filteredPipelines.filter((item) => item.show).length
@@ -253,22 +247,38 @@ export default {
             flow.addNodes(newNode)
         },
         async selectPipeline(pipelineItem) {
-            console.log(pipelineItem)
+            if(!pipelineItem.workflow && !this.$route.query.workflow && !await this.beforeChange())return
+            if (pipelineItem.workflow) {
+                this.thisValue = false
+                this.$router.push({path: '/m', query: {workflow: pipelineItem.workflow}})
+                return
+            }
+            if (this.$route.query.workflow) {
+                this.thisValue = false
+                this.$router.push({path: '/m', query: {pipeline: pipelineItem.id}})
+                return
+            }
             if (!this.thisLoading) return
             this.thisLoading = false
-            this.thisPipeline = pipelineItem
-            await usePipelineOperation().renderPipeline(
-                pipelineItem.config,
-                this.flowId,
-                this.datasets,
-                this.flatFormatedOperators,
-                this,
-                this.$nextTick,
-                this.$emit,
-                this.$Guid
-            )
-            this.thisLoading = true
-            this.$emit('select-pipeline', pipelineItem)
+            try {
+                await usePipelineOperation().renderPipeline(
+                    pipelineItem.config,
+                    this.flowId,
+                    this.datasets,
+                    this.flatFormatedOperators,
+                    this,
+                    this.$nextTick,
+                    this.$emit,
+                    this.$Guid
+                )
+                this.thisPipeline = pipelineItem
+                this.$emit('update:pipeline', pipelineItem)
+                this.$emit('select-pipeline', pipelineItem)
+            } catch (error) {
+                this.$barWarning(error.message || this.local('Load pipeline failed'), {status: 'error'})
+            } finally {
+                this.thisLoading = true
+            }
         },
         delPipeline(item) {
             if (!item) return
@@ -278,7 +288,7 @@ export default {
                 confirm: () => {
                     this.$api.pipelines.delete_pipeline(item.id).then((res) => {
                         if (res.code === 200) {
-                            if (item.id === this.thisPipeline.id) {
+                            if (item.id === this.thisPipeline?.id) {
                                 this.thisPipeline = null
                             }
                             this.getPipelineList()

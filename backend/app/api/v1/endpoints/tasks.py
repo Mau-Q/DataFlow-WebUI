@@ -1,11 +1,17 @@
-from fastapi import APIRouter, HTTPException, Query, Request
+from app.services.resource_resolution import ResourceReferenceError
+from fastapi import APIRouter, HTTPException, Query, Request, Body
 from fastapi.responses import FileResponse
 from typing import List, Dict
+from pydantic import BaseModel, Field
+from app.services.task_results import TaskResults
+from app.services.auto_collection import CollectionTarget, target_preferences
+from app.services.data_library import LibraryError
 from app.schemas.pipelines import (
     PipelineExecutionResult
 )
 from app.services.dataflow_engine import dataflow_engine
 from app.core.container import container
+from app.core.config import settings
 from app.api.v1.envelope import ApiResponse
 from app.api.v1.resp import ok
 from app.api.v1.errors import *
@@ -17,6 +23,11 @@ import os
 logger = get_logger(__name__)
 
 router = APIRouter(tags=["tasks"])
+
+
+class RunOutput(BaseModel):
+    output_root: str | None = Field(default=None, min_length=1, max_length=4000)
+    collection_target: CollectionTarget | None = None
 
 
 # CRUD操作API
@@ -204,7 +215,7 @@ def get_task_stats():
 
 # Pipeline执行API
 @router.post("/execute", response_model=ApiResponse[PipelineExecutionResult], operation_id="execute_pipeline", summary="执行Pipeline")
-async def execute_pipeline(request: Request, pipeline_id):
+async def execute_pipeline(request: Request, pipeline_id, body: RunOutput | None = Body(default=None)):
     task_id = None
     try:
         logger.info(f"Request: {request.method} {request.url.path}")
@@ -213,26 +224,59 @@ async def execute_pipeline(request: Request, pipeline_id):
         if not pipeline_config:
             raise HTTPException(404, f"Pipeline {pipeline_id} not found")
 
-        # 调用服务层开始执行
-        task_id, _, initial_result = container.task_registry.start_execution(
-            pipeline_id=pipeline_id, 
-            config=pipeline_config
-        )
+        import copy
+        config = copy.deepcopy(pipeline_config.get('config', {}))
+        options = config.setdefault('execution_options', {})
+        if body and body.collection_target:
+            options['collection_target'] = body.collection_target.model_dump()
+        if body and body.output_root:
+            options.update(output_root=body.output_root, pipeline_name=pipeline_config.get('name', 'Pipeline'))
+        if config.get('execution_options', {}).get('capture_responses'):
+            from app.services.text_generation import TextGeneration
+            platform = TextGeneration()
+            check = platform.preflight(config)
+            if not check['ready']:
+                raise HTTPException(422, '；'.join(check['errors']))
+            try:
+                config['execution_options']['input_snapshot'] = platform._freeze_input(config)
+            except LibraryError as exc:
+                raise HTTPException(exc.status, str(exc)) from exc
+            config['execution_options']['serving_snapshots'] = check['serving_snapshots']
+            config['execution_options']['max_attempts'] = config['execution_options'].get('additional_retries', 0)+1
+            task_id, frozen_config, initial_result = container.task_registry.start_execution(config=config)
+            for op in frozen_config['operators']:
+                if op['name'] == 'MinerU4PDFParser':
+                    for param in op['params']['init']:
+                        if param['name'] == 'output_dir':
+                            param['value'] = os.path.join(settings.CACHE_DIR, f'{task_id}_output', 'parsing')
+            initial_result.update(pipeline_id=pipeline_id, name=pipeline_config.get('name'), pipeline_source_config=pipeline_config['config'])
+            container.task_registry.update(task_id, initial_result)
+        else:
+            # 调用服务层开始执行
+            task_id, frozen_config, initial_result = container.task_registry.start_execution(
+                config=config
+            )
+            initial_result.update(pipeline_id=pipeline_id, name=pipeline_config.get('name'), pipeline_source_config=pipeline_config['config'])
+            container.task_registry.update(task_id, initial_result)
         logger.info(f"Execution ID: {task_id}")
         
         # 执行 pipeline (run 方法内部已经处理所有异常，总是返回结果)
-        result = dataflow_engine.run(pipeline_config["config"], task_id, execution_path=container.task_registry.path)
+        result = dataflow_engine.run(frozen_config, task_id, execution_path=container.task_registry.path)
         
+        result = {**initial_result, **result}
+
         # 更新执行记录到 registry
-        data = container.task_registry._read()
-        if task_id in data.get("tasks", {}):
-            data["tasks"][task_id].update(result)
-            container.task_registry._write(data)
+        from app.services.task_store import patch_task
+        patch_task(container.task_registry.path, task_id, result)
         
         return ok(result, message=f"Pipeline execution {result['status']}")
         
     except HTTPException:
         raise
+    except LibraryError as exc:
+        raise HTTPException(exc.status, str(exc)) from exc
+    except ResourceReferenceError as e:
+        raise HTTPException(422, str(e))
     except Exception as e:
         # 导入 DataFlowEngineError 来检查异常类型
         from app.services.dataflow_engine import DataFlowEngineError
@@ -259,7 +303,7 @@ async def execute_pipeline(request: Request, pipeline_id):
                             },
                             "completed_at": datetime.now().isoformat()
                         })
-                        container.pipeline_registry._write(data)
+                        container.task_registry._write(data)
                 except Exception as update_error:
                     logger.error(f"Failed to update execution status: {update_error}")
             
@@ -280,7 +324,7 @@ async def execute_pipeline(request: Request, pipeline_id):
 
 
 @router.post("/execute-async", response_model=ApiResponse[Dict], operation_id="execute_pipeline_async", summary="异步执行Pipeline（使用Ray）")
-async def execute_pipeline_async(request: Request, pipeline_id: str):
+async def execute_pipeline_async(request: Request, pipeline_id: str, body: RunOutput | None = Body(default=None)):
     """
     异步执行 Pipeline
     
@@ -294,9 +338,17 @@ async def execute_pipeline_async(request: Request, pipeline_id: str):
         if not pipeline_config:
             raise HTTPException(404, f"Pipeline {pipeline_id} not found")
 
+        if pipeline_config.get('config', {}).get('execution_options', {}).get('capture_responses'):
+            from app.services.text_generation import TextGeneration
+            try:
+                return ok(await TextGeneration().submit(pipeline_id=pipeline_id, output_root=body.output_root if body else None, collection_target=body.collection_target.model_dump() if body and body.collection_target else None))
+            except LibraryError as exc:
+                raise HTTPException(exc.status, str(exc)) from exc
+
         # 调用服务层开始异步执行
         result = await container.task_registry.start_execution_async(
-            pipeline_id=pipeline_id
+            pipeline_id=pipeline_id, output_root=body.output_root if body else None,
+            collection_target=body.collection_target.model_dump() if body and body.collection_target else None
         )
         task_id = result["task_id"]
         logger.info(f"Async Execution ID: {task_id}, Task ID: {task_id}")
@@ -307,8 +359,12 @@ async def execute_pipeline_async(request: Request, pipeline_id: str):
             "message": "Pipeline execution submitted to Ray"
         })
         
+    except LibraryError as exc:
+        raise HTTPException(exc.status, str(exc)) from exc
     except HTTPException:
         raise
+    except ResourceReferenceError as e:
+        raise HTTPException(422, str(e))
     except Exception as e:
         logger.error(f"Failed to submit pipeline execution: {e}")
         import traceback
@@ -351,3 +407,71 @@ async def kill_execution(request: Request, task_id: str):
         import traceback
         logger.error(traceback.format_exc())
         raise HTTPException(500, f"Failed to kill task: {str(e)}")
+
+# Final results use the same execution history as step inspection.
+
+
+class CollectResult(BaseModel):
+    expected_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    draft_id: str | None = None
+    name: str | None = Field(default=None, min_length=1, max_length=240)
+    media_bindings: Dict[str, str] = Field(default_factory=dict)
+
+
+
+def result_call(fn, *args, **kwargs):
+    try:
+        return fn(*args, **kwargs)
+    except LibraryError as exc:
+        raise HTTPException(exc.status, str(exc)) from exc
+
+
+@router.get('/execution/{task_id}/final-result')
+def final_result(task_id: str):
+    return ok(result_call(TaskResults().detail, task_id))
+
+
+@router.get('/execution/{task_id}/final-result/download')
+def download_final_result(task_id: str):
+    path = result_call(TaskResults().download, task_id)
+    return FileResponse(path, filename=f'{task_id}_final.jsonl', media_type='application/x-ndjson')
+
+
+@router.post('/execution/{task_id}/final-result/collect')
+def collect_final_result(task_id: str, body: CollectResult):
+    return ok(result_call(TaskResults().collect, task_id, **body.model_dump()))
+
+
+@router.get('/result-storage')
+def get_result_storage():
+    from app.services.result_storage import preferences
+    return ok(preferences())
+
+
+@router.put('/result-storage')
+def update_result_storage(body: RunOutput):
+    from app.services.result_storage import save_preferences
+    if not body.output_root:
+        raise HTTPException(422, '请填写默认结果目录')
+    return ok(result_call(save_preferences, body.output_root))
+
+
+@router.post('/result-storage/check')
+def check_result_storage(body: RunOutput):
+    from app.services.result_storage import check_root, preferences
+    return ok({'output_root': result_call(check_root, body.output_root or preferences()['output_root'])})
+
+
+@router.post('/result-storage/choose')
+def choose_result_storage():
+    from app.services.local_source_picker import pick_paths
+    from app.services.result_storage import check_root
+    paths = result_call(pick_paths, directories_only=True)
+    if not paths:
+        return ok({'cancelled': True})
+    return ok({'cancelled': False, 'output_root': result_call(check_root, paths[0])})
+
+
+@router.get('/collection-target')
+def collection_target_preferences():
+    return ok(target_preferences(container.data_library))

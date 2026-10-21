@@ -1,10 +1,12 @@
+from app.services.task_artifacts import with_task_artifacts, capture_responses
 from dataflow.serving import APILLMServing_request
 from dataflow.utils.text2sql.database_manager import DatabaseManager
 from dataflow.utils.storage import FileStorage
 from dataflow.pipeline import PipelineABC
-from dataflow.utils.registry import PROMPT_REGISTRY, OPERATOR_REGISTRY
+from dataflow.utils.registry import OPERATOR_REGISTRY
 from dataclasses import dataclass
 from app.services.serving_registry import SERVING_CLS_REGISTRY
+from app.services.serving_params import expand_serving_configs
 from app.core.config import settings
 from app.core.container import container
 from app.core.logger_setup import get_logger
@@ -23,7 +25,8 @@ logger = get_logger(__name__)
 
 import inspect
 
-from app.services.param_coercion import coerce_param_value
+from app.services.param_coercion import coerce_param_value, coerce_keyword_params
+from app.services.resource_resolution import instantiate_prompt, resolve_pipeline_resources
 
 class DataFlowEngineError(Exception):
     """DataFlow Engine 自定义异常类"""
@@ -178,7 +181,7 @@ class DataFlowEngine:
     def __init__(self):
         self.execution_map : Dict[str, ExecutionStatus] = {}
         
-    def init_serving_instance(self, serving_id: Any, is_embedding: bool = False) -> APILLMServing_request:
+    def init_serving_instance(self, serving_id: Any, is_embedding: bool = False, max_retries: int | None = None, snapshot: dict | None = None) -> APILLMServing_request:
         """初始化 Serving 实例"""
         try:
             params_dict = {}
@@ -229,9 +232,17 @@ class DataFlowEngine:
                     if params['name'] != 'api_key':
                         params_dict[params['name']] = params.get('value') if params.get('value') is not None else params.get('default_value')
                 
-                logger.info(f"Initializing serving with params: {params_dict}")
-                os.environ[key_name_var] = api_key_val
-                logger.info(f"Environment variable {key_name_var} set to {api_key_val}")
+                if snapshot:
+                    key_name = params_dict.get('key_name_of_api_key')
+                    params_dict = dict(snapshot['parameters'])
+                    if key_name:
+                        params_dict['key_name_of_api_key'] = key_name
+                params_dict = expand_serving_configs(params_dict)
+                if max_retries is not None:
+                    params_dict["max_retries"] = max_retries
+                params_dict['key_name_of_api_key'] = key_name_var
+                logger.info(f"Initializing serving: {actual_serving_id}")
+                os.environ[key_name_var] = api_key_val or os.environ.get(key_name_var, "")
                 serving_instance = SERVING_CLS_REGISTRY[serving_info['cls_name']](**params_dict)
                 
             return serving_instance
@@ -243,8 +254,7 @@ class DataFlowEngine:
                 f"Failed to initialize Serving instance",
                 context={
                     "serving_id": serving_id,
-                    "serving_info": serving_info if 'serving_info' in locals() else None,
-                    "params_dict": params_dict if 'params_dict' in locals() else None
+                    "serving_class": serving_info.get('cls_name') if 'serving_info' in locals() and serving_info else None
                 },
                 original_error=e
             )
@@ -295,6 +305,8 @@ class DataFlowEngine:
                 )
             
             dataset = container.dataset_registry.get(input_dataset_id)
+            if not dataset and pipeline_config.get('execution_options', {}).get('input_snapshot'):
+                dataset = {'root': pipeline_config['execution_options']['input_snapshot']['path']}
             if not dataset:
                 raise DataFlowEngineError(
                     f"Dataset not found",
@@ -311,8 +323,8 @@ class DataFlowEngine:
             
             dataflow_runtime["storage"] = {
                 "type": "file",
-                "first_entry_file_name": os.path.abspath(dataset['root']),
-                "cache_path": os.path.join(settings.BASE_DIR, "cache_local", f"{task_id}_output"),
+                "first_entry_file_name": os.path.abspath(pipeline_config.get("execution_options", {}).get("input_snapshot", {}).get("path") or dataset['root']),
+                "cache_path": os.path.join(settings.CACHE_DIR, f"{task_id}_output"),
                 "file_name_prefix": "dataflow_cache_step",
                 "cache_type": "jsonl",
             }
@@ -422,6 +434,7 @@ class DataFlowEngine:
         return dataflow_runtime
                             
     
+    @with_task_artifacts
     def run(self, pipeline_config: Dict[str, Any], task_id: str, execution_path: Optional[str] = None) -> Dict[str, Any]:
         """
         执行 Pipeline
@@ -440,6 +453,7 @@ class DataFlowEngine:
                 - started_at: str
                 - completed_at: str
         """
+        pipeline_config, _ = resolve_pipeline_resources(pipeline_config)
         started_at = datetime.now().isoformat()
         logs: List[str] = []
         output: Dict[str, Any] = {}
@@ -456,20 +470,8 @@ class DataFlowEngine:
             if not execution_path:
                 return
             try:
-                import json
-                with open(execution_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                if task_id in data.get("tasks", {}):
-                    if status:
-                        data["tasks"][task_id]["status"] = status
-                    if partial_output:
-                        if "output" not in data["tasks"][task_id]:
-                             data["tasks"][task_id]["output"] = {}
-                        # 更新 output 中的内容
-                        data["tasks"][task_id]["output"].update(partial_output)
-                        
-                    with open(execution_path, "w", encoding="utf-8") as f:
-                        json.dump(data, f, indent=2)
+                from app.services.task_store import patch_task
+                patch_task(execution_path, task_id, {**({"status": status} if status else {}), "logs": list(logs), "started_at": started_at}, {"operator_logs": operator_logs, **(partial_output or {})})
             except Exception as e:
                 logger.error(f"Failed to update execution status: {e}")
 
@@ -507,6 +509,8 @@ class DataFlowEngine:
                     )
                 
                 dataset = container.dataset_registry.get(input_dataset_id)
+                if not dataset and pipeline_config.get('execution_options', {}).get('input_snapshot'):
+                    dataset = {'root': pipeline_config['execution_options']['input_snapshot']['path']}
                 if not dataset:
                     raise DataFlowEngineError(
                         f"数据集未找到",
@@ -521,8 +525,12 @@ class DataFlowEngine:
                 os.makedirs(cache_path_output, exist_ok=True)
                 logger.info(f"Cache directory: {cache_path_output}, exists: {os.path.exists(cache_path_output)}")
                 
-                storage = FileStorage(
-                    first_entry_file_name=os.path.abspath(dataset['root']),
+                storage_class = FileStorage
+                if pipeline_config.get('execution_options', {}).get('representative_training'):
+                    from app.services.training_storage import TrainingFileStorage
+                    storage_class = TrainingFileStorage
+                storage = storage_class(
+                    first_entry_file_name=os.path.abspath(pipeline_config.get("execution_options", {}).get("input_snapshot", {}).get("path") or dataset['root']),
                     cache_path=cache_path_output,
                     file_name_prefix="dataflow_cache_step",
                     cache_type="jsonl",
@@ -603,7 +611,7 @@ class DataFlowEngine:
                                 logger.info(f"Operator {op_name}: initializing serving {serving_id}")
                                 add_log("init", f"[{datetime.now().isoformat()}]   - Initializing LLM serving: {serving_id}", op_key)
                                 if serving_id not in serving_instance_map:
-                                    serving_instance_map[serving_id] = self.init_serving_instance(serving_id)
+                                    serving_instance_map[serving_id] = capture_responses(self.init_serving_instance(serving_id, max_retries=pipeline_config.get("execution_options", {}).get("max_attempts"), snapshot=pipeline_config.get("execution_options", {}).get("serving_snapshots", {}).get(serving_id)), pipeline_config, task_id)
                                 param_value = serving_instance_map[serving_id]
 
                             elif param_name == "embedding_serving":
@@ -629,33 +637,8 @@ class DataFlowEngine:
                                         db_manager_instance_map[db_manager_id] = self.init_database_manager(db_manager_id)
                                     param_value = db_manager_instance_map[db_manager_id]
                             
-                            elif param_name == "prompt_template":
-                                if isinstance(param_value, dict):
-                                    cls_name = extract_class_name(param_value.get("cls_name", "FormatStrPrompt"))
-                                    add_log("init", f"[{datetime.now().isoformat()}]   - Loading prompt template: {cls_name} (dict-form)", op_key)
-                                    prompt_cls = PROMPT_REGISTRY.get(cls_name)
-                                    if not prompt_cls:
-                                        raise DataFlowEngineError(
-                                            f"Prompt类未找到: {cls_name}",
-                                            context={"operator": op_name, "param": param_name}
-                                        )
-                                    if "params" in param_value:
-                                        ctor_kwargs = {}
-                                        for p in param_value["params"]:
-                                            ctor_kwargs[p["name"]] = p.get("value") if p.get("value") is not None else p.get("default_value")
-                                    else:
-                                        ctor_kwargs = {k: v for k, v in param_value.items() if k != "cls_name"}
-                                    param_value = prompt_cls(**ctor_kwargs)
-                                else:
-                                    prompt_cls_name = extract_class_name(param_value)
-                                    add_log("init", f"[{datetime.now().isoformat()}]   - Loading prompt template: {prompt_cls_name}", op_key)
-                                    prompt_cls = PROMPT_REGISTRY.get(prompt_cls_name)
-                                    if not prompt_cls:
-                                        raise DataFlowEngineError(
-                                            f"Prompt类未找到: {prompt_cls_name}",
-                                            context={"operator": op_name, "param": param_name}
-                                        )
-                                    param_value = prompt_cls()
+                            elif param_name == "prompt_template" or param_name.endswith("_prompt_template"):
+                                param_value = instantiate_prompt(param_value)
                             elif param_name in ("process_fn", "filter_rules"):
                                 normalized_items = _normalize_dynamic_code_param_value(
                                     param_value,
@@ -721,6 +704,9 @@ class DataFlowEngine:
                         param_kind = param.get("kind", "")
                         if param_kind == "VAR_KEYWORD" and param_value is None:
                             continue
+                        if param_kind == "VAR_KEYWORD":
+                            run_params.update(coerce_keyword_params(param_value))
+                            continue
                         # Skip DYNAMIC / unknown params the operator's run() can't accept.
                         if (param_name not in run_sig.parameters) and not run_accepts_var_kw:
                             logger.warning(
@@ -743,8 +729,8 @@ class DataFlowEngine:
                     ]
                     for vk_name in var_kw_names:
                         vk_val = run_params.pop(vk_name, None)
-                        if isinstance(vk_val, dict):
-                            run_params.update(vk_val)
+                        if vk_val is not None:
+                            run_params.update(coerce_keyword_params(vk_val))
 
                     # 实例化 Operator
                     operator_instance = operator_cls(**init_params)
@@ -774,6 +760,7 @@ class DataFlowEngine:
             logger.info(f"Executing {len(run_op)} operators...")
             
             execution_results = []
+            output["execution_results"] = execution_results
             for op_idx, (operator, run_params, op_name, op_key) in enumerate(run_op):
                 try:
                     run_params["storage"] = storage.step()
@@ -869,6 +856,7 @@ class DataFlowEngine:
                     
                     
                     execution_results.append({
+                        "file_path": f_path,
                         "operator": op_name,
                         "status": "completed",
                         "index": op_idx
@@ -985,4 +973,3 @@ class DataFlowEngine:
             }
             
 dataflow_engine = DataFlowEngine()
-

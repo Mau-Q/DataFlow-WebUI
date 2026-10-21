@@ -97,6 +97,27 @@ def test_update_preserves_identity_and_updates_the_requested_fields(pipeline_reg
     assert updated["status"] == "queued"
 
 
+def test_operator_update_preserves_pipeline_specific_role(pipeline_registry):
+    registry, _ = pipeline_registry
+    old_operator = {
+        "name": "ExampleOperator",
+        "params": {"init": [], "run": []},
+        "location": [0, 0],
+    }
+
+    updated = registry._update_pipeline_op_info(
+        {
+            "name": "ExampleOperator",
+            "params": {"init": [], "run": []},
+            "location": [320, 160],
+            "pipeline_role": "Prepare evidence for the next step.",
+        },
+        old_operator,
+    )
+
+    assert updated["pipeline_role"] == "Prepare evidence for the next step."
+
+
 def test_update_normalizes_and_persists_pipeline_name(pipeline_registry, pipeline_payload):
     registry, _ = pipeline_registry
     created = registry.create_pipeline(pipeline_payload)
@@ -124,10 +145,12 @@ def test_update_nonexistent_pipeline_fails(pipeline_registry):
 
 def test_list_and_delete_pipelines(pipeline_registry, pipeline_payload):
     registry, _ = pipeline_registry
+    baseline_ids = {item["id"] for item in registry.list_pipelines()}
     first = registry.create_pipeline(pipeline_payload)
     second = registry.create_pipeline({**pipeline_payload, "name": "Second"})
 
-    assert {item["id"] for item in registry.list_pipelines()} == {first["id"], second["id"]}
+    current_ids = {item["id"] for item in registry.list_pipelines()}
+    assert current_ids - baseline_ids == {first["id"], second["id"]}
     assert registry.delete_pipeline(first["id"]) is True
     assert registry.get_pipeline(first["id"]) is None
     assert registry.delete_pipeline(first["id"]) is False

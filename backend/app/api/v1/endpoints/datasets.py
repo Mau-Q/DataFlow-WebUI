@@ -1,5 +1,9 @@
 import os
-import shutil
+import uuid
+from pathlib import Path
+from app.services.dataset_visibility import annotate_datasets
+from app.services.dataset_content import annotate_content
+from app.services.dataset_persistence import atomic_write
 from fastapi import APIRouter, HTTPException, UploadFile, File
 from app.schemas.dataset import DatasetIn, DatasetOut
 from app.core.container import container
@@ -11,9 +15,11 @@ from app.api.v1.errors import *
 router = APIRouter(tags=["datasets"])
 
 @router.get("/", response_model=ApiResponse[list[DatasetOut]], operation_id="list_datasets", summary="返回目前所有注册的数据集列表，包含每个数据集的条目数和文件大小")
-def list_datasets():
+def list_datasets(visible_only: bool = False):
     """返回所有数据集列表，每个数据集包含条目数(num_samples)和文件大小(file_size)信息"""
-    return ok(container.dataset_registry.list())
+    records = annotate_datasets(container.dataset_registry.list())
+    visible = [r for r in records if r['is_visible']] if visible_only else records
+    return ok([annotate_content(r) for r in visible])
 
 @router.post("/", response_model=ApiResponse[DatasetOut], operation_id="register_dataset", summary="注册一个新的数据集或更新已有数据集的信息，根据路径作为唯一主键")
 def register_dataset(payload: DatasetIn):
@@ -47,7 +53,7 @@ def get_dataset(ds_id: str):
     ds = container.dataset_registry.get(ds_id)
     if not ds:
         raise HTTPException(404, "Dataset not found")
-    return ok(ds)
+    return ok(annotate_content(ds))
 
 @router.delete("/{ds_id}", response_model=ApiResponse[dict], operation_id="delete_dataset", summary="根据数据集 ID 删除数据集")
 def delete_dataset(ds_id: str):
@@ -142,9 +148,15 @@ async def upload_dataset(file: UploadFile = File(...), name: str = None):
             os.makedirs(upload_dir)
         
         # 保存文件
-        file_path = os.path.join(upload_dir, file.filename)
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+        filename = Path((file.filename or 'dataset').replace('\\', '/')).name
+        target_dir = Path(upload_dir) / uuid.uuid4().hex
+        target_dir.mkdir()
+        file_path = str(target_dir / filename)
+        from app.services.data_library import MAX_BYTES
+        content = file.file.read(MAX_BYTES + 1)
+        if not content or len(content) > MAX_BYTES:
+            raise ValueError('文件为空或超过 100 MiB 限制')
+        atomic_write(file_path, content)
         
         # 注册数据集
         ds_dict = {

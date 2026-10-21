@@ -1,9 +1,13 @@
 import yaml, os, hashlib
 import json
+import csv
 from typing import Dict, List
+from pathlib import Path
 from app.core.config import settings
 from loguru import logger
 import pandas as pd
+from app.services.dataset_persistence import atomic_write, dataset_lock, registry_write
+from app.services.dataset_database import DatasetDatabase
 
 class VisualizeDatasetService:
     def __init__(self):
@@ -59,7 +63,9 @@ class VisualizeDatasetService:
 class DatasetRegistry:
     def __init__(self, path: str | None = None, scan: bool = True):
         self.path = path or settings.DATA_REGISTRY
+        self.db = DatasetDatabase(Path(self.path).parent)
         self._ensure()
+        self.db.import_registry(self.path)
         if scan:
             self.scan_all_datasets()
 
@@ -95,6 +101,10 @@ class DatasetRegistry:
                     }
 
                     try:
+                        existing = self.get(hashlib.md5(file_path.encode('utf-8')).hexdigest()[:10])
+                        if existing and existing.get('hash') == self._load_file_hash(file_path):
+                            cnt += 1
+                            continue
                         # 直接用 registry 的方法，避免依赖 API 层的 DatasetIn / register_dataset
                         self.add_or_update(ds_dict)
                         cnt += 1
@@ -113,18 +123,15 @@ class DatasetRegistry:
                 # logging.info(f"Registered dataset from {relative_path}.")
 
     def _ensure(self):
-        if not os.path.exists(self.path):
-            os.makedirs(os.path.dirname(self.path), exist_ok=True)
-            with open(self.path, "w", encoding="utf-8") as f:
-                yaml.safe_dump({"datasets": {}}, f, allow_unicode=True)
+        with dataset_lock(Path(self.path).parent):
+            if not os.path.exists(self.path):
+                atomic_write(self.path, b'datasets: {}\n')
 
     def _read(self) -> Dict:
-        with open(self.path, "r", encoding="utf-8") as f:
-            return yaml.safe_load(f) or {"datasets": {}}
+        return self.db.registry(self.path)
 
     def _write(self, data: Dict):
-        with open(self.path, "w", encoding="utf-8") as f:
-            yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False)
+        self.db.replace_registry(self.path, data['datasets'])
 
     def _count_file_entries(self, file_path: str) -> int:
         """统计文件中的条目数量"""
@@ -132,10 +139,18 @@ class DatasetRegistry:
         file_ext = file_path.split('.')[-1].lower()
         
         try:
-            if file_ext in ['csv', 'jsonl', 'txt', 'log']:
+            if file_ext == 'csv':
+                with open(file_path, newline='', encoding='utf-8-sig') as f:
+                    return sum(1 for _ in csv.DictReader(f))
+            elif file_ext == 'parquet':
+                import pyarrow.parquet as pq
+                return pq.ParquetFile(file_path).metadata.num_rows
+            elif file_ext in ['txt', 'md']:
+                return 1
+            elif file_ext in ['jsonl', 'log']:
                 # 对于文本类文件，按行计数
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    return sum(1 for _ in f)
+                    return sum(1 for line in f if line.strip())
             elif file_ext == 'json':
                 # 对于JSON文件，尝试加载并计算
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
@@ -168,10 +183,14 @@ class DatasetRegistry:
                 hash_md5.update(chunk)
         return hash_md5.hexdigest()
 
+    @registry_write
     def add_or_update(self, ds: Dict):
         data = self._read()
-        # 计算一个稳定 id（基于路径）
-        ds_id = hashlib.md5(ds["root"].encode("utf-8")).hexdigest()[:10]
+        # Keep the existing identity when an adopted source now has an owned path.
+        registered = [r for r in data['datasets'].values() if r['root'] == ds['root']]
+        if len(registered) > 1:
+            raise ValueError('Multiple existing dataset IDs refer to this path')
+        ds_id = registered[0]['id'] if registered else hashlib.md5(ds['root'].encode('utf-8')).hexdigest()[:10]
         ds["id"] = ds_id
         try: 
             ds["hash"] = self._load_file_hash(ds["root"])
@@ -186,7 +205,11 @@ class DatasetRegistry:
             raise FileNotFoundError(f"Cannot read file at {ds['root']}")
         
         ds['type'] = ds.get('root','').split('.')[-1].lower()
-        ds["added_at"] = pd.Timestamp.now().isoformat()
+        now = pd.Timestamp.now(tz='UTC').isoformat()
+        previous = data['datasets'].get(ds_id, {})
+        ds['created_at'] = previous.get('created_at') or previous.get('added_at') or now
+        ds['updated_at'] = now
+        ds['added_at'] = previous.get('added_at') or now
         
         # 覆盖或新增
         datasets = data.get("datasets",{})
@@ -198,6 +221,7 @@ class DatasetRegistry:
     def get(self, ds_id: str) -> Dict | None:
         return self._read()["datasets"].get(ds_id)
     
+    @registry_write
     def remove(self, ds_id: str):
         data = self._read()
         datasets = data.get("datasets", {})

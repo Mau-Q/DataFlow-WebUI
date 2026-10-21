@@ -1,7 +1,7 @@
 <template>
     <div class="df-analysis-container" :class="[{ dark: theme === 'dark' }]">
         <div class="major-container">
-            <div class="title-block">
+            <p v-if="error" role="alert">{{ error }} <button @click="fetchStats">重试</button></p><div class="title-block">
                 <div class="title-content">
                     <p class="main-title">{{ local('Analysis & Metrics') }}</p>
                     <p class="sub-title">{{ local('Pipeline performance and execution statistics') }}</p>
@@ -73,11 +73,11 @@
                                 <div v-for="(exec, i) in executions.slice(0, 15)" :key="i" class="exec-row">
                                     <div class="exec-status-dot" :style="{ background: statusColor(exec.status) }"></div>
                                     <div class="exec-info">
-                                        <p class="exec-id" :title="exec.task_id">{{ exec.task_id }}</p>
-                                        <p class="exec-pipeline">{{ exec.pipeline_id || local('Custom') }}</p>
+                                        <router-link class="exec-id" :to="{path:'/m',query:{task:exec.task_id}}" :title="exec.task_id">{{ exec.name || exec.pipeline_name || pipelineNames[exec.pipeline_id] || exec.task_id }}</router-link>
+                                        <p class="exec-pipeline">{{ exec.task_id }} · {{ pipelineNames[exec.pipeline_id] || exec.pipeline_id || local('Custom') }}</p>
                                     </div>
                                     <span class="exec-badge" :style="{ background: statusBg(exec.status), color: statusColor(exec.status) }">
-                                        {{ exec.status }}
+                                        {{ statusLabel(exec.status) }}
                                     </span>
                                     <p class="exec-time">{{ formatTime(exec.started_at || exec.created_at) }}</p>
                                 </div>
@@ -134,7 +134,7 @@
                                     </div>
                                     <div class="op-stat">
                                         <span class="op-label">{{ local('Success Rate') }}</span>
-                                        <span class="op-value">{{ op.executions > 0 ? Math.round((op.success_count / op.executions) * 100) : 0 }}%</span>
+                                        <span class="op-value">{{ op.terminal_count > 0 ? Math.round((op.success_count / op.terminal_count) * 100) : 0 }}%</span>
                                     </div>
                                     <div class="op-stat">
                                         <span class="op-label">{{ local('Avg Time') }}</span>
@@ -148,25 +148,25 @@
                     <!-- Data Quality Tab -->
                     <div v-if="activeTab === 'quality'" class="tab-content">
                         <div class="quality-section">
-                            <p class="section-title">{{ local('Data Quality Metrics') }}</p>
+                            <p class="section-title">{{ local('运行记录指标') }}</p>
                             
-                            <div class="quality-metrics">
+                            <p>以下比例基于任务记录，不代表生成数据质量。完成与失败占比以全部任务为分母；成功率以已结束任务（含取消）为分母。耗时只统计具有有效起止时间的任务。</p><div class="quality-metrics">
                                 <div class="quality-item">
-                                    <p class="quality-label">{{ local('Pipeline Stability') }}</p>
+                                    <p class="quality-label">{{ local('任务完成占比') }}</p>
                                     <div class="quality-bar">
                                         <div class="quality-fill" :style="{ width: pipelineStability + '%', background: 'rgba(52, 199, 89, 0.7)' }"></div>
                                     </div>
                                     <p class="quality-percent">{{ pipelineStability }}%</p>
                                 </div>
                                 <div class="quality-item">
-                                    <p class="quality-label">{{ local('Data Completeness') }}</p>
+                                    <p class="quality-label">{{ local('完整耗时记录占比') }}</p>
                                     <div class="quality-bar">
                                         <div class="quality-fill" :style="{ width: dataCompleteness + '%', background: 'rgba(0, 122, 255, 0.7)' }"></div>
                                     </div>
                                     <p class="quality-percent">{{ dataCompleteness }}%</p>
                                 </div>
                                 <div class="quality-item">
-                                    <p class="quality-label">{{ local('System Reliability') }}</p>
+                                    <p class="quality-label">{{ local('任务失败占比') }}</p>
                                     <div class="quality-bar">
                                         <div class="quality-fill" :style="{ width: systemReliability + '%', background: 'rgba(255, 159, 10, 0.7)' }"></div>
                                     </div>
@@ -178,7 +178,7 @@
                             <div class="quality-details">
                                 <div class="detail-item">
                                     <span class="detail-label">{{ local('Tasks Completed') }}</span>
-                                    <span class="detail-value">{{ stats.total || 0 }}</span>
+                                    <span class="detail-value">{{ stats.completed || 0 }}</span>
                                 </div>
                                 <div class="detail-item">
                                     <span class="detail-label">{{ local('Error Rate') }}</span>
@@ -203,6 +203,7 @@
 
 <script>
 import { mapState } from 'pinia'
+import { canonicalStatus, durationMs, averageDuration, terminalSuccessRate, statusLabel } from './metrics.js'
 import { useAppConfig } from '@/stores/appConfig'
 import { useTheme } from '@/stores/theme'
 import {
@@ -227,7 +228,7 @@ Chart.register(
 )
 
 const STATUS_COLORS = {
-    success: 'rgba(52, 199, 89, 1)',
+    completed: 'rgba(52, 199, 89, 1)',
     running: 'rgba(0, 122, 255, 1)',
     queued: 'rgba(255, 159, 10, 1)',
     pending: 'rgba(255, 159, 10, 1)',
@@ -236,7 +237,7 @@ const STATUS_COLORS = {
 }
 
 const STATUS_BG = {
-    success: 'rgba(52, 199, 89, 0.12)',
+    completed: 'rgba(52, 199, 89, 0.12)',
     running: 'rgba(0, 122, 255, 0.12)',
     queued: 'rgba(255, 159, 10, 0.12)',
     pending: 'rgba(255, 159, 10, 0.12)',
@@ -247,8 +248,8 @@ const STATUS_BG = {
 export default {
     data() {
         return {
-            loading: false,
-            stats: {},
+            loading: false, error: '',
+            stats: {}, pipelineNames:{},
             executions: [],
             pieChart: null,
             barChart: null,
@@ -257,7 +258,7 @@ export default {
             topOperators: [],
             summaryCards: [
                 { key: 'total', label: 'Total', color: 'rgba(69, 98, 213, 1)' },
-                { key: 'success', label: 'Success', color: STATUS_COLORS.success },
+                { key: 'completed', label: 'Success', color: STATUS_COLORS.completed },
                 { key: 'running', label: 'Running', color: STATUS_COLORS.running },
                 { key: 'failed', label: 'Failed', color: STATUS_COLORS.failed }
             ],
@@ -265,28 +266,15 @@ export default {
                 { id: 'execution', label: 'Executions', icon: 'ProcessMetaTask' },
                 { id: 'performance', label: 'Performance', icon: 'SpeedHigh' },
                 { id: 'operators', label: 'Operators', icon: 'PlugDisconnected' },
-                { id: 'quality', label: 'Quality', icon: 'CheckedOutline' }
+                { id: 'quality', label: '运行指标', icon: 'CheckedOutline' }
             ]
         }
     },
     computed: {
         ...mapState(useAppConfig, ['local']),
         ...mapState(useTheme, ['theme', 'gradient']),
-        avgExecutionTime() {
-            if (!this.executions.length) return '0ms'
-            const total = this.executions.reduce((sum, e) => {
-                if (e.started_at && e.ended_at) {
-                    return sum + (new Date(e.ended_at) - new Date(e.started_at))
-                }
-                return sum
-            }, 0)
-            const avg = Math.round(total / this.executions.length)
-            return avg < 1000 ? `${avg}ms` : `${(avg / 1000).toFixed(2)}s`
-        },
-        successRate() {
-            if (!this.stats.total) return 0
-            return Math.round(((this.stats.success || 0) / this.stats.total) * 100)
-        },
+        avgExecutionTime() { return averageDuration(this.executions) },
+        successRate() { return terminalSuccessRate(this.stats) },
         failureCount() {
             return this.stats.failed || 0
         },
@@ -296,7 +284,7 @@ export default {
         },
         avgTasksPerPipeline() {
             if (!this.uniquePipelines) return 0
-            return Math.round((this.stats.total || 0) / this.uniquePipelines)
+            return Math.round(this.executions.filter(e=>e.pipeline_id).length / this.uniquePipelines)
         },
         uniquePipelines() {
             const pipelines = new Set()
@@ -305,24 +293,13 @@ export default {
             })
             return pipelines.size
         },
-        pipelineStability() {
-            if (this.successRate < 50) return 50
-            if (this.successRate < 80) return 70
-            return Math.min(98, 85 + (this.successRate - 80) * 0.3)
-        },
+        pipelineStability() { return this.stats.total ? Math.round((this.stats.completed || 0)/this.stats.total*100) : 0 },
         dataCompleteness() {
-            if (!this.executions.length) return 0
-            const complete = this.executions.filter(e => e.started_at && e.ended_at && e.status).length
-            return Math.round((complete / this.executions.length) * 100)
+            if(!this.executions.length)return 0
+            return Math.round(this.executions.filter(e=>durationMs(e)!==null).length/this.executions.length*100)
         },
-        systemReliability() {
-            if (!this.stats.total) return 0
-            const nonFailed = (this.stats.total || 0) - (this.stats.failed || 0)
-            return Math.round((nonFailed / this.stats.total) * 100)
-        },
+        systemReliability() { return this.errorRate },
         avgPipelineDuration() {
-            const avg = parseInt(this.avgExecutionTime)
-            if (this.avgExecutionTime.includes('ms')) return this.avgExecutionTime
             return this.avgExecutionTime
         }
     },
@@ -351,18 +328,22 @@ export default {
         this.timelineChart?.destroy()
     },
     methods: {
+        statusLabel,
         fetchStats() {
-            this.loading = true
+            this.$api.pipelines.list_pipelines().then(response=>{if(response.code===200)this.pipelineNames=Object.fromEntries(response.data.map(p=>[p.id,p.name]))}).catch(()=>{})
+            if(this.loading)return
+            this.loading = true; this.error=''
             Promise.all([
                 this.$api.tasks.get_task_stats(),
                 this.$api.tasks.list_executions()
             ]).then(([statsRes, execRes]) => {
+                if(statsRes.code!==200 || execRes.code!==200)throw new Error(statsRes.message || execRes.message || '统计请求失败')
                 this.loading = false
                 if (statsRes.code === 200) {
-                    this.stats = statsRes.data
+                    this.stats = {...statsRes.data,completed:statsRes.data.completed ?? statsRes.data.success ?? 0,queued:statsRes.data.queued ?? statsRes.data.pending ?? 0}
                 }
                 if (execRes.code === 200) {
-                    this.executions = execRes.data.sort((a, b) => {
+                    this.executions = execRes.data.map(e=>({...e,status:canonicalStatus(e.status)})).sort((a, b) => {
                         const ta = a.started_at || a.created_at || ''
                         const tb = b.started_at || b.created_at || ''
                         return tb.localeCompare(ta)
@@ -373,7 +354,8 @@ export default {
                     this.renderPie()
                     this.renderBar()
                 })
-            }).catch(() => {
+            }).catch((error) => {
+                this.error=error.message || '统计加载失败，请重试'
                 this.loading = false
             })
         },
@@ -387,20 +369,21 @@ export default {
                         operatorMap.set(key, {
                             name: key,
                             executions: 0,
-                            success_count: 0,
-                            total_time: 0,
+                            success_count: 0, terminal_count:0,
+                            total_time: 0, timed_count: 0,
                             avg_time: 0,
                             type: exec.executor_type || (exec.pipeline_id ? 'pipeline' : 'unknown')
                         })
                     }
                     const op = operatorMap.get(key)
                     op.executions++
-                    if (exec.status === 'success') op.success_count++
+                    if (['completed','failed','cancelled'].includes(exec.status))op.terminal_count++
+                    if (exec.status === 'completed') op.success_count++
                     // Use completed_at (standard field) or ended_at as fallback
                     const endTime = exec.completed_at || exec.ended_at
                     if (exec.started_at && endTime) {
                         const time = new Date(endTime) - new Date(exec.started_at)
-                        op.total_time += time
+                        if(Number.isFinite(time) && time>=0){op.total_time += time;op.timed_count++}
                     }
                 }
             })
@@ -408,14 +391,14 @@ export default {
             this.topOperators = Array.from(operatorMap.values())
                 .map(op => ({
                     ...op,
-                    avg_time: op.executions > 0 ? Math.round(op.total_time / op.executions) : 0
+                    avg_time: op.timed_count > 0 ? Math.round(op.total_time / op.timed_count) : '—'
                 }))
                 .sort((a, b) => b.executions - a.executions)
         },
         renderPie() {
             this.pieChart?.destroy()
             if (!this.$refs.pieCanvas) return
-            const statuses = ['success', 'running', 'failed', 'cancelled', 'pending']
+            const statuses = ['completed', 'running', 'failed', 'cancelled', 'queued']
             const values = statuses.map(s => this.stats[s] ?? 0)
             if (values.every(v => v === 0)) return
 
@@ -423,7 +406,7 @@ export default {
             this.pieChart = new Chart(this.$refs.pieCanvas, {
                 type: 'doughnut',
                 data: {
-                    labels: statuses.map(s => s.charAt(0).toUpperCase() + s.slice(1)),
+                    labels: statuses.map(statusLabel),
                     datasets: [{
                         data: values,
                         backgroundColor: statuses.map(s => STATUS_COLORS[s] || 'rgba(200,200,200,0.5)'),
@@ -467,7 +450,7 @@ export default {
             this.barChart = new Chart(this.$refs.barCanvas, {
                 type: 'bar',
                 data: {
-                    labels: types.map(t => t.charAt(0).toUpperCase() + t.slice(1)),
+                    labels: types.map(t => ({operator:'算子',pipeline:'Pipeline',unknown:'未记录'}[t] || t)),
                     datasets: [{
                         data: values,
                         backgroundColor: types.map((_, i) => `hsla(${(i * 120 + 220) % 360}, 70%, 55%, 0.5)`),
@@ -512,7 +495,7 @@ export default {
                 return this.executions.filter(e => {
                     if (!e.started_at) return false
                     const execHour = new Date(e.started_at).getHours()
-                    return execHour === hour && e.status === 'success'
+                    return execHour === hour && e.status === 'completed'
                 }).length
             })
             
@@ -535,12 +518,12 @@ export default {
                         {
                             label: 'Success',
                             data: successCounts,
-                            borderColor: STATUS_COLORS.success,
+                            borderColor: STATUS_COLORS.completed,
                             backgroundColor: 'rgba(52, 199, 89, 0.1)',
                             tension: 0.3,
                             fill: true,
                             pointRadius: 3,
-                            pointBackgroundColor: STATUS_COLORS.success
+                            pointBackgroundColor: STATUS_COLORS.completed
                         },
                         {
                             label: 'Failed',
@@ -608,9 +591,16 @@ export default {
 
 <style lang="scss" scoped>
 .df-analysis-container {
-    @include app;
+    position: relative;
+    width: auto;
+    height: 100%;
+    min-width: 0;
+    min-height: 0;
+    flex: 1 1 0;
+    box-sizing: border-box;
     background: rgba(250, 250, 250, 1);
-    overflow: overlay;
+    overflow-x: hidden;
+    overflow-y: auto;
 
     &.dark {
         background: rgba(36, 36, 36, 1);

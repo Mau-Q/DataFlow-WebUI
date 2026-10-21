@@ -79,47 +79,17 @@ export default {
 .df-current-pipeline-container {
     @include VcenterC;
 
-    position: absolute;
-    right: 15px;
-    width: auto;
-    height: 40px;
-    max-width: 120px;
-    gap: 5px;
-    padding: 0px 15px;
-    background: rgba(245, 245, 245, 0.3);
-    border: rgba(120, 120, 120, 0.1) solid thin;
-    border-radius: 50px;
+    position: relative;
+    width: 100%;
+    min-width: 0;
+    gap: 4px;
+    padding: 0 4px 6px;
+    align-items: flex-start;
     flex-direction: column;
-    transition:
-        background 0.3s ease-out,
-        transform 0.3s ease-in-out,
-        max-width 0.8s ease-out;
-    backdrop-filter: blur(10px);
-    box-shadow: 0px 0px 1px rgba(0, 0, 0, 0.1);
-    z-index: 30;
+    flex-shrink: 0;
+    color: #333;
 
-    &.dark {
-        background: rgba(9, 9, 9, 0.3);
-        border: rgba(255, 255, 255, 0.1) solid thin;
-
-        &:hover {
-            background: rgba(9, 9, 9, 0.1);
-        }
-    }
-
-    &.template {
-        height: 50px;
-    }
-
-    &:hover {
-        max-width: 50%;
-        background: rgba(250, 250, 250, 0.6);
-        transform: scale(1.05);
-    }
-
-    &:active {
-        transform: scale(0.99);
-    }
+    &.dark { color: whitesmoke; }
 
     .row-item {
         @include nowrap;
@@ -134,11 +104,10 @@ export default {
 
     .df-current-pipeline-title {
         @include nowrap;
-        @include color-golden;
 
-        font-size: 12px;
-        font-weight: bold;
-        color: #333;
+        font-size: 14px;
+        font-weight: 600;
+        color: inherit;
         transition: all 0.3s;
         user-select: none;
     }
@@ -146,7 +115,7 @@ export default {
     .df-current-sec-info {
         @include nowrap;
 
-        font-size: 10px;
+        font-size: 12px;
         color: rgba(120, 120, 120, 1);
         user-select: none;
     }

@@ -6,44 +6,34 @@
                 <p class="sub-title">{{ local('Explore and analyze your datasets') }}</p>
             </div>
             
-            <div class="content-block">
+            <p v-if="error" role="alert">{{ error }} <button @click="selectedDataset.key ? loadDatasetPreview() : loadDatasets()">重试</button></p><p>当前已加载 {{ previewData.length }} 条预览样本，统计与导出仅针对这些样本；每次最多预览 100 条。</p><div class="content-block">
                 <!-- Dataset Selector Section -->
                 <div class="selector-section">
                     <div class="selector-row">
                         <div class="selector-item">
                             <p class="selector-label">{{ local('Select Dataset') }}</p>
-                            <fv-combobox :theme="theme" v-model="selectedDataset" :options="datasetOptions"
-                                :placeholder="local('Choose a dataset')" :border-radius="6"
-                                :input-background="theme === 'dark' ? 'rgba(40, 40, 40, 1)' : 'rgba(252, 252, 252, 1)'"
-                                @change="handleDatasetChange">
-                            </fv-combobox>
+                            <native-select v-model="selectedDataset.key" :theme="theme" label="选择数据集" placeholder="请选择数据集" :options="datasetOptions" @update:modelValue="handleDatasetChange" />
                         </div>
                         
                         <div class="selector-item">
                             <p class="selector-label">{{ local('Preview Rows') }}</p>
-                            <fv-spin-button :theme="theme" v-model="rowCount" :minimum="1" :maximum="100"
-                                :border-radius="6" :is-box-shadow="true">
-                            </fv-spin-button>
+                            <native-select v-model="rowCount" :theme="theme" label="预览条数" :options="rowOptions" />
                         </div>
 
                         <div class="selector-item">
                             <p class="selector-label">{{ local('View Type') }}</p>
-                            <fv-combobox :theme="theme" v-model="viewType" :options="viewTypeOptions"
-                                :placeholder="local('Select view type')" :border-radius="6"
-                                :input-background="theme === 'dark' ? 'rgba(40, 40, 40, 1)' : 'rgba(252, 252, 252, 1)'"
-                                @change="handleViewTypeChange">
-                            </fv-combobox>
+                            <native-select v-model="viewType.key" :theme="theme" label="查看方式" :options="viewOptions" @update:modelValue="handleViewTypeChange" />
                         </div>
                     </div>
 
                     <div class="selector-actions">
                         <fv-button :theme="theme" :is-box-shadow="true" border-radius="6" 
-                            :disabled="!selectedDataset || loading" @click="loadDatasetPreview">
+                            :disabled="!selectedDataset.key || loading" @click="loadDatasetPreview">
                             {{ loading ? local('Loading...') : local('Load Data') }}
                         </fv-button>
-                        <fv-button v-if="selectedDataset" :theme="theme" :is-box-shadow="true" border-radius="6"
-                            :disabled="loading" @click="exportData">
-                            {{ local('Export') }}
+                        <fv-button v-if="selectedDataset.key" :theme="theme" :is-box-shadow="true" border-radius="6"
+                            :disabled="loading || !previewData.length" @click="exportData">
+                            导出预览
                         </fv-button>
                     </div>
                 </div>
@@ -168,10 +158,12 @@
 </template>
 
 <script>
+import axios from 'axios'
+import { markRaw } from 'vue'
+import NativeSelect from '@/components/manage/forms/NativeSelect.vue'
 import { mapState } from 'pinia'
 import { useAppConfig } from '@/stores/appConfig'
 import { useTheme } from '@/stores/theme'
-import axios from 'axios'
 import {
     Chart,
     BarController,
@@ -185,14 +177,17 @@ import {
 Chart.register(BarController, BarElement, CategoryScale, LinearScale, Tooltip, Legend)
 
 export default {
+    components:{NativeSelect},
     data() {
         return {
-            datasets: [],
+            datasets: [], pageActive:true, error:'', previewVersion:0,
             selectedDataset: {},
             selectedColumn: '',
             previewData: [],
             loading: false,
-            rowCount: 10,
+            rowCount: 10, handledDatasetKey:'',
+            rowOptions:[10,20,50,100].map(value=>({value,label:`${value} 条`})),
+            viewOptions:[{value:'table',label:'表格'},{value:'distribution',label:'值分布'},{value:'statistics',label:'统计'},{value:'nulls',label:'缺失值'}],
             viewType: { key: 'table', text: 'Table' },
             viewTypeOptions: [
                 { key: 'table', text: 'Table' },
@@ -211,8 +206,8 @@ export default {
         ...mapState(useTheme, ['theme']),
         datasetOptions() {
             return this.datasets.map(ds => ({
-                key: ds.id,
-                text: `${ds.id} (${ds.num_samples} rows)`
+                value: ds.id,
+                label: `${ds.generated ? '生成' : '原始'} · ${ds.name || ds.id} (${ds.num_samples || 0} 条)`
             }))
         },
         uniqueDataTypes() {
@@ -245,28 +240,34 @@ export default {
     mounted() {
         this.loadDatasets()
     },
-    beforeUnmount() {
-        this.chartInstance?.destroy()
-        this.nullChartInstance?.destroy()
-    },
+    activated(){this.pageActive=true;this.$nextTick(this.handleViewTypeChange)},
+    deactivated(){this.pageActive=false;this.previewVersion++;this.loading=false;this.destroyCharts()},
+    beforeUnmount(){this.previewVersion++;this.destroyCharts()},
     methods: {
-        loadDatasets() {
-            this.$api.datasets.list_datasets().then((res) => {
-                if (res.code === 200) {
-                    this.datasets = res.data || []
-                }
-            }).catch((err) => {
-                console.error('Failed to load datasets', err)
-            })
+        destroyCharts(){this.chartInstance?.destroy();this.nullChartInstance?.destroy();this.chartInstance=null;this.nullChartInstance=null},
+        async loadDatasets() {
+            this.error=''
+            try {
+                const [sources, drafts]=await Promise.all([this.$api.datasets.list_datasets(),axios.get('/api/v1/library/drafts?visible_only=true')])
+                if(sources.code!==200 || !drafts.data.success)throw new Error(sources.message || drafts.data.message || '列表加载失败')
+                this.datasets=[...(sources.data || []).filter(d=>d.is_visible!==false),...drafts.data.data.map(d=>({...d,id:`draft:${d.id}`,generated:true,num_samples:d.row_count}))]
+            }catch(error){this.error=error.response?.data?.message || error.message || '数据集加载失败'}
         },
         handleDatasetChange() {
+            const key=this.selectedDataset?.key || ''
+            if(key===this.handledDatasetKey)return
+            this.handledDatasetKey=key
+            this.destroyCharts()
+            this.previewVersion++; this.loading=false;this.error=''
             this.previewData = []
             this.columns = []
             this.selectedColumn = ''
             this.nullCounts = {}
         },
         handleViewTypeChange() {
+            this.destroyCharts()
             this.$nextTick(() => {
+                if(!this.pageActive)return
                 if (this.viewType.key === 'distribution') {
                     this.renderDistributionChart()
                 } else if (this.viewType.key === 'nulls') {
@@ -274,35 +275,30 @@ export default {
                 }
             })
         },
-        loadDatasetPreview() {
-            if (!this.selectedDataset || !this.selectedDataset.key) return
-            
-            this.loading = true
-            this.$api.datasets
-                .get_dataset_preview(this.selectedDataset.key, this.rowCount)
-                .then((res) => {
-                    if (res.code === 200 && Array.isArray(res.data) && res.data.length) {
-                        this.previewData = res.data
-                        this.columns = Object.keys(res.data[0])
-                        this.selectedColumn = this.columns[0]
-                        this.calculateNullCounts()
-                        
-                        this.$nextTick(() => {
-                            if (this.viewType.key === 'distribution') {
-                                this.renderDistributionChart()
-                            } else if (this.viewType.key === 'nulls') {
-                                this.renderNullChart()
-                            }
-                        })
-                    }
-                })
-                .catch((err) => {
-                    this.$barWarning({ status: 'error', title: this.local('Failed to load dataset') })
-                    console.error(err)
-                })
-                .finally(() => {
-                    this.loading = false
-                })
+        async loadDatasetPreview() {
+            const key=this.selectedDataset?.key
+            if(!key || this.loading)return
+            const version=++this.previewVersion
+            this.loading=true;this.error='';this.previewData=[]
+            try {
+                let rows
+                if(key.startsWith('draft:')){
+                    const response=await axios.get(`/api/v1/library/drafts/${encodeURIComponent(key.slice(6))}?offset=0&limit=${Math.min(100,Math.max(1,this.rowCount))}`)
+                    if(!response.data.success)throw new Error(response.data.message)
+                    rows=response.data.data.rows
+                }else{
+                    const response=await this.$api.datasets.get_dataset_preview(key,this.rowCount)
+                    if(response.code!==200)throw new Error(response.message)
+                    rows=response.data
+                }
+                if(version!==this.previewVersion)return
+                this.previewData=Array.isArray(rows)?rows:[]
+                this.columns=Object.keys(this.previewData[0] || {})
+                this.selectedColumn=this.columns[0] || ''
+                this.calculateNullCounts();this.handleViewTypeChange()
+                if(!this.previewData.length)this.error='当前数据集没有可预览的样本。'
+            }catch(error){if(version===this.previewVersion)this.error=error.response?.data?.message || error.message || '预览加载失败，请重试'}
+            finally{if(version===this.previewVersion)this.loading=false}
         },
         calculateNullCounts() {
             this.nullCounts = {}
@@ -317,7 +313,7 @@ export default {
             })
         },
         renderDistributionChart() {
-            if (!this.$refs.chartCanvas || !this.selectedColumn || !this.previewData.length) return
+            if (!this.pageActive || !this.$refs.chartCanvas || !this.selectedColumn || !this.previewData.length) return
             
             this.chartInstance?.destroy()
             
@@ -346,7 +342,7 @@ export default {
                 : 'rgba(120, 120, 120, 0.1)'
             const tickColor = isDark ? 'rgba(245, 245, 245, 0.85)' : 'rgba(0, 0, 0, 0.7)'
             
-            this.chartInstance = new Chart(this.$refs.chartCanvas, {
+            this.chartInstance = markRaw(new Chart(this.$refs.chartCanvas, {
                 type: 'bar',
                 data: {
                     labels,
@@ -394,10 +390,10 @@ export default {
                         }
                     }
                 }
-            })
+            }))
         },
         renderNullChart() {
-            if (!this.$refs.nullChartCanvas || !this.columns.length) return
+            if (!this.pageActive || !this.$refs.nullChartCanvas || !this.columns.length) return
             
             this.nullChartInstance?.destroy()
             
@@ -410,7 +406,7 @@ export default {
                 : 'rgba(120, 120, 120, 0.1)'
             const tickColor = isDark ? 'rgba(245, 245, 245, 0.85)' : 'rgba(0, 0, 0, 0.7)'
             
-            this.nullChartInstance = new Chart(this.$refs.nullChartCanvas, {
+            this.nullChartInstance = markRaw(new Chart(this.$refs.nullChartCanvas, {
                 type: 'bar',
                 data: {
                     labels,
@@ -444,7 +440,7 @@ export default {
                         }
                     }
                 }
-            })
+            }))
         },
         getColumnType(col) {
             if (!this.previewData.length) return 'unknown'
@@ -471,7 +467,6 @@ export default {
         },
         getColumnStats(col) {
             const type = this.getColumnType(col)
-            const missing = this.countMissingValues(col)
             
             if (type === 'number') {
                 const values = this.previewData
@@ -552,10 +547,17 @@ export default {
 
 <style lang="scss" scoped>
 .df-dataviz-container {
-    @include app;
+    position: relative;
+    width: auto;
+    height: 100%;
+    min-width: 0;
+    min-height: 0;
+    flex: 1 1 0;
+    box-sizing: border-box;
     background: rgba(250, 250, 250, 1);
     display: flex;
     flex-direction: column;
+    overflow: hidden;
 
     &.dark {
         background: rgba(36, 36, 36, 1);

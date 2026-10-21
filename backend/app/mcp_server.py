@@ -50,7 +50,7 @@ def create_mcp_server(app: FastAPI) -> FastApiMCP:
             "render_pipeline_in_editor",        # POST /api/v1/agent/render (自定义)
         ],
     )
-    mcp.mount()  # 挂载到 /mcp 路径
+    mcp.mount_http()  # Streamable HTTP at /mcp for current Codex clients.
 
     _mcp_instance = mcp
     logger.info("MCP Server mounted at /mcp")

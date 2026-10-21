@@ -1,12 +1,25 @@
 <template>
     <div class="manage-container" :class="[{ dark: theme === 'dark' }]">
         <div class="manage-content-block">
-            <fv-navigation-view :theme="theme" v-model="currentNav" :title="''" :options="navList"
-                v-model:expand="isExpand" :foreground="color"
-                :background="theme === 'dark' ? 'rgba(36, 36, 36, 1)' : ''" expand-width="300" :flyout-display="1368"
-                :mobile-display="1024" class="navigation-view" :show-back="false" :show-search="false"
-                :setting-title="local('Settings')" @item-click="handleItemClick" @setting-click="handleSettingClick"
-                @back="$Back()">
+            <fv-navigation-view
+                :theme="theme"
+                v-model="currentNav"
+                :title="''"
+                :options="navList"
+                v-model:expand="isExpand"
+                :foreground="color"
+                :background="theme === 'dark' ? 'rgba(36, 36, 36, 1)' : ''"
+                expand-width="240"
+                :flyout-display="1368"
+                :mobile-display="1024"
+                class="navigation-view"
+                :show-back="false"
+                :show-search="false"
+                :setting-title="local('设置')"
+                @item-click="handleItemClick"
+                @setting-click="handleSettingClick"
+                @back="$Back()"
+            >
                 <template v-slot:banner>
                     <div class="title-block name">
                         <img class="nav-icon" :src="img.logo" alt="" />
@@ -14,14 +27,29 @@
                     </div>
                 </template>
                 <template v-slot:listItem="x">
-                    <div class="nav-item" :class="{ collapse: !isExpand }">
-                        <img v-show="x.item.type !== 'header' && x.item.img" class="nav-item-icon" :src="x.item.img"
-                            alt="" />
-                        <i v-show="x.item.type !== 'header' && !x.item.img" class="ms-Icon nav-item-icon"
-                            :class="['ms-Icon--' + x.item.icon]"></i>
-                        <p class="name" :style="{ color: x.item.type === 'header' ? color : '' }">
-                            {{ x.valueTrigger(x.item.name) }}
-                        </p>
+                    <div
+                        class="nav-item"
+                        :class="{
+                            collapse: !isExpand,
+                            'nav-group': x.item.type === 'header',
+                            'is-active': x.item.type !== 'header' && currentNav.key === x.item.key
+                        }"
+                        :title="x.valueTrigger(x.item.name)"
+                    >
+                        <svg
+                            v-if="x.item.type !== 'header'"
+                            class="nav-item-icon"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.7"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            aria-hidden="true"
+                        >
+                            <path :d="x.item.svg" />
+                        </svg>
+                        <p class="name">{{ x.valueTrigger(x.item.name) }}</p>
                     </div>
                 </template>
             </fv-navigation-view>
@@ -40,15 +68,9 @@ import { useAppConfig } from '@/stores/appConfig'
 import { useTheme } from '@/stores/theme'
 
 import logo from '@/assets/logo/logo.png'
-import dataflow from '@/assets/nav/dataflow.svg'
-import serving from '@/assets/nav/serving.svg'
-import dbManager from '@/assets/nav/dbManager.svg'
-import prompts from '@/assets/nav/prompts.svg'
-import schemas from '@/assets/nav/schemas.svg'
-import dataviz from '@/assets/nav/dataviz.svg'
-import analysis from '@/assets/nav/analysis.svg'
 
 export default {
+    name: 'ManageShell',
     data() {
         return {
             currentNav: {
@@ -57,74 +79,61 @@ export default {
                 icon: 'World',
                 route: '/m/'
             },
-            isExpand: true,
+            isExpand: window.innerWidth >= 1368,
             navList: [
-                {
-                    key: -1,
-                    name: () => this.local('Data Preparation'),
-                    type: 'header'
-                },
+                { key: 'flow-heading', name: () => this.local('流程'), type: 'header' },
                 {
                     key: 0,
                     name: () => this.local('DataFlow Hub'),
-                    icon: 'World',
-                    img: dataflow,
+                    svg: 'M3 3h6v6H3z M15 15h6v6h-6z M15 3h6v6h-6z M9 6h6 M6 9v9h9',
                     route: '/m/'
                 },
+                { key: 'data-heading', name: () => this.local('数据'), type: 'header' },
                 {
-                    key: 1,
-                    name: () => this.local('Serving Manager'),
-                    icon: 'World',
-                    img: serving,
-                    route: '/m/serving'
+                    key: 0.1,
+                    name: () => this.local('原始数据集'),
+                    svg: 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z M14 2v6h6 M8 13h8 M8 17h5',
+                    route: '/m/materials'
                 },
                 {
-                    key: 1,
-                    name: () => this.local('DB Manager'),
-                    icon: 'World',
-                    img: dbManager,
-                    route: '/m/dm'
+                    key: 0.2,
+                    name: () => this.local('生成数据集'),
+                    svg: 'M4 4h16v16H4z M4 9h16 M9 9v11 M13 13h4 M13 16h4',
+                    route: '/m/training-datasets'
                 },
+                { key: 'resources-heading', name: () => this.local('资源管理'), type: 'header' },
                 {
                     key: 2,
-                    name: () => this.local('Prompt Manager'),
-                    icon: 'World',
-                    img: prompts,
+                    name: () => this.local('Prompt 模板'),
+                    svg: 'M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z M7 7h10 M7 11h7',
                     route: '/m/prompts'
                 },
                 {
                     key: 2.5,
-                    name: () => this.local('JSON Schema Manager'),
-                    icon: 'World',
-                    img: schemas,
+                    name: () => this.local('JSON Schema'),
+                    svg: 'M8 3H6v6l-3 3 3 3v6h2 M16 3h2v6l3 3-3 3v6h-2 M10 9h4 M10 15h4',
                     route: '/m/schemas'
                 },
                 {
-                    key: -1,
-                    name: () => this.local('Analytics'),
-                    type: 'header'
+                    key: 1,
+                    name: () => this.local('模型服务'),
+                    svg: 'M3 3h18v7H3z M3 14h18v7H3z M7 6.5h.01 M7 17.5h.01 M12 6.5h5 M12 17.5h5',
+                    route: '/m/serving'
                 },
+                { key: 'analysis-heading', name: () => this.local('分析'), type: 'header' },
                 {
                     key: 2.7,
-                    name: () => this.local('Data Visualization'),
-                    icon: 'BarChartVertical',
-                    img: dataviz,
+                    name: () => this.local('数据可视化'),
+                    svg: 'M3 3v18h18 M7 17v-4 M12 17V7 M17 17v-7',
                     route: '/m/dataviz'
                 },
                 {
                     key: 3,
-                    name: () => this.local('Analysis'),
-                    icon: 'BarChartVertical',
-                    img: analysis,
+                    name: () => this.local('数据分析'),
+                    svg: 'M3 3v18h18 M6 15l5-5 4 3 6-8 M17 5h4v4',
                     route: '/m/analysis'
                 },
-                {
-                    key: -1,
-                    name: () => this.local('Home'),
-                    icon: 'Home',
-                    route: '/',
-                    show: false
-                }
+                { key: 'home', name: () => this.local('Home'), route: '/', show: false }
             ],
             img: {
                 logo: logo
@@ -145,6 +154,9 @@ export default {
     },
     methods: {
         handleItemClick(item) {
+            if (!item.route) return
+            // Navigation-view may emit selection while initializing. Keep canvas query state.
+            if (item.route.replace(/\/$/, '') === this.$route.path.replace(/\/$/, '')) return
             this.$Go(`${item.route}`)
         },
         routeFormat() {
@@ -152,7 +164,7 @@ export default {
             for (let item of this.navList) {
                 if (!item.route || item.type === 'header') continue
                 let targetPath = item.route
-                if (path == targetPath) {
+                if (path.replace(/\/$/, '') === targetPath.replace(/\/$/, '')) {
                     this.currentNav = item
                     break
                 }
@@ -197,6 +209,7 @@ export default {
 
         .navigation-view {
             z-index: 2;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 
             .title-block {
                 @include Vcenter;
@@ -224,30 +237,76 @@ export default {
                 }
             }
 
-            .nav-item {
-                @include Vcenter;
-
-                position: relative;
-                width: 100%;
-                height: 40px;
-                user-select: none;
-
-                &.collapse {
-                    .nav-item-icon {
-                        margin-left: 5px;
-                    }
+            .navigation-list .list-view-item {
+                border-radius: 7px;
+                margin: 2px 6px;
+                width: calc(100% - 12px);
+                &:hover {
+                    background: rgba(90, 101, 218, 0.06);
                 }
-
-                .nav-item-icon {
-                    width: 15px;
-                    height: 15px;
-                    margin-left: 15px;
-                    display: flex;
-                    justify-content: center;
-                    align-items: center;
-                    object-fit: cover;
+                &:has(.nav-group) {
+                    margin-top: 18px;
+                    pointer-events: none;
+                }
+                &:first-child {
+                    margin-top: 0;
                 }
             }
+
+            .nav-item {
+                @include Vcenter;
+                position: relative;
+                width: 100%;
+                height: 42px;
+                gap: 10px;
+                color: #39465d;
+                user-select: none;
+                border-radius: 7px;
+                .name {
+                    padding: 0;
+                    font-size: 14px;
+                    color: inherit;
+                }
+                &.is-active {
+                    background: #ebeefd;
+                    color: #535fd6;
+                    .name {
+                        font-weight: 600;
+                    }
+                }
+                &.nav-group {
+                    height: 28px;
+                    padding-left: 14px;
+                    box-sizing: border-box;
+                    color: #8690a1;
+                    .name {
+                        font-size: 12px;
+                        font-weight: 500;
+                    }
+                }
+                &.collapse {
+                    justify-content: center;
+                    .nav-item-icon {
+                        margin-left: 0;
+                    }
+                }
+                .nav-item-icon {
+                    width: 18px;
+                    height: 18px;
+                    margin-left: 14px;
+                    flex-shrink: 0;
+                }
+            }
+        }
+    }
+    &.dark .navigation-view .nav-item {
+        color: #c9d1df;
+        &.nav-group {
+            color: #939eaf;
+        }
+        &.is-active {
+            background: #323c61;
+            color: #b7c0ff;
         }
     }
 }

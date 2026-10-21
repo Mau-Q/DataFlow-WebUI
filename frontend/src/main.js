@@ -7,15 +7,13 @@ import router from './router'
 import VueFluent from "@creatorsn/vfluent3";
 import '@creatorsn/vfluent3/style.css';
 
-import PowerEditor from "@creatorsn/powereditor3";
-import "@creatorsn/powereditor3/powereditor3.css";
-
 import apiPlugin from '@/axios'
 
-const app = createApp(App)
-app.use(VueFluent);
+import { installInteractions } from '@/components/general/interactions'
 
-app.use(PowerEditor);
+const app = createApp(App)
+installInteractions(app)
+app.use(VueFluent);
 
 app.use(createPinia())
 app.use(router)

@@ -1,15 +1,28 @@
 <template>
+    <router-link v-if="isMM" :to="{path:'/m/multimodal',query:{config:mmRecord?.id}}" class="wizard-return">图片、服务与输出设置 · MM 未启用运行</router-link>
     <div class="df-default-container" :class="[{ dark: theme === 'dark', 'show-pipeline': show.pipeline, 'show-chat': show.chat }]">
         <pipeline v-model="show.pipeline" v-model:loading="lock.loading" v-model:pipeline="currentPipeline"
-            :flow-id="flowId" class="df-pipeline-container" @confirm-dataset="confirmDataset($event, true)"
+            :before-change="confirmCanvasChange" :flow-id="flowId" class="df-pipeline-container" @confirm-dataset="confirmDataset($event, true)"
             @select-pipeline="selectPipelineCallback"></pipeline>
         <div class="df-flow-container">
-            <mainFlow :id="flowId" v-model:nodes="nodes" v-model:edges="edges" @switch-database="show.dataset = true"
+            <mainFlow @edited="markCanvasEdited" :id="flowId" v-model:nodes="nodes" v-model:edges="edges" @switch-database="openInputSettings"
                 @connect="onConnect" @connect-start="onConnectStart" @connect-end="onConnectEnd"
                 @update-run-value="useEdgeSync.syncRunValue($event, flowId)" @show-details="showExecDetails"
-                @download-data="downloadData" @click="show.pipeline = false"></mainFlow>
-            <div class="control-menu-block">
-                <fv-command-bar :theme="theme" v-model="value" :options="options" :item-border-radius="30"
+                @download-data="downloadData" @nodes-ready="fitPlatformWhenReady" @click="show.pipeline = false">
+                <template #empty>
+                    <div class="canvas-empty-state" @click.stop>
+                        <i class="ms-Icon ms-Icon--Flow" aria-hidden="true"></i>
+                        <h2>开始一个数据生成流程</h2>
+                        <p>选择已有 Pipeline 或模板，再添加输入数据与算子。</p>
+                        <fv-button class="canvas-start-button" :theme="theme" border-radius="6" icon="OpenFolderHorizontal" style="width: 150px; height: 34px"
+                            @click.stop="show.pipeline = true">选择 Pipeline</fv-button>
+                    </div>
+                </template>
+            </mainFlow>
+            <div class="control-menu-block" role="toolbar" aria-label="Pipeline 操作">
+                <current-pipeline-block v-model="currentPipeline" :taskId="executionInfo.task_id"
+                    @recover-click="recoverPipeline"></current-pipeline-block>
+                <fv-command-bar :theme="theme" v-model="value" :options="options" :item-border-radius="6"
                     :background="theme === 'dark' ? '' : 'rgba(250, 250, 250, 0.8)'" class="command-bar">
                     <template v-slot:optionItem="x">
                         <div class="command-bar-item-wrapper">
@@ -22,64 +35,65 @@
                             <i v-show="x.item.secondary.length > 0" class="ms-Icon ms-Icon--ChevronDown icon"></i>
                         </div>
                     </template>
-                    <template v-slot:right-space>
-                        <div class="command-bar-right-space">
-                            <fv-toggle-switch :theme="theme" v-model="isAutoConnectionModel" :width="75"
-                                :on="local('Auto')" :off="local('Manual')" :insideContent="true" :height="30"
-                                :off-foreground="theme === 'dark' ? 'rgba(255, 255, 255, 1)' : ''"
-                                borderColor="rgba(235, 235, 235, 1)" ring-background="rgba(180, 180, 180, 1)"
-                                :switch-on-background="gradient" :title="local('Whether Auto Connect Run Edges')">
-                            </fv-toggle-switch>
-                            <fv-button :theme="currentServing ? 'dark' : theme" :background="currentServing
-                                ? 'linear-gradient(135deg, rgba(69, 98, 213, 1), #ff0080, #ff8c00)'
-                                : ''
-                                " border-radius="30" :disabled="!lock.serving" style="width: 30px; height: 30px"
-                                @click="showServing">
-                                <transition-group tag="span" name="df-scale-up-to-up">
-                                    <i v-show="currentServing" key="0" class="ms-Icon"
-                                        :class="[`ms-Icon--DialShape4`]"></i>
-                                    <i v-show="!currentServing" key="1" class="ms-Icon" :class="[`ms-Icon--More`]"></i>
-                                </transition-group>
-                                <i v-show="false" class="ms-Icon"
-                                    :class="[`ms-Icon--${currentServing ? 'DialShape4' : 'More'}`]"></i>
-                            </fv-button>
-                            <fv-button theme="dark"
-                                background="linear-gradient(90deg, rgba(69, 98, 213, 1), rgba(161, 145, 206, 1))"
-                                foreground="rgba(255, 255, 255, 1)" border-color="rgba(255, 255, 255, 0.3)"
-                                border-radius="30" :disabled="!currentPipeline" :reveal-background-color="[
-                                    'rgba(255, 255, 255, 0.5)',
-                                    'rgba(103, 105, 251, 0.6)'
-                                ]" style="width: 120px;" @click="handleRunClick">
-                                <i v-show="lock.running" class="ms-Icon ms-Icon--Play" style="margin-right: 5px"></i>
-                                <fv-progress-ring v-show="!lock.running" loading="true" :r="10" :border-width="2"
-                                    background="rgba(200, 200, 200, 1)" :color="'white'"
-                                    style="margin-right: 5px"></fv-progress-ring>
-                                <p>{{ this.local('Save & Run') }}</p>
-                            </fv-button>
-                            <fv-button v-show="!lock.running && executionInfo.task_id" theme="dark"
-                                background="rgba(200, 38, 95, 0.9)" font-size="10" foreground="rgba(255, 255, 255, 1)"
-                                border-color="whitesmoke" border-radius="30" :title="local('Stop')"
-                                style="width: 30px; height: 30px" @click="stopExecution">
-                                <i class="ms-Icon ms-Icon--StopSolid"></i>
-                            </fv-button>
-                            <fv-button theme="dark" background="rgba(191, 95, 95, 0.6)"
-                                foreground="rgba(255, 255, 255, 1)" border-color="whitesmoke" border-radius="30"
-                                :title="local('Delete')" style="width: 30px; height: 30px" @click="resetFlow">
-                                <i class="ms-Icon ms-Icon--Delete"></i>
-                            </fv-button>
-                            <fv-button
-                                :theme="show.chat ? 'dark' : theme"
-                                :background="show.chat ? 'linear-gradient(90deg, rgba(69, 98, 213, 1), rgba(161, 145, 206, 1))' : ''"
-                                :foreground="show.chat ? 'rgba(255, 255, 255, 1)' : ''"
-                                border-radius="30" :title="local('AI Assistant')"
-                                style="width: 30px; height: 30px" @click="show.chat = !show.chat">
-                                <i class="ms-Icon ms-Icon--Robot"></i>
-                            </fv-button>
-                        </div>
-                    </template>
                 </fv-command-bar>
-                <current-pipeline-block v-model="currentPipeline" :taskId="executionInfo.task_id"
-                    @recover-click="recoverPipeline"></current-pipeline-block>
+                <div class="command-bar-right-space" role="group" aria-label="画布与运行">
+                    <fv-toggle-switch v-if="!isMM" :theme="theme" v-model="isAutoConnectionModel" :width="115"
+                        :on="local('Auto Connect')" :off="local('Manual Connect')" :insideContent="true" :height="30"
+                        :off-foreground="theme === 'dark' ? 'rgba(255, 255, 255, 1)' : ''"
+                        borderColor="rgba(235, 235, 235, 1)" ring-background="rgba(180, 180, 180, 1)"
+                        :switch-on-background="gradient" :title="local('Whether Auto Connect Run Edges')">
+                    </fv-toggle-switch>
+                    <fv-button :theme="theme" border-radius="6" :title="local('Auto Layout')"
+                        style="width: 96px; height: 30px" @click="markCanvasEdited();autoLayoutPipeline()">
+                        <i class="ms-Icon ms-Icon--GridViewMedium" style="margin-right: 5px"></i>
+                        <p>{{ local('Auto Layout') }}</p>
+                    </fv-button>
+                    <fv-button v-if="!isMM" :theme="currentServing ? 'dark' : theme" :background="currentServing
+                        ? 'rgba(69, 98, 213, 1)'
+                        : ''
+                        " border-radius="6" :disabled="!lock.serving" style="width: 30px; height: 30px"
+                        @click="showServing">
+                        <transition-group tag="span" name="df-scale-up-to-up">
+                            <i v-show="currentServing" key="0" class="ms-Icon"
+                                :class="[`ms-Icon--DialShape4`]"></i>
+                            <i v-show="!currentServing" key="1" class="ms-Icon" :class="[`ms-Icon--More`]"></i>
+                        </transition-group>
+                        <i v-show="false" class="ms-Icon"
+                            :class="[`ms-Icon--${currentServing ? 'DialShape4' : 'More'}`]"></i>
+                    </fv-button>
+                    <fv-button theme="dark"
+                        background="rgba(69, 98, 213, 1)"
+                        foreground="rgba(255, 255, 255, 1)" border-color="rgba(255, 255, 255, 0.3)"
+                        border-radius="6" :disabled="!currentPipeline || runPreparing || !lock.running" :reveal-background-color="[
+                            'rgba(255, 255, 255, 0.5)',
+                            'rgba(103, 105, 251, 0.6)'
+                        ]" style="width: 120px;" @click="openRunConfirm">
+                        <i v-show="lock.running" class="ms-Icon ms-Icon--Play" style="margin-right: 5px"></i>
+                        <fv-progress-ring v-show="!lock.running" loading="true" :r="10" :border-width="2"
+                            background="rgba(200, 200, 200, 1)" :color="'white'"
+                            style="margin-right: 5px"></fv-progress-ring>
+                        <p>{{ this.local('Save & Run') }}</p>
+                    </fv-button>
+                    <fv-button v-show="!lock.running && executionInfo.task_id" theme="dark"
+                        background="rgba(200, 38, 95, 0.9)" font-size="10" foreground="rgba(255, 255, 255, 1)"
+                        border-color="whitesmoke" border-radius="6" :title="local('Stop')"
+                        style="width: 30px; height: 30px" @click="stopExecution">
+                        <i class="ms-Icon ms-Icon--StopSolid"></i>
+                    </fv-button>
+                    <fv-button :theme="theme"
+                        foreground="rgba(185, 65, 75, 1)" border-radius="6"
+                        :title="local('Delete')" style="width: 30px; height: 30px" @click="resetFlow">
+                        <i class="ms-Icon ms-Icon--Delete"></i>
+                    </fv-button>
+                    <fv-button
+                        :theme="show.chat ? 'dark' : theme"
+                        :background="show.chat ? 'rgba(69, 98, 213, 1)' : ''"
+                        :foreground="show.chat ? 'rgba(255, 255, 255, 1)' : ''"
+                        border-radius="6" :title="local('AI Assistant')"
+                        style="width: 30px; height: 30px" @click="show.chat = !show.chat">
+                        <i class="ms-Icon ms-Icon--Robot"></i>
+                    </fv-button>
+                </div>
             </div>
         </div>
         <!-- AI Assistant Chat Panel -->
@@ -95,7 +109,7 @@
             <chatPanel></chatPanel>
         </div>
         <page-loading :model-value="!lock.loading" title="Loading..."></page-loading>
-        <datasetPanel v-model="show.dataset" :title="local('Dataset')" @confirm="confirmDataset"></datasetPanel>
+        <datasetPanel v-model="show.dataset" :title="local('原始数据集')" @confirm="confirmDataset"></datasetPanel>
         <operatorPanel v-model="show.operator" :title="local('Operator')"></operatorPanel>
         <fv-right-menu :theme="theme" v-model="show.serving" class="serving-menu" ref="servingMenu"
             :rightMenuWidth="250" :background="theme === 'dark' ? 'rgba(30, 30, 30, 1)' : 'rgba(255, 255, 255, 0.3)'"
@@ -127,12 +141,14 @@
             @confirm="addPipeline"></pipelinePanel>
         <execResultPanel v-model="show.execResult" :title="local('Execute Result')" :current-pipeline="currentPipeline"
             :current-step="executionInfo.currentStep" :running-result="executionInfo.runningResult"></execResultPanel>
-        <taskPanel v-model="show.taskPanel" :title="local('Executions')" :current-pipeline="currentPipeline"
+        <run-confirm-panel v-model="show.runConfirm" :theme="theme" :pipeline-name="currentPipeline?.name || 'Pipeline'" :dataset-name="sourceDatabase?.name || ''" :contract="runCollectionContract" @confirm="handleRunClick" />
+        <taskPanel v-model="show.taskPanel" :title="local('运行记录')" :current-pipeline="currentPipeline" :initial-task-id="historyTaskId"
             @confirm="handleWatchExecution"></taskPanel>
     </div>
 </template>
 
 <script>
+import { useUnsavedChanges, confirmDiscard } from '@/components/manage/forms/unsaved'
 import { mapState, mapActions } from 'pinia'
 import { useAppConfig } from '@/stores/appConfig'
 import { useTheme } from '@/stores/theme'
@@ -140,6 +156,8 @@ import { useDataflow } from '@/stores/dataflow'
 import { useVueFlow } from '@vue-flow/core'
 import { useEdgeSync } from '@/hooks/dataflow/useEdgeSync'
 import { usePipelineOperation } from '@/hooks/dataflow/usePipelineOperation'
+import { nativeMMGraph, readNativeMM } from '@/hooks/dataflow/nativeMM'
+import { buildSnakeLayout } from '@/hooks/dataflow/useAutoLayout'
 
 import mainFlow from '@/components/manage/mainFlow/index.vue'
 import pipeline from '@/components/manage/mainFlow/pipeline/index.vue'
@@ -149,6 +167,7 @@ import operatorPanel from '@/components/manage/mainFlow/panels/operatorPanel.vue
 import pageLoading from '@/components/general/pageLoading.vue'
 import currentPipelineBlock from '@/components/manage/mainFlow/tools/currentPipelineBlock.vue'
 import execResultPanel from '@/components/manage/mainFlow/panels/execResultPanel/index.vue'
+import runConfirmPanel from '@/components/manage/mainFlow/panels/runConfirmPanel.vue'
 import taskPanel from '@/components/manage/mainFlow/panels/taskPanel.vue'
 import chatPanel from '@/components/manage/chatPanel/index.vue'
 
@@ -159,6 +178,7 @@ import taskIcon from '@/assets/flow/task.svg'
 import saveIcon from '@/assets/flow/save.svg'
 
 import axios from '@/axios/config'
+import http from 'axios'
 
 // 聊天面板宽度持久化（跨刷新记住用户拖拽后的宽度）
 const CHAT_WIDTH_KEY = 'df_chat_width'
@@ -174,6 +194,11 @@ function getStoredChatWidth() {
 }
 
 export default {
+    setup(){
+        const state=useVueFlow('df-main-flow')
+        useUnsavedChanges(vm=>vm.canvasDirty,vm=>{vm.canvasBaseline='';vm.canvasEdited=false})
+        return {canvasNodes:()=>state.nodes.value,canvasEdges:()=>state.edges.value}
+    },
     name: "dataflowPage",
     components: {
         mainFlow,
@@ -185,19 +210,23 @@ export default {
         currentPipelineBlock,
         execResultPanel,
         taskPanel,
+        runConfirmPanel,
         chatPanel
     },
     data() {
         return {
-            flowId: 'df-main-flow',
+            flowId: 'df-main-flow', canvasBaseline:'', canvasEdited:false,
+            historyTaskId: '',
+            mmRecord: null,
+            platformFitKey: '',
             value: null,
             options: [
                 {
-                    name: () => this.local('Dataset'),
+                    name: () => this.local('原始数据集'),
                     icon: 'Play',
                     img: databaseIcon,
                     func: () => {
-                        this.show.dataset = true
+                        this.openInputSettings()
                     }
                 },
                 {
@@ -210,8 +239,9 @@ export default {
                 {
                     name: () => this.local('Operator'),
                     img: operatorIcon,
+                    show: () => !this.isMM,
                     func: () => {
-                        this.show.operator = true
+                        if (!this.isMM) this.show.operator = true
                     }
                 },
                 {
@@ -249,6 +279,8 @@ export default {
             edges: [],
             sourceDatabase: null,
             currentPipeline: null,
+            pendingRun: false,
+            runPreparing: false,
             executionInfo: {
                 task_id: null,
                 currentStep: null,
@@ -266,6 +298,7 @@ export default {
                 serving: false,
                 execResult: false,
                 taskPanel: false,
+                runConfirm: false,
                 chat: false
             },
             lock: {
@@ -280,6 +313,13 @@ export default {
         }
     },
     watch: {
+        'show.pipelinePanel'(visible) { if (!visible) this.pendingRun = false },
+        $route(to, from) {
+            if (to.path.replace(/\/$/, '') !== '/m') return
+            if (to.query.task && to.query.task !== from.query.task) this.openTaskHistory(to.query.task)
+            if (to.query.workflow && to.fullPath !== from.fullPath) this.loadPlatformWorkflow()
+            else if (!to.query.workflow && to.query.pipeline && (from.path !== to.path || from.query.pipeline !== to.query.pipeline)) this.loadLinkedPipeline(to.query.pipeline)
+        },
         sourceDatabase: {
             handler(newVal, oldVal) {
                 if (newVal !== oldVal) {
@@ -327,6 +367,11 @@ export default {
                     confirmDatasetCall,
                     this.$Guid
                 )
+                // Backend-created pipelines are saved records, just like a
+                // sidebar selection. Keep Save/Run and history bound to its ID.
+                this.currentPipeline = pipeline
+                await this.$nextTick()
+                useVueFlow(this.flowId).fitView({ padding: 0.12 })
             }
 
             // 依赖项可能还没加载（尤其是首次打开 + Agent 立刻创建）。
@@ -343,6 +388,19 @@ export default {
         }
     },
     computed: {
+        canvasFingerprint(){
+            const nodes=this.canvasNodes(),edges=this.canvasEdges()
+            return JSON.stringify([this.sourceDatabase?.id,nodes.map(n=>({id:n.id,type:n.type,position:{x:n.position.x,y:n.position.y},params:Object.fromEntries(['init','run'].map(kind=>[kind,(n.data?.operatorParams?.[kind] || []).map(p=>({name:p.name,value:p.value}))]))})).sort((a,b)=>a.id.localeCompare(b.id)),edges.map(e=>({source:e.source,target:e.target,sourceHandle:e.sourceHandle,targetHandle:e.targetHandle})).sort((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b)))])
+        },
+        canvasDirty(){return this.canvasEdited && !!this.canvasBaseline && this.canvasBaseline!==this.canvasFingerprint},
+        runCollectionContract() {
+            const c = this.currentPipeline?.config
+            if(c?.execution_options?.simple_training)return c.execution_options.simple_training
+            const names=(c?.operators || []).map(op => op.name)
+            const kind=names.some(n => /DPO/.test(n)) ? 'dpo' : names.some(n => /SFT/.test(n)) ? 'sft' : null
+            return kind ? {modality:names.some(n => /Image|VQA/.test(n))?'image_text':'text',training_type:kind} : null
+        },
+        isMM() { return this.$route.query.workflow === 'multimodal' },
         ...mapState(useAppConfig, ['local']),
         ...mapState(useTheme, ['theme', 'color', 'gradient']),
         ...mapState(useDataflow, [
@@ -353,7 +411,9 @@ export default {
             'groupOperators',
             'tasks',
             'execution',
-            'agentSyncPayload'
+            'agentSyncPayload',
+            'pipelines',
+            'operatorStyleDict'
         ]),
         flatFormatedOperators() {
             let operators = []
@@ -394,6 +454,9 @@ export default {
         this.setViewport()
         this.getServing()
         this.getPromptInfo()
+        if (this.$route.query.task) this.openTaskHistory(this.$route.query.task)
+        else if (this.$route.query.workflow) this.loadPlatformWorkflow()
+        else if (this.$route.query.pipeline) this.loadLinkedPipeline(this.$route.query.pipeline)
     },
     beforeUnmount() {
         // 兜底清理拖拽监听，避免组件销毁后仍挂在 window 上
@@ -401,6 +464,114 @@ export default {
         window.removeEventListener('mouseup', this.stopChatResize)
     },
     methods: {
+        async confirmCanvasChange(){if(!this.canvasDirty)return true;if(!await confirmDiscard(this))return false;this.canvasBaseline='';this.canvasEdited=false;return true},
+        markCanvasEdited(){if(this.lock.loading && !this.loadingLinkedPipeline && !this.loadingPlatform)this.canvasEdited=true},
+        markCanvasSaved(){this.canvasBaseline=this.canvasFingerprint;this.canvasEdited=false},
+        async openTaskHistory(taskId) {
+            this.historyTaskId = taskId
+            try {
+                const task = await this.platformRequest('get', `/tasks/execution/${encodeURIComponent(taskId)}/final-result`)
+                if (this.$route.query.task !== taskId) return
+                if (task.pipeline_id) await this.loadLinkedPipeline(task.pipeline_id)
+                this.show.taskPanel = true
+            } catch (e) { this.$barWarning(e.message, {status: 'error'}) }
+        },
+        async fitPlatformWhenReady() {
+            if (!this.currentPipeline && !this.isMM) return
+            const flow = useVueFlow(this.flowId)
+            const count = this.isMM ? this.mmRecord?.config.steps.length : this.currentPipeline?.config?.operators.length
+            const inputNodes = flow.findNode('db-node') ? 1 : 0
+            if (flow.nodes.value.length !== count + inputNodes) return
+            const key = this.$route.fullPath + flow.nodes.value.map(n => n.id).join(',')
+            if (key === this.platformFitKey) return
+            this.platformFitKey = key
+            await this.$nextTick()
+            flow.fitView({padding:0.22,duration:0})
+            if(!this.canvasBaseline)this.markCanvasSaved()
+        },
+        async platformRequest(method, path, data) {
+            const r = await http({method, url:'/api/v1'+path, data})
+            if (!r.data.success) throw new Error(r.data.message || r.data.detail)
+            return r.data.data
+        },
+        async loadPlatformWorkflow() {
+            if (this.loadingPlatform) return
+            this.canvasBaseline=''
+            this.loadingPlatform = true
+            this.platformFitKey = ''
+            const targetRoute = this.$route.fullPath
+            const workflow = this.$route.query.workflow
+            const id = this.$route.query.config
+            try {
+                this.clearExecution()
+                this.sourceDatabase = null
+                if (workflow === 'text') {
+                    await Promise.all([this.getDatasets(), this.getOperators('zh'), this.getPipelines()])
+                    if (this.$route.fullPath !== targetRoute) return
+                    const saved = this.pipelines.find(p => p.tags?.includes('platform-text'))
+                    if (id || saved) await this.loadLinkedPipeline(id || saved.id)
+                    else {
+                        const t = await this.platformRequest('get', '/generation/template')
+                        this.currentPipeline = {...t,id:null,name:'文本生成',tags:['platform-text']}
+                        await this.recoverPipeline()
+                    }
+                } else if (workflow === 'multimodal') {
+                    const records = await this.platformRequest('get', '/multimodal/configs')
+                    const key = id || records[0]?.id
+                    const record = await this.platformRequest('get', key ? '/multimodal/configs/'+key : '/multimodal/template')
+                    if (this.$route.fullPath !== targetRoute) return
+                    this.mmRecord = record
+                    this.currentPipeline = {id:record.id,name:record.name,tags:['platform-mm']}
+                    const flow = useVueFlow(this.flowId)
+                    flow.$reset()
+                    await this.$nextTick()
+                    const graph = nativeMMGraph(record.config, this.flowId, this.operatorStyleDict)
+                    flow.addNodes(graph.nodes)
+                    flow.addEdges(graph.edges)
+                }
+                await this.$nextTick()
+                await this.autoLayoutPipeline()
+                this.markCanvasSaved()
+            } catch (e) { this.$barWarning(e.message, {status:'error'}) }
+            finally {
+                this.loadingPlatform = false
+                if (this.$route.path.replace(/\/$/, '') === '/m' && this.$route.query.workflow && this.$route.fullPath !== targetRoute) this.loadPlatformWorkflow()
+            }
+        },
+        openInputSettings() {
+            if (this.isMM) this.$router.push({path:'/m/multimodal',query:{config:this.mmRecord?.id}})
+            else this.show.dataset = true
+        },
+        async saveMM() {
+            try {
+                const flow = useVueFlow(this.flowId)
+                const expected = this.mmRecord.config.steps.map((s,i) => `${i ? 'mm-'+this.mmRecord.config.steps[i-1].id : 'db-node'}:mm-${s.id}`)
+                if (flow.edges.value.length !== expected.length || !expected.every(key => flow.edges.value.some(e => `${e.source}:${e.target}` === key))) throw new Error('MM 模板执行顺序固定，请重新打开配置')
+                const config = readNativeMM(this.mmRecord.config, flow.nodes.value)
+                this.mmRecord = await this.platformRequest('post','/multimodal/configs',{
+                    name:this.mmRecord.name,config,config_id:this.mmRecord.id || null
+                })
+                for (const s of this.mmRecord.config.steps) {
+                    const node = flow.findNode('mm-'+s.id)
+                    flow.updateNodeData(node.id, {...node.data,pipelineRole:`${node.data.status}：${Object.values(s.inputs).join(' + ')} → ${s.output}。`})
+                }
+                this.markCanvasSaved()
+                this.$barWarning('MM 配置已保存；未做真实运行验证', {status:'correct'})
+                return true
+            } catch (e) { this.$barWarning(e.message, {status:'warning'}); return false }
+        },
+
+        async loadLinkedPipeline(id) {
+            if (this.loadingLinkedPipeline) return
+            this.loadingLinkedPipeline = true
+            try {
+                await Promise.all([this.getDatasets(), this.getOperators('zh'), this.getPipelines()])
+                const response = await this.$api.pipelines.get_pipeline(id)
+                if (!response.success) throw new Error(response.message)
+                this.currentPipeline = response.data
+                await this.recoverPipeline()
+            } catch (error) { this.$barWarning(error.message, {status: 'error'}) } finally { this.loadingLinkedPipeline = false }
+        },
         ...mapActions(useDataflow, [
             'switchAutoConnection',
             'getServingList',
@@ -421,6 +592,23 @@ export default {
                 y: 0,
                 zoom: 1
             })
+        },
+        async autoLayoutPipeline() {
+            const flow = useVueFlow(this.flowId)
+            const { positions, hasCycle } = buildSnakeLayout(flow.nodes.value, flow.edges.value)
+            if (hasCycle) {
+                this.$barWarning(this.local('Pipeline is not a legal DAG'), {
+                    status: 'warning'
+                })
+                return
+            }
+            if (!positions.size) return
+
+            positions.forEach((position, nodeId) => {
+                flow.updateNode(nodeId, { position })
+            })
+            await this.$nextTick()
+            flow.fitView({ padding: 0.22, duration: 300 })
         },
         updateDatabaseNode() {
             if (!this.sourceDatabase) return
@@ -455,6 +643,7 @@ export default {
             }
         },
         confirmDataset(dataset, refresh = false) {
+            if(!refresh)this.markCanvasEdited()
             this.sourceDatabase = dataset
             this.show.dataset = false
             if (refresh) this.updateDatabaseNode()
@@ -539,12 +728,14 @@ export default {
                 nodeOperators.push({
                     name: oriNode.data.name,
                     params: oriNode.data.operatorParams,
-                    location: [oriNode.position.x, oriNode.position.y]
+                    location: [oriNode.position.x, oriNode.position.y],
+                    pipeline_role: oriNode.data.pipelineRole || null
                 })
             })
             return nodeOperators
         },
         async handleSaveClick() {
+            if (this.isMM) return await this.saveMM()
             if (!this.currentPipeline || !this.currentPipeline.id) {
                 this.show.pipelinePanel = true
                 return false
@@ -558,6 +749,7 @@ export default {
             return await this.savePipeline()
         },
         async savePipeline() {
+            if (this.nodes.some(n => n.data?.externalTemplate)) { this.$barWarning('外部 MM 配置不能写入核心 Pipeline', {status:'warning'}); return false }
             if (!this.sourceDatabase) {
                 this.$barWarning(this.local('Please select a dataset'), {
                     status: 'warning'
@@ -589,14 +781,16 @@ export default {
             let nodeOperators = this.sortPipeline()
             const flow = useVueFlow(this.flowId)
             let dbNode = flow.findNode('db-node')
-            await this.$api.pipelines
+            return await this.$api.pipelines
                 .update_pipeline(this.currentPipeline.id, {
                     name: this.currentPipeline.name,
                     config: {
                         file_path: this.currentPipeline.config.file_path,
+                        execution_options: this.currentPipeline.config.execution_options || {},
                         input_dataset: {
                             id: this.sourceDatabase.id,
-                            location: [dbNode.position.x, dbNode.position.y]
+                            location: [dbNode.position.x, dbNode.position.y],
+                            pipeline_role: dbNode.data.pipelineRole || null
                         },
                         operators: nodeOperators
                     }
@@ -604,19 +798,23 @@ export default {
                 .then((res) => {
                     if (res.code === 200) {
                         this.getPipelines()
+                        this.markCanvasSaved()
                         this.$barWarning(this.local('Pipeline has been updated'), {
                             status: 'correct'
                         })
+                        return true
                     }
+                    this.$barWarning(res.message || this.local('Pipeline update failed'), {status:'error'})
+                    return false
                 })
                 .catch((err) => {
                     this.$barWarning(this.local('Pipeline update failed'), {
                         status: 'error'
                     })
+                    return false
                 })
-            return true
         },
-        addPipeline(name) {
+        async addPipeline(name) {
             if (!this.sourceDatabase) {
                 this.$barWarning(this.local('Please select a dataset'), {
                     status: 'warning'
@@ -632,14 +830,32 @@ export default {
                 })
                 return
             }
-            this.$api.pipelines
+            if (this.currentPipeline?.tags?.includes('platform-text')) {
+                try {
+                    this.currentPipeline = await this.platformRequest('post','/generation/configs', {
+                        name, config:{...this.currentPipeline.config,
+                            input_dataset:{id:this.sourceDatabase.id,location:[dbNode.position.x,dbNode.position.y]},
+                            operators:nodeOperators}
+                    })
+                    this.resumeRunAfterSave()
+                    this.show.pipelinePanel = false
+                    await this.getPipelines()
+                    this.markCanvasSaved()
+                    this.$barWarning(this.local('Pipeline has been created'), {status:'correct'})
+                } catch (e) { this.$barWarning(e.message, {status:'warning'}) }
+                return
+            }
+            return await this.$api.pipelines
                 .create_pipeline({
                     name: name,
+                    tags: this.currentPipeline?.tags?.includes('platform-text') ? ['platform-text','sft'] : [],
                     config: {
                         file_path: '',
+                        execution_options: this.currentPipeline?.config?.execution_options || {},
                         input_dataset: {
                             id: this.sourceDatabase.id,
-                            location: [dbNode.position.x, dbNode.position.y]
+                            location: [dbNode.position.x, dbNode.position.y],
+                            pipeline_role: dbNode.data.pipelineRole || null
                         },
                         operators: nodeOperators
                     }
@@ -650,22 +866,35 @@ export default {
                         if (!this.currentPipeline || !this.currentPipeline.id || this.isTemplate) {
                             this.currentPipeline = res.data
                         }
-                        this.$barWarning(this.local('Pipeline has been created'), {
+                        this.markCanvasSaved()
+                    this.$barWarning(this.local('Pipeline has been created'), {
                             status: 'correct'
                         })
+                        this.resumeRunAfterSave()
                         this.show.pipelinePanel = false
+                    } else {
+                        this.$barWarning(res.message || this.local('Pipeline update failed'), {status: 'error'})
                     }
                 })
+                .catch((err) => {
+                    this.$barWarning(err?.message || this.local('Pipeline update failed'), {status: 'error'})
+                })
         },
-        async executePipeline() {
+        async executePipeline(runOptions) {
+            if (this.isMM) {
+                try { await this.platformRequest('post', `/multimodal/configs/${this.mmRecord.id}/submit`) }
+                catch (e) { this.$barWarning(e.message, {status:'warning'}); this.lock.running = true }
+                return
+            }
+            if (this.nodes.some(n => n.data?.externalTemplate)) { this.$barWarning('外部 MM 步骤不能提交到核心执行器', {status:'warning'}); this.lock.running = true; return }
             if (!this.currentPipeline || !this.currentPipeline.id) {
                 this.$barWarning(this.local('Please select a pipeline'), {
                     status: 'warning'
                 })
                 return
             }
-            await this.$api.tasks
-                .execute_pipeline_async(this.currentPipeline.id)
+            await this.platformRequest('post', `/tasks/execute-async?pipeline_id=${encodeURIComponent(this.currentPipeline.id)}`, runOptions)
+                .then((data) => ({code: 200, data}))
                 .then((res) => {
                     if (res.code === 200) {
                         this.executionInfo.task_id = res.data.task_id
@@ -682,26 +911,35 @@ export default {
                     }
                 })
                 .catch((err) => {
-                    this.$barWarning(this.local('Pipeline execution failed'), {
+                    this.$barWarning(err?.response?.data?.message || err?.message || this.local('Pipeline execution failed'), {
                         status: 'error'
                     })
                     this.lock.running = true
                 })
         },
-        async handleRunClick() {
-            if (!this.lock.running) {
-                this.$barWarning(this.local('Please wait for the previous pipeline to finish'), {
-                    status: 'warning'
-                })
-                return
-            }
+        async openRunConfirm() {
+            if (this.runPreparing || this.show.runConfirm || this.pendingRun) return
+            if (!this.lock.running) { this.$barWarning(this.local('Please wait for the previous pipeline to finish'), {status:'warning'}); return }
+            if (this.isMM) { this.$barWarning('图片流程当前未启用运行', {status:'warning'}); return }
+            this.runPreparing = true
+            try {
+                const saved = await this.handleSaveClick()
+                if (saved) this.show.runConfirm = true
+                else if (this.show.pipelinePanel) this.pendingRun = true
+            } catch(e) { this.$barWarning(e.message, {status:'error'}) }
+            finally { this.runPreparing = false }
+        },
+        resumeRunAfterSave() {
+            if (!this.pendingRun) return
+            this.pendingRun = false
+            this.show.runConfirm = true
+        },
+        async handleRunClick(runOptions) {
+            if (!this.lock.running) return
             this.lock.running = false
-            let isSaved = await this.handleSaveClick()
-            if (!isSaved) {
-                this.lock.running = true
-                return;
-            }
-            await this.executePipeline()
+            // Pipeline was saved before opening the single run-settings dialog.
+            try { await this.executePipeline(runOptions) }
+            catch(e) { this.lock.running = true; this.$barWarning(e.message, {status:'error'}) }
         },
         showExecDetails(pipeline_idx) {
             if (!this.executionInfo.task_id) return
@@ -733,9 +971,14 @@ export default {
                     `/api/v1/tasks/execution/${this.executionInfo.task_id}/download?step=${pipeline_idx - 1}`)
             window.open(url, '_blank')
         },
-        selectPipelineCallback() {
+        async selectPipelineCallback(pipeline) {
+            if (pipeline?.id) this.currentPipeline = pipeline
             this.clearExecution()
             this.executionInfo.task_id = null
+            this.show.pipeline = false
+            await this.$nextTick()
+            await this.autoLayoutPipeline()
+            this.markCanvasSaved()
         },
         async selectExecutionPipeline(config) {
             console.log(config)
@@ -757,6 +1000,7 @@ export default {
             this.lock.loading = true
         },
         async recoverPipeline() {
+            if(!await this.confirmCanvasChange())return
             if (!this.currentPipeline || !this.currentPipeline.config) {
                 return
             }
@@ -774,24 +1018,32 @@ export default {
                 confirmDatasetCall,
                 this.$Guid
             )
-            this.selectPipelineCallback()
+            await this.selectPipelineCallback()
             this.lock.loading = true
         },
         async handleWatchExecution({ task_id }) {
             this.executionInfo.task_id = task_id
             await this.getExecution(this.executionInfo.task_id)
             await this.selectExecutionPipeline(this.execution.pipeline_config)
-            this.watchExecution()
+            this.watchExecution(false)
         },
-        watchExecution() {
+        watchExecution(revealResult = true) {
             if (!this.executionInfo.task_id) return
+            const taskId = this.executionInfo.task_id
             clearInterval(this.timer.exec)
             this.timer.exec = setInterval(async () => {
-                await this.getExecution(this.executionInfo.task_id)
+                await this.getExecution(taskId)
+                if (this.executionInfo.task_id !== taskId) return
                 this.lock.running = false
                 if (this.execution.status === 'completed') {
                     clearInterval(this.timer.exec)
                     this.lock.running = true
+                    if (revealResult) {
+                        this.historyTaskId = taskId
+                        this.show.taskPanel = true
+                        const collection = this.execution.auto_collection
+                        this.$barWarning(collection?.status === 'collected' ? '运行完成，已自动收录到生成数据集。' : '运行完成，最终结果已打开；自动收录状态见结果面板。', {status: collection?.status === 'failed' ? 'warning' : 'correct'})
+                    }
                 } else if (this.execution.status === "cancelled") {
                     clearInterval(this.timer.exec)
                     this.lock.running = true
@@ -829,6 +1081,7 @@ export default {
             })
         },
         onConnect(connection) {
+            if (this.isMM) { this.$barWarning('MM 模板步骤顺序固定，请在参数面板修改字段绑定', {status:'warning'}); return }
             const { source, sourceHandle, target, targetHandle } = connection
             let sourceHandleObj = this.useEdgeSync.decHandle(sourceHandle)
             let targetHandleObj = this.useEdgeSync.decHandle(targetHandle)
@@ -991,11 +1244,21 @@ export default {
         width: 100%;
         height: 100%;
         flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
         background: rgba(250, 250, 250, 1);
         border: rgba(120, 120, 120, 0.1) solid thin;
         border-radius: 15px;
-        box-shadow: inset 0px 0px 6px rgba(0, 0, 0, 0.1);
         overflow: hidden;
+        container-type: inline-size;
+
+        > .df-main-flow-container {
+            order: 2;
+            flex: 1;
+            min-height: 0;
+            height: 0;
+        }
     }
 
     .df-chat-container {
@@ -1046,24 +1309,33 @@ export default {
     }
 
     .control-menu-block {
-        position: absolute;
-        left: 0px;
-        top: 0px;
+        position: relative;
         width: 100%;
-        height: auto;
-        padding: 35px 0px;
+        padding: 10px 12px;
         display: flex;
-        justify-content: center;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        flex-shrink: 0;
+        border-bottom: 1px solid rgba(120, 120, 120, 0.14);
+        background: rgba(250, 250, 250, 0.96);
+        z-index: 1;
+
+        > .command-bar-right-space {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 6px;
+            min-width: 0;
+        }
 
         .command-bar {
-            min-width: 320px;
-            width: 70%;
-            max-width: 800px;
-            border: rgba(120, 120, 120, 0.1) solid thin;
-            border-radius: 30px;
-            backdrop-filter: blur(10px);
-            -webkit-backdrop-filter: blur(10px);
-            box-shadow: 0px 1px 2px rgba(0, 0, 0, 0.1);
+            min-width: 240px;
+            flex: 1;
+            width: auto;
+            border: 0;
+            border-radius: 6px;
+            box-shadow: none;
 
             .command-bar-item {
                 &:hover {
@@ -1099,17 +1371,46 @@ export default {
                 font-size: 12px;
                 color: rgba(45, 48, 56, 1);
             }
-
-            .command-bar-right-space {
-                @include Vcenter;
-
-                position: relative;
-                width: auto;
-                height: 100%;
-                padding-right: 5px;
-                gap: 3px;
-            }
         }
+    }
+}
+
+.df-default-container.dark .control-menu-block {
+    background: rgba(30, 30, 30, 0.98);
+    border-bottom-color: rgba(255, 255, 255, 0.12);
+}
+
+@container (max-width: 880px) {
+    .control-menu-block > .command-bar,
+    .control-menu-block > .command-bar-right-space {
+        flex: 1 1 100%;
+    }
+}
+
+
+.canvas-empty-state {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 24px;
+    color: #737780;
+    text-align: center;
+    pointer-events: none;
+
+    > i { font-size: 36px; color: rgba(69, 98, 213, 0.65); }
+    h2 { font-size: 17px; font-weight: 600; color: #454b58; }
+    p { font-size: 13px; line-height: 1.7; }
+    .canvas-start-button { pointer-events: auto; margin-top: 4px; }
+}
+.df-default-container.dark .canvas-empty-state h2 { color: #e5e7eb; }
+
+@media (max-width: 1024px) {
+    .control-menu-block > .df-current-pipeline-container {
+        padding-left: 26px;
     }
 }
 
@@ -1179,3 +1480,5 @@ export default {
     }
 }
 </style>
+
+<style scoped>.wizard-return{position:absolute;top:12px;right:24px;z-index:20;background:white;padding:8px 16px;border-radius:8px;color:#4e5bd5}</style>

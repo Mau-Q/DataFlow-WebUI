@@ -38,7 +38,7 @@
                             v-for="(param, p_index) in choosenClsItem.params">
                             <div class="serving-item-row column">
                                 <p class="serving-item-light-title">{{ param.name }}</p>
-                                <fv-text-box :theme="theme" v-model="param.value" :placeholder="local(param.name)"
+                                <fv-text-box :theme="theme" v-model="param.value" :type="/key|token|secret|password/i.test(param.name) ? 'password' : 'text'" :placeholder="local(param.name)"
                                     border-radius="6" :reveal-border="true" :is-box-shadow="true"></fv-text-box>
                             </div>
                             <hr />
@@ -81,7 +81,7 @@
                         <div v-for="(param, p_index) in item.params">
                             <div class="serving-item-row column">
                                 <p class="serving-item-light-title">{{ param.name }}</p>
-                                <fv-text-box :theme="theme" v-model="param.value" border-radius="6"
+                                <fv-text-box :theme="theme" v-model="param.value" :type="/key|token|secret|password/i.test(param.name) ? 'password' : 'text'" border-radius="6"
                                     :disabled="!item.edit" :reveal-border="true"
                                     :is-box-shadow="item.edit"></fv-text-box>
                             </div>
@@ -115,12 +115,14 @@
 </template>
 
 <script>
+import { useUnsavedChanges, confirmDiscard } from '@/components/manage/forms/unsaved'
 import { mapActions, mapState } from 'pinia'
 import { useAppConfig } from '@/stores/appConfig'
 import { useTheme } from '@/stores/theme'
 import { useDataflow } from '@/stores/dataflow';
 
 export default {
+    setup(){useUnsavedChanges(vm=>!!vm.servingName || vm.choosenClsItem.params?.some(p=>p.value!==(p.default_value!==null?vm.formatPropsValue(p.default_value):vm.defaultValues[p.type])) || vm.servingList.some(item=>item.edit && (item.serving_name!==item.name || item.params?.some(p=>p.value!==p.default_value))),vm=>{vm.resetAddParams();vm.servingList.forEach(item=>{if(item.edit){vm.resetEditParams(item);item.edit=false}})})},
     data() {
         return {
             createProps: [],
@@ -310,7 +312,8 @@ export default {
                     this.lock.edit = true
                 })
         },
-        handleEdit(item) {
+        async handleEdit(item) {
+            if(item.edit && (item.serving_name!==item.name || item.params?.some(p=>p.value!==p.default_value)) && !await confirmDiscard(this))return
             item.edit ^= true
             this.resetEditParams(item)
         },
@@ -329,8 +332,9 @@ export default {
                             status: 'warning'
                         })
                     }
-                    this.lock.test = true
-                })
+                }).catch((error) => {
+                    this.$barWarning(error.response?.data?.message || error.message || '连接测试失败，请重试', {status:'warning'})
+                }).finally(() => { this.lock.test = true })
         },
         delServing(item) {
             this.$infoBox(this.local('Are you sure to delete this serving?'), {

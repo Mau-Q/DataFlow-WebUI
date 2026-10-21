@@ -12,6 +12,13 @@ class DatasetIn(BaseModel):
     meta: Dict[str, str] = Field(default_factory=dict)
 
 class DatasetOut(DatasetIn):
+    is_visible: bool = True
+    type: str = ""
+    content_type: Optional[str] = None
+    file_count: Optional[int] = None
+    added_at: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
     id: str
     num_samples: int = 0
     file_size: int = 0

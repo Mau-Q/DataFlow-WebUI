@@ -52,7 +52,9 @@ class Settings(BaseSettings):
     }
     # Please input your custom DataFlow extensions here, the system will try to dynamically load them at runtime
     _DATAFLOW_EXTENSIONS = [
-        # "my_dataflow_extension"
+        "paper_dataflow",
+        "app.services.simple_training_operators",
+        "app.services.representative_training_operators",
     ]
 
 settings = Settings()

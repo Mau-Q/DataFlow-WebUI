@@ -76,6 +76,7 @@ export default {
         ...mapState(useAppConfig, ['local']),
         ...mapState(useTheme, ['theme', 'color', 'gradient']),
         computedTitle() {
+            if (this.addPanelMode === 'custom') return this.local('New Pipeline')
             return this.addPanelMode === 'add'
                 ? this.local('New Pipeline')
                 : this.local('Rename Pipeline')

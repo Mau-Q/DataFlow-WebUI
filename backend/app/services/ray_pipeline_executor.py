@@ -1,9 +1,10 @@
+from app.services.task_artifacts import with_task_artifacts, capture_responses
 from app.core.logger_setup import get_logger
 from dataflow.serving import APILLMServing_request
 from dataflow.utils.text2sql.database_manager import DatabaseManager
 from dataflow.utils.storage import FileStorage
 from dataflow.pipeline import PipelineABC
-from dataflow.utils.registry import PROMPT_REGISTRY, OPERATOR_REGISTRY
+from dataflow.utils.registry import OPERATOR_REGISTRY
 import ray
 from typing import Dict, Any, Optional, List
 from app.core.config import settings
@@ -19,8 +20,13 @@ import re
 import time
 from contextlib import redirect_stdout, redirect_stderr
 
-from app.services.param_coercion import coerce_param_value
+from app.services.param_coercion import coerce_param_value, coerce_keyword_params
+from app.services.resource_resolution import instantiate_prompt, resolve_pipeline_resources
 from app.services.pipeline_compile_check import compile_check
+from app.services.dataflow_engine import (
+    _compile_dynamic_code_callable,
+    _normalize_dynamic_code_param_value,
+)
 
 logger = get_logger(__name__)
 
@@ -159,6 +165,7 @@ def parse_and_clean_logs(log_content: str) -> tuple[List[str], Optional[str], Op
     return cleaned_lines, last_progress, last_percentage
 
 
+@with_task_artifacts
 def dataflow_pipeline_execute(pipeline_config: Dict[str, Any], dataflow_runtime: Dict[str, Any], task_id: str, execution_path: str):
     """
     Execute a DataFlow pipeline
@@ -169,6 +176,7 @@ def dataflow_pipeline_execute(pipeline_config: Dict[str, Any], dataflow_runtime:
         task_id: Execution ID
         execution_path: Execution path
     """
+    pipeline_config, _ = resolve_pipeline_resources(pipeline_config)
     started_at = datetime.now().isoformat()
     logs: List[str] = []
     output: Dict[str, Any] = {}
@@ -186,20 +194,8 @@ def dataflow_pipeline_execute(pipeline_config: Dict[str, Any], dataflow_runtime:
         if not execution_path:
             return
         try:
-            import json
-            with open(execution_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if task_id in data.get("tasks", {}):
-                if status:
-                    data["tasks"][task_id]["status"] = status
-                if partial_output:
-                    if "output" not in data["tasks"][task_id]:
-                             data["tasks"][task_id]["output"] = {}
-                    # 更新 output 中的内容
-                    data["tasks"][task_id]["output"].update(partial_output)
-                    
-                with open(execution_path, "w", encoding="utf-8") as f:
-                    json.dump(data, f, indent=2)
+            from app.services.task_store import patch_task
+            patch_task(execution_path, task_id, {**({"status": status} if status else {}), "logs": list(logs), "started_at": started_at}, {"operator_logs": operator_logs, **(partial_output or {})})
         except Exception as e:
             logger.error(f"Failed to update execution status: {e}")
 
@@ -213,7 +209,12 @@ def dataflow_pipeline_execute(pipeline_config: Dict[str, Any], dataflow_runtime:
         if op_name != "__pipeline__":
             operator_logs.setdefault(op_name, []).append(ts_msg)
     
-    logger.success(f"Input dataflow runtime: {dataflow_runtime}")
+    logger.success(
+        "Input dataflow runtime: storage={} serving_ids={} embedding_serving_ids={}",
+        dataflow_runtime.get("storage"),
+        list(dataflow_runtime.get("serving_map", {})),
+        list(dataflow_runtime.get("embedding_serving_map", {})),
+    )
     
     
     add_log("global", f"[{started_at}] Starting pipeline execution: {task_id}")
@@ -225,7 +226,11 @@ def dataflow_pipeline_execute(pipeline_config: Dict[str, Any], dataflow_runtime:
         logs.append(f"[{datetime.now().isoformat()}] Step 1: Initializing storage...")
         logger.info(f"Step 1: Initializing storage...")
         try:    
-            storage = FileStorage(
+            storage_class = FileStorage
+            if pipeline_config.get('execution_options', {}).get('representative_training'):
+                from app.services.training_storage import TrainingFileStorage
+                storage_class = TrainingFileStorage
+            storage = storage_class(
                 first_entry_file_name=dataflow_runtime['storage']['first_entry_file_name'],
                 cache_path=dataflow_runtime['storage']['cache_path'],
                 file_name_prefix=dataflow_runtime['storage']['file_name_prefix'],
@@ -340,13 +345,17 @@ def dataflow_pipeline_execute(pipeline_config: Dict[str, Any], dataflow_runtime:
                                         if params['name'] != 'api_key':
                                             params_dict[params['name']] = params.get('value') if params.get('value') is not None else params.get('default_value')
                                     
-                                    logger.info(f"Initializing serving with params: {params_dict}")
-                                    os.environ[key_name_var] = api_key_val
-                                    logger.info(f"Environment variable {key_name_var} set to {api_key_val}")
+                                    from app.services.serving_params import expand_serving_configs
+                                    params_dict = expand_serving_configs(params_dict)
+                                    if "max_attempts" in pipeline_config.get("execution_options", {}):
+                                        params_dict["max_retries"] = pipeline_config["execution_options"]["max_attempts"]
+                                    params_dict['key_name_of_api_key'] = key_name_var
+                                    logger.info(f"Initializing serving: {actual_serving_id}")
+                                    os.environ[key_name_var] = api_key_val or os.environ.get(key_name_var, "")
                                     serving_instance = APILLMServing_request(**params_dict)
                                 else:
                                     raise DataFlowEngineError(f"Unsupported serving class: {serving_info['cls_name']}")
-                                serving_instance_map[serving_id] = serving_instance
+                                serving_instance_map[serving_id] = capture_responses(serving_instance, pipeline_config, task_id)
                             param_value = serving_instance_map[serving_id]
 
                         elif param_name == "embedding_serving":
@@ -379,9 +388,10 @@ def dataflow_pipeline_execute(pipeline_config: Dict[str, Any], dataflow_runtime:
                                         if params['name'] != 'api_key':
                                             params_dict[params['name']] = params.get('value') if params.get('value') is not None else params.get('default_value')
                                     
-                                    logger.info(f"Initializing serving with params: {params_dict}")
-                                    os.environ[key_name_var] = api_key_val
-                                    logger.info(f"Environment variable {key_name_var} set to {api_key_val}")
+                                    from app.services.serving_params import expand_serving_configs
+                                    params_dict = expand_serving_configs(params_dict)
+                                    logger.info(f"Initializing serving: {actual_serving_id}")
+                                    os.environ[key_name_var] = api_key_val or os.environ.get(key_name_var, "")
                                     serving_instance = APILLMServing_request(**params_dict)
                                 else:
                                     raise DataFlowEngineError(f"Unsupported serving class: {serving_info['cls_name']}")
@@ -424,45 +434,18 @@ def dataflow_pipeline_execute(pipeline_config: Dict[str, Any], dataflow_runtime:
                                     db_manager_instance_map[db_manager_id] = db_manager_instance
                                 param_value = db_manager_instance_map[db_manager_id]
                         
-                        elif param_name == "prompt_template":
-                            if isinstance(param_value, str):
-                                prompt_cls_name = extract_class_name(param_value)
-                                add_log("init", f"[{datetime.now().isoformat()}]   - Loading prompt template: {prompt_cls_name}", op_key)
-                                prompt_cls = PROMPT_REGISTRY.get(prompt_cls_name)
-                                if not prompt_cls:
-                                    raise DataFlowEngineError(
-                                        f"Prompt class not found: {prompt_cls_name}",
-                                        context={"operator": op_name, "param": param_name}
-                                    )
-                                param_value = prompt_cls()
-                            elif isinstance(param_value, dict):
-                                prompt_cls_name = extract_class_name(param_value.get("cls_name", "FormatStrPrompt"))
-                                add_log("init", f"[{datetime.now().isoformat()}]   - Loading prompt template: {prompt_cls_name} (dict-form)", op_key)
-                                prompt_cls = PROMPT_REGISTRY.get(prompt_cls_name)
-                                if not prompt_cls:
-                                    raise DataFlowEngineError(
-                                        f"Prompt class not found: {prompt_cls_name}",
-                                        context={"operator": op_name, "param": param_name}
-                                    )
-                                if "params" in param_value:
-                                    param_dict = {}
-                                    for p in param_value["params"]:
-                                        param_dict[p["name"]] = p.get("value") if p.get("value") is not None else p.get("default_value")
-                                else:
-                                    param_dict = {k: v for k, v in param_value.items() if k != "cls_name"}
-                                param_value = prompt_cls(**param_dict)
+                        elif param_name == "prompt_template" or param_name.endswith("_prompt_template"):
+                            param_value = instantiate_prompt(param_value)
                         elif param_name in ("process_fn", "filter_rules"):
-                            if isinstance(param_value, list):
-                                compiled = []
-                                for item in param_value:
-                                    if isinstance(item, str) and ("lambda " in item or "def " in item):
-                                        compiled.append(eval(item))  # noqa: S307
-                                    elif callable(item):
-                                        compiled.append(item)
-                                    else:
-                                        compiled.append(item)
-                                param_value = compiled
-                                add_log("init", f"[{datetime.now().isoformat()}]   - Compiled {len(compiled)} code-string(s) for {param_name}", op_key)
+                            normalized_items = _normalize_dynamic_code_param_value(
+                                param_value, param_name=param_name,
+                            )
+                            compiled = [
+                                _compile_dynamic_code_callable(item, param_name=param_name)
+                                for item in normalized_items
+                            ]
+                            param_value = compiled
+                            add_log("init", f"[{datetime.now().isoformat()}]   - Compiled {len(compiled)} code-string(s) for {param_name}", op_key)
                         else:
                             ann = init_sig.parameters.get(param_name).annotation if param_name in init_sig.parameters else inspect.Parameter.empty
                             param_value = coerce_param_value(param_value, annotation=ann, default_value=default_value)
@@ -507,11 +490,7 @@ def dataflow_pipeline_execute(pipeline_config: Dict[str, Any], dataflow_runtime:
                     if param.get('kind') == "VAR_KEYWORD" and param_value is None:
                         continue
                     if param.get('kind') == "VAR_KEYWORD":
-                        for item in param_value:
-                            item_name = item.get("name")
-                            item_val = item.get("value") if item.get("value") is not None else item.get("default_value")
-                            item_default = item.get("default_value")
-                            run_params[item_name] = coerce_param_value(item_val, annotation=inspect.Parameter.empty, default_value=item_default)
+                        run_params.update(coerce_keyword_params(param_value))
                     else:
                         # 跳过签名里不存在、且 run() 又不吃 **kwargs 的多余参数，
                         # 否则 operator.run(**run_params) 会因未知关键字参数直接失败。
@@ -582,6 +561,7 @@ def dataflow_pipeline_execute(pipeline_config: Dict[str, Any], dataflow_runtime:
         logger.info(f"Executing {len(run_op)} operators...")
         
         execution_results = []
+        output["execution_results"] = execution_results
         for op_idx, (operator, run_params, op_name, op_key) in enumerate(run_op):
             try:
                 run_params["storage"] = storage.step()
@@ -658,7 +638,7 @@ def dataflow_pipeline_execute(pipeline_config: Dict[str, Any], dataflow_runtime:
                      if f_path and os.path.exists(f_path):
                          try:
                              with open(f_path, 'r', encoding='utf-8') as f:
-                                 sample_count = sum(1 for _ in f)
+                                 sample_count = sum(1 for line in f if line.strip())
                          except Exception as e:
                              logger.warning(f"Failed to count lines in {f_path}: {e}")
                              add_log("run", f"WARN: Failed to read output file: {e}", op_key)
@@ -693,6 +673,7 @@ def dataflow_pipeline_execute(pipeline_config: Dict[str, Any], dataflow_runtime:
                 })
                 
                 execution_results.append({
+                    "file_path": f_path,
                     "operator": op_name,
                     "status": "completed",
                     "index": op_idx
@@ -703,9 +684,8 @@ def dataflow_pipeline_execute(pipeline_config: Dict[str, Any], dataflow_runtime:
                 operators_detail[op_key]["error"] = str(e)
                 # 记录真实异常的完整 traceback，否则只剩笼统的
                 # "执行Operator失败: X"，无法定位根因（见 bug 诊断）。
-                logger.error(
-                    f"Operator {op_name} run failed with underlying error: {e!r}",
-                    exc_info=True,
+                logger.opt(exception=True).error(
+                    "Operator {} run failed with underlying error: {!r}", op_name, e
                 )
                 update_execution_status("failed", {
                     "operators_detail": operators_detail,
@@ -924,13 +904,8 @@ class RayPipelineExecutor:
             
             # 更新状态为 running
             try:
-                with open(pipeline_execution_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                if task_id in data.get("tasks", {}):
-                    data["tasks"][task_id]["status"] = "running"
-                    data["tasks"][task_id]["started_at"] = datetime.now().isoformat()
-                    with open(pipeline_execution_path, "w", encoding="utf-8") as f:
-                        json.dump(data, f, indent=2)
+                from app.services.task_store import patch_task
+                patch_task(pipeline_execution_path, task_id, {"status": "running", "started_at": datetime.now().isoformat()})
             except Exception as e:
                 logger.error(f"[Ray Worker] Failed to update execution status to running: {e}")
                         
@@ -939,12 +914,7 @@ class RayPipelineExecutor:
             
             # 更新执行记录
             try:
-                with open(pipeline_execution_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                if task_id in data.get("tasks", {}):
-                    data["tasks"][task_id].update(result)
-                    with open(pipeline_execution_path, "w", encoding="utf-8") as f:
-                        json.dump(data, f, indent=2)
+                patch_task(pipeline_execution_path, task_id, result)
             except Exception as e:
                 logger.error(f"[Ray Worker] Failed to update execution result: {e}")
             
@@ -957,7 +927,7 @@ class RayPipelineExecutor:
             logger.error(traceback.format_exc())
             
             # 返回失败结果
-            return {
+            result = {
                 "task_id": task_id,
                 "status": "failed",
                 "output": {
@@ -969,6 +939,10 @@ class RayPipelineExecutor:
                 "completed_at": datetime.now().isoformat()
             }
     
+            from app.services.task_store import patch_task
+            patch_task(pipeline_execution_path, task_id, result)
+            return result
+
     async def submit_execution(
         self,
         pipeline_config: Dict[str, Any],
