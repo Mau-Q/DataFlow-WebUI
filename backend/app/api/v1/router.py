@@ -38,3 +38,6 @@ api_router.include_router(multimodal.router, prefix='/multimodal')
 
 from .endpoints import model_training
 api_router.include_router(model_training.router, prefix='/training')
+
+from .endpoints import team_data
+api_router.include_router(team_data.router, prefix='/team-data')

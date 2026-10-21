@@ -197,6 +197,9 @@ class TaskRegistry:
         if container.data_library is not None:
             freeze_collection_target(pipeline_config, container.data_library)
 
+        from app.services.source_progress import freeze_source
+        input_identity = freeze_source(pipeline_config, container.dataset_registry, container.data_library)
+
         # 生成执行ID
         task_id = self._generate_task_id()
         
@@ -211,6 +214,7 @@ class TaskRegistry:
             "pipeline_config": pipeline_config,
             "pipeline_source_config": pipeline_source_config,
             "resource_snapshots": resource_snapshots,
+            "input_identity": input_identity,
             "status": "queued",
             "output": {},
             "logs": [f"[{self.get_current_time()}] Pipeline execution queued"]
