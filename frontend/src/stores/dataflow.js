@@ -1,3 +1,4 @@
+import { team } from '@/components/manage/team/client'
 import { ref, computed, onScopeDispose } from 'vue'
 import { defineStore } from 'pinia'
 import { getCurrentInstance } from 'vue'
@@ -155,6 +156,7 @@ export const useDataflow = defineStore('useDataflow', () => {
 
     const text2sqlDatasets = ref([])
     const getText2SqlDatasets = async () => {
+        if(team.enabled){text2sqlDatasets.value=[];return}
         await proxy.$api.text2sql_database.list_databases().then((res) => {
             if (res.code === 200) {
                 text2sqlDatasets.value = res.data
@@ -190,6 +192,7 @@ export const useDataflow = defineStore('useDataflow', () => {
 
     const dataManagerList = ref([])
     const getDataManagerList = async () => {
+        if(team.enabled){dataManagerList.value=[];return}
         await proxy.$api.text2sql_database_manager.list_text2sql_database_managers().then((res) => {
             if (res.code === 200) {
                 res.data.forEach((item) => {
@@ -272,12 +275,6 @@ export const useDataflow = defineStore('useDataflow', () => {
         isAutoConnection.value = val
     }
 
-    // Agent sync: store the latest payload from Claude agent so views can watch it
-    const agentSyncPayload = ref(null)
-    const syncFromAgent = (payload) => {
-        agentSyncPayload.value = payload
-    }
-
     // JSON Schemas — available schemas users saved on the "schemas" page.
     // These power the json_schema value-input on operator params.
     const jsonSchemaList = ref([])
@@ -330,8 +327,6 @@ export const useDataflow = defineStore('useDataflow', () => {
         clearExecution,
         isAutoConnection,
         switchAutoConnection,
-        agentSyncPayload,
-        syncFromAgent,
         jsonSchemaList,
         getJsonSchemaList
     }

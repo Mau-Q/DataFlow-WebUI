@@ -40,8 +40,9 @@ class DataReviews:
             return copy.deepcopy(rec)
         if kind!='release':raise LibraryError('来源类型无效')
         lifecycle=TrainingLifecycle(self.lib);path=lifecycle.download(source,'jsonl');meta=self.db.get('releases',source)
-        rows=[json.loads(s) for s in path.read_text('utf-8').splitlines() if s.strip()]
-        return dict(meta,rows=rows,media_bindings={v['path']:v['material_id'] for v in meta.get('media',{}).values()})
+        rows=meta.get('snapshot_rows') or [json.loads(s) for s in path.read_text('utf-8').splitlines() if s.strip()]
+        bindings=meta.get('snapshot_media_bindings') or {v['path']:v['material_id'] for v in meta.get('media',{}).values()}
+        return dict(meta,rows=rows,media_bindings=bindings)
 
     def create(self,body,actor):
         key=body.get('request_id')
@@ -82,6 +83,7 @@ class DataReviews:
                             name=entry.get('source_name') or Path(path).name
                             c.execute('INSERT INTO review_context VALUES(?,?,?,?,?,?)',(cid,bid,item['id'],path,sha,name))
                             item['context'].append({'id':cid,'name':name,'sha256':sha})
+                    item['source_missing'] = not item['context'] and not bool(batch['media_bindings'])
                     c.execute('INSERT INTO review_items VALUES(?,?,?,?,?)',(item['id'],bid,sid,rev,self.db.encode(item)))
                 return batch
 
@@ -203,3 +205,16 @@ class DataReviews:
             rec=self.lib._get('drafts',rec['id'])
             rec.update(rows=[i['row'] for i in items],sample_ids=[i['sample_id'] for i in items],sample_sources={i['sample_id']:i['sources'] for i in items},media_bindings=b['media_bindings'],review_references={i['sample_id']:{'batch':bid,'revision':i['revision'],'item':i['id']} for i in items})
             self.db.put('drafts',rec);return rec
+
+    def current_status(self,draft_id,actor,roles):
+        if not set(roles)&{'manage','develop'}:raise LibraryError('需要开发权限',403)
+        draft=self.lib._get('drafts',draft_id)
+        current={sid:revision(row) for sid,row in zip(draft['sample_ids'],draft['rows'])}
+        result=[]
+        referenced={r.get('batch') for r in draft.get('review_references',{}).values()}
+        for batch in self.list(actor,roles):
+            if batch['draft_id']!=draft_id and batch['id'] not in referenced:continue
+            items=self.detail(batch['id'],actor,roles)['items']
+            applicable=[i for i in items if i['decision'] and current.get(i['sample_id'])==i['revision']]
+            result.append({'id':batch['id'],'name':batch['name'],'sampled':batch['sampled'],'batch_count':batch['count'],'current_total':len(current),'applicable':len(applicable),'passed':sum(i['decision']['conclusion']=='pass' for i in applicable),'stale':sum(i['decision'] is not None and current.get(i['sample_id'])!=i['revision'] for i in items)})
+        return {'draft_id':draft_id,'current_total':len(current),'batches':result}

@@ -16,6 +16,7 @@
 </template>
 <script>
 import axios from 'axios'
+import { team } from '@/components/manage/team/client'
 import NativeText from '@/components/manage/forms/NativeText.vue'
 import { scanFolder, droppedSelection } from '@/views/manage/library/catalog.js'
 export default {
@@ -45,6 +46,7 @@ export default {
             finally { this.choosing = false }
         },
         async pick() {
+            if (team.enabled) { this.$refs.files.click(); return }
             if (this.busy || this.choosing) return
             this.error = ''; this.choosing = true
             try {

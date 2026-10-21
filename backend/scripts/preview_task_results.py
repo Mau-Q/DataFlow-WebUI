@@ -81,28 +81,18 @@ def create_preview(root, configure=None):
         <li>打开“图文绑定”，选择“隔离 · 红色图片”后新建，预期新增 1 条；进入数据集展开样本可看到图片。</li>
         <li>非训练结构与零样本可保留结果但没有收录表单；失败任务不可收录。</li></ol>
         <p><a target="_blank" href="/#/m/training-datasets">打开隔离生成数据集列表</a> · 刷新页面会保留本次验收数据。</p><p>所有操作仅影响此目录。关闭服务后该地址失效；重新验收请使用新的空目录。</p></html>'''
-    @app.websocket('/api/v1/agent/ws')
-    async def idle_chat(websocket: WebSocket):
-        await websocket.accept()
-        try:
-            while True:
-                await websocket.receive_text()
-                await websocket.send_json({'type': 'error', 'message': '隔离验收不执行模型调用。'})
-        except WebSocketDisconnect:
-            pass
-
     if configure is not None:
         configure(app, root, lib, records)
 
     # Canvas initialization reads optional catalog resources; no production registries.
     @app.get('/api/v1/{path:path}')
     def empty_catalog(path: str):
-        if path.startswith(('serving','pipelines','datasets','operators','text2sql_database_manager','agent/agents')):
+        if path.startswith(('serving','pipelines','datasets','operators','text2sql_database_manager')):
             return ok([])
         if path.startswith('preferences'):
             return ok({'language': 'cn'})
-        if path.startswith(('prompts','agent/sessions')):
-            return ok({} if path.startswith('prompts') else [])
+        if path.startswith('prompts'):
+            return ok({})
         raise HTTPException(404,'隔离服务不提供此功能')
     dist=Path(__file__).resolve().parents[2]/'frontend'/'dist'
     if not (dist/'index.html').exists():

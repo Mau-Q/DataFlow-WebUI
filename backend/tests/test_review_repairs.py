@@ -90,21 +90,6 @@ def test_submission_failure_leaves_terminal_task(tmp_path, stage):
     assert 'secret' not in json.dumps(task)
 
 
-@pytest.mark.parametrize('adapter_name', ['codex', 'claude'])
-def test_agent_drains_large_stderr_and_reports_nonzero_exit(tmp_path, adapter_name):
-    from app.services.agents.codex_adapter import CodexAdapter
-    from app.services.agents.claude_adapter import ClaudeAdapter
-    cli = tmp_path/'fixture-cli'
-    cli.write_text('#!'+sys.executable+'\nimport sys\nsys.stderr.write("x" * (24 * 1024 * 1024) + "fixture failed")\nsys.exit(17)\n')
-    cli.chmod(0o755)
-    adapter = (CodexAdapter if adapter_name=='codex' else ClaudeAdapter)(cli_path=str(cli), webui_root=tmp_path,
-                    mcp_config_path=tmp_path/'unused', system_prompt='fixture', allowed_tools='')
-    async def collect():
-        return [event async for event in adapter.chat_stream('fixture')]
-    events = asyncio.run(asyncio.wait_for(collect(), timeout=5))
-    assert any(event['type']=='error' and '17' in event['message'] and 'fixture failed' in event['message'] for event in events)
-    assert events[-1]['type']=='done'
-    assert not adapter.is_running
 
 
 @pytest.mark.parametrize('engine', ['sync', 'ray_function'])
@@ -186,29 +171,6 @@ def test_backup_scope_and_recovery_keep_runtime_and_config(tmp_path):
     assert len(lib.list_drafts())==4
 
 
-@pytest.mark.parametrize('adapter_name', ['codex', 'claude'])
-def test_agent_cancellation_reaps_child_without_success_event(tmp_path, adapter_name):
-    from app.services.agents.codex_adapter import CodexAdapter
-    from app.services.agents.claude_adapter import ClaudeAdapter
-    cli=tmp_path/'fixture-cli'
-    cli.write_text('#!'+sys.executable+'\nimport time\ntime.sleep(30)\n');cli.chmod(0o755)
-    adapter=(CodexAdapter if adapter_name=='codex' else ClaudeAdapter)(cli_path=str(cli),webui_root=tmp_path,
-              mcp_config_path=tmp_path/'unused',system_prompt='fixture',allowed_tools='')
-    async def exercise():
-        events=[]
-        async def consume():
-            async for event in adapter.chat_stream('fixture'): events.append(event)
-        consumer=asyncio.create_task(consume())
-        async def wait_for_child():
-            while adapter._process is None: await asyncio.sleep(.01)
-        await asyncio.wait_for(wait_for_child(),5)
-        process=adapter._process
-        consumer.cancel()
-        with pytest.raises(asyncio.CancelledError): await consumer
-        assert process.returncode is not None
-        assert not adapter.is_running
-        assert not any(event['type']=='done' for event in events)
-    asyncio.run(exercise())
 
 
 @pytest.mark.parametrize('kind', ['serving', 'pipeline'])
@@ -285,66 +247,8 @@ def test_scoped_recovery_preserves_runtime_symlinks_and_empty_directories(tmp_pa
     assert (target/'template.txt').read_text()=='runtime'
 
 
-@pytest.mark.skipif(os.name != 'posix', reason='POSIX inherited-pipe process-group regression')
-@pytest.mark.parametrize('adapter_name', ['codex', 'claude'])
-@pytest.mark.parametrize('kill_before_cancel', [False, True])
-def test_agent_cancel_with_descendant_holding_pipes_finishes(tmp_path, adapter_name, kill_before_cancel):
-    import signal
-    from app.services.agents.codex_adapter import CodexAdapter
-    from app.services.agents.claude_adapter import ClaudeAdapter
-    pid_file=tmp_path/'child.pid';cli=tmp_path/'fixture-cli'
-    cli.write_text('#!'+sys.executable+'\nimport subprocess,sys,time,pathlib\n'
-                   'child=subprocess.Popen([sys.executable,"-c","import time;time.sleep(30)"])\n'
-                   f'pathlib.Path({str(pid_file)!r}).write_text(str(child.pid))\n'
-                   'time.sleep(30)\n');cli.chmod(0o755)
-    adapter=(CodexAdapter if adapter_name=='codex' else ClaudeAdapter)(cli_path=str(cli),webui_root=tmp_path,
-                mcp_config_path=tmp_path/'unused',system_prompt='fixture',allowed_tools='')
-    async def exercise():
-        async def consume():
-            return [event async for event in adapter.chat_stream('fixture')]
-        consumer=asyncio.create_task(consume())
-        try:
-            async def ready():
-                while not pid_file.exists(): await asyncio.sleep(.01)
-            await asyncio.wait_for(ready(),5)
-            if kill_before_cancel:
-                adapter.kill()
-            consumer.cancel()
-            with pytest.raises(asyncio.CancelledError):
-                await asyncio.wait_for(asyncio.shield(consumer),2)
-        finally:
-            if pid_file.exists():
-                try: os.kill(int(pid_file.read_text()),signal.SIGKILL)
-                except ProcessLookupError: pass
-            if not consumer.done():
-                try: await asyncio.wait_for(consumer,5)
-                except (asyncio.CancelledError, asyncio.TimeoutError): pass
-    asyncio.run(exercise())
 
 
-@pytest.mark.skipif(os.name != 'posix', reason='POSIX background-child lifetime check')
-@pytest.mark.parametrize('adapter_name', ['codex', 'claude'])
-def test_successful_agent_turn_preserves_detached_output_background_child(tmp_path, adapter_name):
-    import signal
-    from app.services.agents.codex_adapter import CodexAdapter
-    from app.services.agents.claude_adapter import ClaudeAdapter
-    pid_file=tmp_path/'background.pid';cli=tmp_path/'fixture-cli'
-    cli.write_text('#!'+sys.executable+'\nimport subprocess,sys,pathlib\n'
-                   'child=subprocess.Popen([sys.executable,"-c","import time;time.sleep(60)"],'
-                   'stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)\n'
-                   f'pathlib.Path({str(pid_file)!r}).write_text(str(child.pid))\n')
-    cli.chmod(0o755)
-    adapter=(CodexAdapter if adapter_name=='codex' else ClaudeAdapter)(cli_path=str(cli),webui_root=tmp_path,
-                mcp_config_path=tmp_path/'unused',system_prompt='fixture',allowed_tools='')
-    async def collect(): return [event async for event in adapter.chat_stream('fixture')]
-    try:
-        events=asyncio.run(asyncio.wait_for(collect(),5))
-        assert events==[{'type':'done'}]
-        os.kill(int(pid_file.read_text()),0)
-    finally:
-        if pid_file.exists():
-            try: os.kill(int(pid_file.read_text()),signal.SIGKILL)
-            except ProcessLookupError: pass
 
 
 @pytest.mark.parametrize('content', ['{"pipelines":', '{"pipelines":[]}', '{"pipelines":"invalid"}', '[]'])

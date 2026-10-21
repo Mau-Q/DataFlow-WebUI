@@ -35,3 +35,30 @@ def test_concurrent_membership_conflict(tmp_path):
         try:s.member(a,'default',uid,roles,1);return 200
         except LibraryError as e:return e.status
     with ThreadPoolExecutor(2) as pool:assert sorted(pool.map(save,[['manage','review'],['manage','develop']]))==[200,409]
+
+
+def test_pending_admin_is_not_counted_and_revoked_project_disappears(tmp_path):
+    s=TeamStore(tmp_path);uid=s.initialize('owner',PASS,tmp_path/'legacy');token,_=s.login('owner',PASS,'test');a=s.identity(token)
+    s.invite(a,'not-yet-usable-admin',admin=True)
+    with pytest.raises(LibraryError):s.disable(a,uid,False)
+    invite=s.invite(a,'reviewer');s.accept(invite['invitation'],PASS);s.member(a,'default',invite['user_id'],['review'],0)
+    s.member(a,'default',invite['user_id'],[],1)
+    assert s.projects(invite['user_id'])==[]
+    with pytest.raises(LibraryError):s.access(invite['user_id'],'default')
+    s.invite(a,None,reset=invite['user_id'])
+    with pytest.raises(LibraryError):s.login('reviewer',PASS,'test')
+
+
+def test_legacy_initialization_is_reentrant_safe_and_preserves_identity(tmp_path):
+    import json,hashlib
+    from app.services.data_library import DataLibrary
+    from app.schemas.data_library import DraftCreate
+    legacy=tmp_path/'legacy';lib=DataLibrary(legacy/'data/library');d=lib.create_draft(DraftCreate(name='历史草稿',modality='text',training_type='sft'))
+    prefs=legacy/'data/user_preferences.json';prefs.write_text(json.dumps({'language':'cn','theme':'light'}))
+    before={p.relative_to(legacy):hashlib.sha256(p.read_bytes()).hexdigest() for p in legacy.rglob('*') if p.is_file()}
+    s=TeamStore(tmp_path/'state');uid=s.initialize('owner',PASS,legacy)
+    with pytest.raises(LibraryError):s.initialize('another',PASS,legacy)
+    assert {p.relative_to(legacy):hashlib.sha256(p.read_bytes()).hexdigest() for p in legacy.rglob('*') if p.is_file()}==before
+    assert lib._get('drafts',d['id'])['name']=='历史草稿'
+    with s.tx() as c:assert json.loads(c.execute('SELECT preferences FROM users WHERE id=?',(uid,)).fetchone()[0])=={'language':'cn','theme':'light'}
+    assert TeamStore(s.root).projects(uid)[0]['id']=='default'

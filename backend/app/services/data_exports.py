@@ -169,3 +169,24 @@ class DataExports:
         path=self.root/rec['filename']
         if not path.is_file() or _hash(path.read_bytes())!=rec['sha256']:raise LibraryError('导出文件已缺失或损坏',409)
         return path
+
+    def expire(self,eid,actor,roles):
+        if not set(roles)&{'manage','develop'}:raise LibraryError('需要开发权限',403)
+        with self.db.transaction() as c:
+            row=c.execute('SELECT payload FROM data_exports WHERE id=?',(eid,)).fetchone()
+            if not row:raise LibraryError('导出不存在',404)
+            rec=json.loads(row[0])
+            if rec['status']=='preparing':raise LibraryError('导出仍在准备中',409)
+            rec.update(status='expired',expired_by=actor,expired_at=_now())
+            c.execute('UPDATE data_exports SET payload=? WHERE id=?',(self.db.encode(rec),eid))
+        if rec.get('filename'):(self.root/rec['filename']).unlink(missing_ok=True)
+        return self.public(rec)
+
+    def recover_interrupted(self):
+        """Called once on worker startup, never by request constructors."""
+        with self.db.transaction() as c:
+            for eid,payload in c.execute('SELECT id,payload FROM data_exports').fetchall():
+                rec=json.loads(payload)
+                if rec['status']=='preparing':
+                    rec.update(status='failed',error='服务重启中断了导出，请重新创建快照')
+                    c.execute('UPDATE data_exports SET payload=? WHERE id=?',(self.db.encode(rec),eid))

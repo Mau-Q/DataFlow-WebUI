@@ -42,14 +42,14 @@
                 <button
                     v-if="canDevelop"
                     :class="{ selected: !workspace }"
-                    @click="workspace = false"
+                    @click="showWorkspace(false)"
                 >
                     生成与管理</button
-                ><button :class="{ selected: workspace }" @click="workspace = true">
+                ><button :class="{ selected: workspace }" @click="showWorkspace(true)">
                     协作与人工评测
                 </button>
             </nav>
-            <span class="account">{{ user.name }}</span
+            <select aria-label="主题" :value="theme.theme" @change="changeTheme"><option value="light">浅色</option><option value="dark">深色</option></select><span class="account">{{ user.name }}</span
             ><button @click="logout">退出</button>
         </header>
         <main>
@@ -89,7 +89,10 @@ const theme = useTheme(),
     busy = ref(false),
     workspace = ref(false)
 const selection = ref(null)
+const canLeave=()=>window.dispatchEvent(new Event('dataflow-before-workspace-change',{cancelable:true}))
+function showWorkspace(value){if(value===workspace.value||!canLeave())return;workspace.value=value}
 const onOpen = (e) => {
+    if(!canLeave())return
     selection.value = e.detail
     workspace.value = true
 }
@@ -113,8 +116,11 @@ async function load() {
     user.value = await request('/team/me')
     team.csrf = user.value.csrf
     team.project = user.value.project || ''
+    const preferences=await request('/api/v1/preferences/')
+    theme.reviseTheme(preferences.theme||'light')
     ready.value = true
 }
+async function changeTheme(event){await action(async()=>{const preferences=await request('/api/v1/preferences/');preferences.theme=event.target.value;await request('/api/v1/preferences/',preferences);theme.reviseTheme(preferences.theme)})}
 async function login() {
     await action(async () => {
         const r = await request('/team/login', { name: name.value, password: password.value })
@@ -136,6 +142,7 @@ async function accept() {
     })
 }
 async function switchProject(event) {
+    if(!canLeave()){event.target.value=team.project;return}
     if (!window.confirm('切换项目会关闭当前页面，请先保存编辑。是否继续？')) {
         event.target.value = team.project
         return
@@ -146,6 +153,7 @@ async function switchProject(event) {
     })
 }
 async function logout() {
+    if(!canLeave())return
     await action(async () => {
         await request('/team/logout', {})
         window.location.reload()
@@ -318,3 +326,5 @@ onMounted(async () => {
     color: var(--team-muted);
 }
 </style>
+
+<style>@media(max-width:900px){.team-bar{height:auto;min-height:54px;flex-wrap:wrap;padding:10px 14px;gap:8px}.team-bar .role{display:none}.team-bar nav{order:2;width:100%}.team-bar .account{margin-left:auto}}</style>

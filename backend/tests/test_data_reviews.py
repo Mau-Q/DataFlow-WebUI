@@ -52,12 +52,30 @@ def test_revision_conflict_validation_idempotency_and_history(setup):
     new={'instruction':'Q1 edited','output':'A edited'}
     submitted=s.action(b['id'],i['id'],'revise',decision(i,row=new,reason='修正回答'),'r1',['review'])
     assert submitted['revision']==revision(new) and submitted['original_row']!=new
+    assert s.current_status(body['source'],'dev',['develop'])['batches'][0]['passed']==1
     assert s.action(b['id'],i['id'],'revise',decision(i,row=new,reason='修正回答'),'r1',['review'])==submitted
     assert TrainingLifecycle(lib).download(release['id'],'jsonl').read_bytes()==before
     derived=s.derive(b['id'],'dev',['develop']);assert derived['rows']==[new]
+    assert s.current_status(derived['id'],'dev',['develop'])['batches'][0]['passed']==1
     TrainingLifecycle(lib).edit(body['source'],i['sample_id'],{'instruction':'concurrent','output':'new'})
+    assert s.current_status(body['source'],'dev',['develop'])['batches'][0]['passed']==0
+    assert s.current_status(body['source'],'dev',['develop'])['batches'][0]['stale']==1
     s.action(b['id'],i['id'],'reopen',{'version':submitted['version'],'reason':'重新核对'},'dev',['develop'])
     i=s.detail(b['id'],'r1',['review'])['items'][0];i=s.action(b['id'],i['id'],'claim',{'version':i['version']},'r1',['review'])
     with pytest.raises(LibraryError):s.action(b['id'],i['id'],'revise',decision(i,row=new,reason='must conflict'),'r1',['review'])
     current=s.detail(b['id'],'r1',['review'])['items'][0]
     assert current['status']=='claimed' and len(current['history'])==1
+
+
+@pytest.mark.parametrize('overrides',[
+    {'conclusion':'needs_changes','comment':''},
+    {'conclusion':'reject','comment':''},
+    {'conclusion':'pass','tags':['其他'],'comment':''},
+    {'scores':{'correctness':0,'support':5,'usability':5}},
+    {'scores':{'correctness':True,'support':5,'usability':5}},
+])
+def test_decision_validation_preserves_claim(setup,overrides):
+    lib,s,body,b=setup;i=s.detail(b['id'],'r1',['review'])['items'][0];i=s.action(b['id'],i['id'],'claim',{'version':1},'r1',['review'])
+    payload=decision(i);payload.update(overrides)
+    with pytest.raises(LibraryError):s.action(b['id'],i['id'],'submit',payload,'r1',['review'])
+    assert s.detail(b['id'],'r1',['review'])['items'][0]['version']==i['version']

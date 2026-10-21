@@ -8,7 +8,6 @@ from .endpoints import prompts
 from .endpoints import serving
 from .endpoints import text2sql_database
 from .endpoints import preferences
-from .endpoints import agent
 from .endpoints import json_schemas
 
 api_router = APIRouter()
@@ -22,7 +21,6 @@ api_router.include_router(serving.router, prefix="/serving")
 api_router.include_router(text2sql_database.router, prefix="/text2sql_database")
 api_router.include_router(text2sql_database.manager_router, prefix="/text2sql_database_manager")
 api_router.include_router(preferences.router, prefix="/preferences")
-api_router.include_router(agent.router, prefix="/agent")
 api_router.include_router(json_schemas.router, prefix="/json_schemas")
 # api_router.include_router(models.router, prefix="/models")
 # api_router.include_router(inference.router, prefix="/inference")

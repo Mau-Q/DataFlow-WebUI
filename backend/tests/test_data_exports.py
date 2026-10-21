@@ -68,3 +68,27 @@ def test_review_exports_csv_and_exact_revision_filter(tmp_path):
     row=next(csv.DictReader(io.StringIO(e.download(csvr['id']).read_text('utf-8-sig'))));assert row['comment'].startswith("'=")
     TrainingLifecycle(lib).edit(d['id'],i['sample_id'],{'instruction':'Q changed','output':'new'})
     with pytest.raises(LibraryError,match='修订'):e.create({'source':d['id'],'batch':b['id'],'request_id':'conflict','format':'jsonl'},'dev',ROLES)
+
+
+def test_published_media_review_uses_logical_revision(tmp_path):
+    lib=DataLibrary(tmp_path/'data/library');buffer=io.BytesIO();Image.new('RGB',(2,2),'red').save(buffer,format='PNG')
+    mat=lib.add_material('r.png',buffer.getvalue(),{'name':'r'})
+    d=draft(lib,[{'instruction':'Q','output':'A','image':'original.png'}],modality='image_text',bindings={'original.png':mat['id']})
+    reviews=DataReviews(lib);b=reviews.create({'source':d['id'],'reviewers':['r'],'request_id':'review'},'dev')
+    i=reviews.detail(b['id'],'r',['review'])['items'][0];i=reviews.action(b['id'],i['id'],'claim',{'version':1},'r',['review'])
+    reviews.action(b['id'],i['id'],'submit',{'version':i['version'],'request_id':'submit','scores':{'correctness':5,'support':5,'usability':5},'conclusion':'pass'},'r',['review'])
+    release=TrainingLifecycle(lib).publish(d['id'])
+    assert 'snapshot_rows' not in release and 'snapshot_media_bindings' not in release
+    e=DataExports(lib);result=e.create({'source':release['id'],'kind':'release','batch':b['id'],'request_id':'publish-reviewed-media','format':'package'},'dev',ROLES)
+    assert result['status']=='ready'
+    with zipfile.ZipFile(e.download(result['id'])) as z:
+        row=json.loads(z.read('data.jsonl'));assert row['image'] in z.namelist()
+
+
+def test_export_cache_expiry_preserves_release(tmp_path):
+    lib=DataLibrary(tmp_path/'data/library');d=draft(lib,[{'instruction':'Q','output':'A'}]);release=TrainingLifecycle(lib).publish(d['id'])
+    e=DataExports(lib);result=e.create({'source':release['id'],'kind':'release','request_id':'cache','format':'jsonl'},'dev',ROLES)
+    exported=e.download(result['id']);e.expire(result['id'],'dev',ROLES)
+    assert not exported.exists()
+    with pytest.raises(LibraryError):e.download(result['id'])
+    assert TrainingLifecycle(lib).download(release['id'],'jsonl').is_file()

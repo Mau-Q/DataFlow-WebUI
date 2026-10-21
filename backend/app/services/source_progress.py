@@ -23,14 +23,14 @@ def content_identity(record):
                     p=Path(row['source']);members.append({'position':i,'sha256':_hash(p.read_bytes()) if p.is_file() else None,'material_id':row.get('material_id')})
         except (ValueError,UnicodeError,OSError):pass
     value={'dataset_id':record['id'],'file_sha256':_hash(content),'members':members}
-    return dict(value,identity=_hash(_json_bytes(value)))
+    return dict(value,identity=_hash(_json_bytes({'members':members} if members else {'file_sha256':value['file_sha256']})))
 
 
 def freeze_source(config,registry,library):
     """Capture identity and actual input bytes before execution; reuse existing frozen inputs."""
     if registry is None or library is None:return None
     prior=config.get('execution_options',{}).get('source_identity')
-    if prior:return copy.deepcopy(prior)
+    if prior and prior.get('dataset_id')==dataset_id(config) and config.get('execution_options',{}).get('input_snapshot'):return copy.deepcopy(prior)
     rid=dataset_id(config)
     record=registry.get(rid) if rid else None
     if not record:return None
@@ -40,6 +40,7 @@ def freeze_source(config,registry,library):
     options=config.setdefault('execution_options',{})
     if not options.get('input_snapshot'):
         original=Path(record['root']);content=original.read_bytes()
+        if _hash(content)!=snapshot['file_sha256']:raise LibraryError('固定输入期间内容变化',409)
         root=library.root/'task_inputs'/snapshot['identity'];root.mkdir(parents=True,exist_ok=True)
         materials=[]
         if snapshot['members']:
@@ -62,8 +63,10 @@ def freeze_source(config,registry,library):
 class SourceProgress:
     def __init__(self,registry,library,tasks):self.registry,self.lib,self.tasks=registry,library,tasks
 
-    def page(self,offset=0,limit=50,filters=None):
-        sources=self.registry.list();tasks=self.tasks.list_executions();drafts=self.lib.db.list('drafts');releases=self.lib.db.list('releases')
+    def page(self,offset=0,limit=50,filters=None,source=None):
+        sources=self.registry.list()
+        if source:sources=[s for s in sources if s['id']==source]
+        tasks=self.tasks.list_executions();drafts=self.lib.db.list('drafts');releases=self.lib.db.list('releases')
         result=[self.aggregate(source,tasks,drafts,releases) for source in sources]
         for key,value in (filters or {}).items():
             if value is not None:result=[r for r in result if bool(r[key])==value]
@@ -75,11 +78,11 @@ class SourceProgress:
         task_ids={t['task_id'] for t in linked}
         linked_drafts=[]
         for draft in drafts:
-            count=sum(any(s.get('task_id') in task_ids for s in refs) for refs in draft.get('sample_sources',{}).values())
+            count=sum(any(s.get('task_id') in task_ids for s in refs) for sid,refs in draft.get('sample_sources',{}).items() if sid in draft.get('sample_ids',[]))
             if count:linked_drafts.append({'id':draft['id'],'name':draft['name'],'source_sample_count':count,'total_sample_count':len(draft['rows']),'archived':bool(draft.get('archived'))})
         linked_releases=[]
         for release in releases:
-            count=sum(any(s.get('task_id') in task_ids for s in refs) for refs in release.get('sample_sources',{}).values())
+            count=sum(any(s.get('task_id') in task_ids for s in refs) for sid,refs in release.get('sample_sources',{}).items() if sid in release.get('sample_ids',[]))
             if count:linked_releases.append({'id':release['id'],'source_sample_count':count,'total_sample_count':release['row_count']})
         active=[t['task_id'] for t in linked if t.get('status') in {'queued','pending','running'}]
         collected={key for d in drafts for key in d.get('collections',[])}
@@ -93,4 +96,4 @@ class SourceProgress:
             if not identity:unknown.append(tid)
             elif current and identity.get('identity')!=current['identity']:old.append(tid)
             details.append({'task_id':tid,'status':task.get('status'),'pipeline_id':task.get('pipeline_id'),'input_identity':identity,'created_at':task.get('created_at'),'artifacts':[{k:v for k,v in a.items() if k!='path'} for a in artifacts],'coverage':task.get('input_coverage') if task.get('input_coverage',{}).get('evidence')=='executor_members' else None})
-        return {'id':source['id'],'name':source['name'],'input_identity':current,'datasets':linked_drafts,'releases':linked_releases,'active':active,'pending':pending,'zero_samples':zero,'old_content':old,'unknown_source':unknown,'tasks':details,'generated':bool(linked_drafts),'published':bool(linked_releases),'coverage':None,'recent_failures':[t['task_id'] for t in linked if t.get('status') in {'failed','cancelled'}]}
+        return {'id':source['id'],'name':source['name'],'input_identity':current,'datasets':linked_drafts,'releases':linked_releases,'active':active,'pending':pending,'zero_samples':zero,'old_content':old,'unknown_source':unknown,'tasks':details,'generated':bool(linked_drafts),'published':bool(linked_releases),'coverage':None,'partial_success':[t['task_id'] for t in linked if t.get('output',{}).get('sample_summary',{}).get('valid',0)>0 and t.get('output',{}).get('sample_summary',{}).get('invalid',0)>0],'recent_failures':[t['task_id'] for t in linked if t.get('status') in {'failed','cancelled'}]}

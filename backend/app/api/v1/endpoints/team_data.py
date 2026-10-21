@@ -10,12 +10,21 @@ router=APIRouter(tags=['team-data'])
 def call(fn,*args,**kwargs):
     try:return fn(*args,**kwargs)
     except LibraryError as exc:raise HTTPException(exc.status,str(exc)) from exc
+    except (TypeError,KeyError,AttributeError,ValueError) as exc:raise HTTPException(400,'请求字段无效，请检查数据和配置') from exc
 
 
 @router.get('/sources')
-def sources(offset:int=Query(0,ge=0),limit:int=Query(50,ge=1,le=200),generated:bool|None=None,published:bool|None=None,active:bool|None=None,pending:bool|None=None,unknown_source:bool|None=None):
+def sources(offset:int=Query(0,ge=0),limit:int=Query(50,ge=1,le=200),generated:bool|None=None,published:bool|None=None,active:bool|None=None,pending:bool|None=None,unknown_source:bool|None=None,source:str|None=None):
     service=SourceProgress(container.dataset_registry,container.data_library,container.task_registry)
-    return call(service.page,offset,limit,dict(generated=generated,published=published,active=active,pending=pending,unknown_source=unknown_source))
+    return call(service.page,offset,limit,dict(generated=generated,published=published,active=active,pending=pending,unknown_source=unknown_source),source)
+
+
+async def object_body(request):
+    try:
+        value=await request.json()
+    except ValueError as exc:raise HTTPException(400,'JSON 无效') from exc
+    if not isinstance(value,dict):raise HTTPException(400,'请求必须为 JSON 对象')
+    return value
 
 
 def reviews():
@@ -41,7 +50,7 @@ def list_reviews(request:Request):
 async def create_review(request:Request):
     user,roles=identity(request)
     if not set(roles)&{'manage','develop'}:raise HTTPException(403,'需要开发权限')
-    return call(reviews().create,await request.json(),user)
+    return call(reviews().create,await object_body(request),user)
 
 
 @router.get('/reviews/{bid}')
@@ -52,7 +61,7 @@ def review_detail(bid:str,request:Request):
 
 @router.post('/reviews/{bid}/close')
 async def close_review(bid:str,request:Request):
-    user,roles=identity(request);body=await request.json()
+    user,roles=identity(request);body=await object_body(request)
     return call(reviews().close,bid,user,roles,body.get('version'))
 
 
@@ -65,7 +74,7 @@ def derive_review(bid:str,request:Request):
 @router.post('/reviews/{bid}/items/{iid}/{operation}')
 async def review_action(bid:str,iid:str,operation:str,request:Request):
     user,roles=identity(request)
-    return call(reviews().action,bid,iid,operation,await request.json(),user,roles)
+    return call(reviews().action,bid,iid,operation,await object_body(request),user,roles)
 
 
 @router.get('/reviews/{bid}/items/{iid}/media/{mid}')
@@ -97,14 +106,14 @@ def list_exports(request:Request):
 async def preview_export(request:Request):
     user,roles=identity(request)
     if not set(roles)&{'manage','develop'}:raise HTTPException(403,'需要开发权限')
-    return call(exports().preview,await request.json(),user,roles)
+    return call(exports().preview,await object_body(request),user,roles)
 
 
 @router.post('/exports')
 async def create_export(request:Request):
     import os
     user,roles=identity(request)
-    return call(exports().create,await request.json(),user,roles,os.environ.get('DATAFLOW_PROJECT_ID','local'))
+    return call(exports().create,await object_body(request),user,roles,os.environ.get('DATAFLOW_PROJECT_ID','local'))
 
 
 @router.get('/exports/{eid}/download')
@@ -131,3 +140,15 @@ def review_context(bid:str,iid:str,cid:str,request:Request):
     # Text/JSON are rendered as plain text; HTML/SVG and active formats are attachments.
     mime='application/pdf' if path.suffix.lower()=='.pdf' else 'text/plain; charset=utf-8'
     return FileResponse(path,filename=row[2],media_type=mime,content_disposition_type='inline',headers={'Content-Security-Policy':'sandbox','X-Content-Type-Options':'nosniff'})
+
+
+@router.get('/drafts/{draft_id}/review-status')
+def current_review_status(draft_id:str,request:Request):
+    user,roles=identity(request)
+    return call(reviews().current_status,draft_id,user,roles)
+
+
+@router.post('/exports/{eid}/expire')
+def expire_export(eid:str,request:Request):
+    user,roles=identity(request)
+    return call(exports().expire,eid,user,roles)

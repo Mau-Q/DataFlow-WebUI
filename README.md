@@ -1,3 +1,19 @@
+# DataFlow WebUI
+
+本 fork 用于本地与局域网的数据生成、来源追溯、人工评测、发布与导出。界面沿用 DataFlow 原生画布、资源列表和参数控件。
+
+产品内的 Agent 聊天、Agent 子进程和 MCP 入口已按用户要求移除。当前使用方式是浏览器和 REST API。仓库开发技能与 AGENTS.md 属于源码维护工具，不会在产品中运行。
+
+- 集成部署入口：父仓库 `scripts/start-lan.sh`。
+- 局域网账号、HTTPS、权限与数据迁移：父仓库 `docs/lan-usage.md`。
+- 规格与验收：父仓库 `docs/lan-collaboration-data-review-spec.md`、`docs/lan-implementation.md`。
+- 后端：`backend/README.md`；前端构建：`cd frontend && npm run build`。
+
+下方为上游 Harness 的历史说明，保留开发背景。其中 Agent/MCP 产品运行方式已经失效，不适用于本 fork 当前部署。
+
+<details>
+<summary>上游历史说明</summary>
+
 # DataFlow-Harness
 
 [![](https://img.shields.io/github/repo-size/OpenDCAI/DataFlow-WebUI?color=green)](https://github.com/OpenDCAI/DataFlow-WebUI)
@@ -299,3 +315,5 @@ If you use or cite the underlying DataFlow framework, cite the DataFlow paper:
 </p>
 
 Licensed under Apache 2.0 — see [LICENSE](LICENSE).
+
+</details>

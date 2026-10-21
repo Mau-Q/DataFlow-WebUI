@@ -14,8 +14,8 @@ endpoints, and new services are all permitted when they serve the goal of
 
 ### Encouraged work areas
 
-1. **Agent chat experience** — tool-call progress indicators, session
-   persistence, multi-session switching, reconnect logic, robust error surfacing.
+1. **Team data workflows** — project isolation, source provenance, manual data
+   reviews and fixed exports. Product Agent chat, subprocesses and MCP are removed.
 2. **Prompt management** — both read-only browsing of the built-in
    `PROMPT_REGISTRY` AND first-class support for user-defined prompt templates
    (file-based persistence under `backend/data/prompts/`, CRUD endpoints,

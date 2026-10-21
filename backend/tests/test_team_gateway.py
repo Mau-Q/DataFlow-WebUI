@@ -55,7 +55,7 @@ def test_gateway_isolation_revocation_and_versions(tmp_path):
         assert owner.post('/api/v1/library/materials/register',json={'path':'/etc/passwd'}).status_code==403
         assert owner.post('/api/v1/pipelines/',json={'config':{'output_dir':'/etc'}}).status_code==403
         reader.post('/api/v1/preferences/',json={'theme':'dark'})
-        assert owner.get('/api/v1/preferences/').json()['data']=={}
+        assert owner.get('/api/v1/preferences/').json()['data']['theme']=='light'
         assert reader.get('/api/v1/preferences/').json()['data']['theme']=='dark'
         assert owner.post('/team/logout',json={}).status_code==200
         assert owner.get('/team/me').status_code==401
@@ -70,3 +70,14 @@ def test_csrf_origin_and_login_rate_limit(tmp_path):
         assert client.post('/team/projects',json={'name':'x'},headers={'X-CSRF-Token':'wrong'}).status_code==403
         for _ in range(10):client.post('/team/login',json={'name':'bad','password':'wrong'},headers={'Origin':'http://testserver'})
         assert client.post('/team/login',json={'name':'bad','password':'wrong'},headers={'Origin':'http://testserver'}).status_code==429
+
+
+def test_explicit_admin_entry_is_audited(tmp_path):
+    app=create_gateway(tmp_path/'state',FakeWorkers(),secure=False);s=app.state.store;s.initialize('owner',PASS,tmp_path/'legacy')
+    with TestClient(app) as client:
+        a=login(client);pid=client.post('/team/projects',json={'name':'Project'}).json()['id']
+        s.member(a,pid,a['id'],[],1)
+        assert all(p['id']!=pid for p in client.get('/team/me').json()['projects'])
+        assert client.post('/team/admin/projects/'+pid+'/enter',json={}).status_code==200
+        assert client.get('/team/me').json()['project']==pid
+        with s.tx() as c:assert c.execute("SELECT count(*) FROM audit WHERE action='system-admin-enter' AND project=?",(pid,)).fetchone()[0]==1

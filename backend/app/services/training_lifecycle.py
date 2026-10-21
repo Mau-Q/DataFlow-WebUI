@@ -163,7 +163,7 @@ class TrainingLifecycle:
 
     def list_releases(self, draft_id):
         self.lib._get('drafts', draft_id)
-        return sorted([r for r in self.lib.db.list('releases') if r['draft_id'] == draft_id], key=lambda x: x['version'])
+        return sorted([{k:v for k,v in r.items() if k not in {'snapshot_rows','snapshot_media_bindings'}} for r in self.lib.db.list('releases') if r['draft_id'] == draft_id], key=lambda x: x['version'])
 
     def _path(self, release_id, suffix):
         if not re.fullmatch(r'ds_[0-9a-f]{32}_v[1-9][0-9]*', release_id):
@@ -235,7 +235,11 @@ class TrainingLifecycle:
                     self.lib._atomic(target, content)
                     written.append(target)
                 manifest['files'] = {suffix: _hash(content) for suffix, content in blobs.items()}
-                self.lib._atomic(self._path(rid, '.json'), _json_bytes(manifest))
+                # Private logical snapshot retains original media references and revision identities.
+                # It is stored in SQLite after the portable package was built, never in its manifest.
+                stored = dict(manifest, snapshot_rows=copy.deepcopy(rec['rows']),
+                              snapshot_media_bindings=copy.deepcopy(rec.get('media_bindings', {})))
+                self.lib._atomic(self._path(rid, '.json'), _json_bytes(stored))
             except Exception:
                 for path in written:
                     path.unlink(missing_ok=True)

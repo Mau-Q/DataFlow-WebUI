@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # install.sh — single entry point for every DataFlow-Harness install profile.
 #
-#   ./install.sh --profile webui          full stack: canvas + backend + MCP
-#   ./install.sh --profile harness        backend + MCP, no Node, no frontend
+#   ./install.sh --profile webui          full stack: canvas + backend
+#   ./install.sh --profile harness        backend, no Node, no frontend
 #   ./install.sh --profile skills         standalone agent skills only
 #
 #   ./install.sh --profile harness --dry-run    show the plan, change nothing
@@ -37,7 +37,7 @@ Usage:
   ./install.sh --uninstall
 
 Profiles:
-  webui      Visual DAG canvas + backend + MCP + skills. Needs Python and Node.
+  webui      Visual DAG canvas + backend + skills. Needs Python and Node.
   harness    Backend + MCP + skills. Needs Python only — never touches Node.
   skills     Standalone agent skills only. Installs no packages and no services.
 
@@ -77,8 +77,8 @@ DF_DO_UNINSTALL=0
 DF_DO_LIST=0
 
 if [[ "${1:-}" == "configure-agent" ]]; then
-  shift
-  exec "$DF_REPO_ROOT/installers/configure_agent.sh" "$@"
+  echo "Product Agent/MCP support has been removed. Use the visual canvas and REST API." >&2
+  exit 2
 fi
 
 while [[ $# -gt 0 ]]; do
@@ -235,8 +235,8 @@ fi
 # ---------- profile resolution ----------------------------------------------
 if [[ -z "$DF_PROFILE" ]]; then
   err "no profile given. Pick one:"
-  err "  --profile webui     full canvas + backend + MCP"
-  err "  --profile harness   backend + MCP only (no Node)"
+  err "  --profile webui     full canvas + backend"
+  err "  --profile harness   backend only (no Node)"
   err "  --profile skills    standalone skills only (no packages)"
   err ""
   err "Not sure? Run ./install.sh --list"

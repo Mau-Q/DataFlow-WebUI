@@ -96,7 +96,7 @@
                 <button
                     :disabled="offset === 0"
                     @click="
-                        offset = Math.max(0, offset - 30)
+                        offset = Math.max(0, offset - 30);
                         loadSources()
                     "
                 >
@@ -107,7 +107,7 @@
                 ><button
                     :disabled="offset + 30 >= sources.total"
                     @click="
-                        offset += 30
+                        offset += 30;
                         loadSources()
                     "
                 >
@@ -134,9 +134,9 @@
                             placeholder="留空为全量" /></label
                     ><label>随机种子<input v-model="reviewForm.seed" /></label
                     ><label>批次名称<input v-model="reviewForm.name" placeholder="可选" /></label
-                    ><label class="wide"
-                        >允许评测账号 ID（逗号分隔）<input v-model="reviewersText" required
-                    /></label>
+                    ><label class="wide">允许评测人员
+<select v-model="selectedReviewers" multiple required aria-label="允许评测人员"><option v-for="r in eligibleReviewers" :key="r.id" :value="r.id">{{ r.name }}</option></select>
+<small>每条样本只需一人评测。可选择多位成员领取不同样本。</small></label>
                     <details class="wide">
                         <summary>评分模板</summary>
                         <textarea v-model="templateJson" rows="7" />
@@ -273,7 +273,7 @@
                                         rel="noopener"
                                         >查看 {{ c.name }}</a
                                     >
-                                </p>
+                                </p><iframe v-for="c in item.context || []" :key="'frame-'+c.id" :src="`/api/v1/team-data/reviews/${batch.id}/items/${item.id}/context/${c.id}`" :title="c.name" sandbox="allow-same-origin" class="context-frame"></iframe>
                                 <small>修订 {{ item.revision.slice(0, 16) }}</small>
                             </section>
                             <section class="card">
@@ -467,7 +467,7 @@
                                         >下载</a
                                     ><button @click="expanded = expanded === e.id ? '' : e.id">
                                         清单
-                                    </button>
+                                    </button><button v-if="e.status==='ready'" @click="expireExport(e.id)">清理临时文件</button>
                                 </td>
                             </tr>
                             <tr v-if="expanded === e.id">
@@ -516,7 +516,7 @@
                         <label>项目名称<input v-model="projectName" required /></label
                         ><button>创建项目</button>
                     </form>
-                </section>
+                <details><summary>系统管理范围内的项目</summary><p class="muted">跨项目管理需要显式进入，并记录审计。</p><p v-for="p in allProjects" :key="p.id">{{ p.name }} <button @click="adminEnter(p.id)">以管理员身份进入</button></p></details></section>
                 <section v-if="project && roles.includes('manage')" class="card">
                     <h2>项目成员</h2>
                     <table>
@@ -663,6 +663,8 @@ const tab = ref(canDevelop.value ? 'sources' : 'reviews'),
     currentPassword = ref(''),
     newPassword = ref(''),
     memberForm = ref({ user: '', roles: [], version: 0 })
+const allProjects=ref([])
+const eligibleReviewers=ref([]), selectedReviewers=ref([props.user.id])
 const templateJson = ref(
         JSON.stringify(
             {
@@ -678,7 +680,6 @@ const templateJson = ref(
         )
     ),
     reviewForm = ref({ source: '', count: null, seed: '0', name: '' }),
-    reviewersText = ref(props.user.id),
     exportForm = ref({ source: '', batch: '', format: 'package', data_format: 'jsonl' }),
     mapping = ref('{}'),
     referencesOnly = ref(false),
@@ -777,10 +778,11 @@ async function changeTab(t) {
 }
 async function loadSources() {
     sources.value = await request(
-        `/api/v1/team-data/sources?offset=${offset.value}&limit=30${filter.value ? '&' + filter.value + '=true' : ''}`
+        `/api/v1/team-data/sources?offset=${offset.value}&limit=30${filter.value ? '&' + filter.value + '=true' : ''}${props.selection?.tab==='sources'&&props.selection.source?'&source='+encodeURIComponent(props.selection.source):''}`
     )
 }
 async function loadChoices() {
+    eligibleReviewers.value=await request(`/team/projects/${props.project.id}/reviewers`)
     drafts.value = await request('/api/v1/library/drafts')
     releases.value = (
         await Promise.all(
@@ -801,7 +803,7 @@ async function refresh() {
             }
         }
         if (tab.value === 'admin') {
-            if (props.user.admin) users.value = await request('/team/users')
+            if (props.user.admin){users.value = await request('/team/users');allProjects.value=await request('/team/admin/projects')}
             if (props.project && roles.value.includes('manage')) {
                 members.value = await request(`/team/projects/${props.project.id}/members`)
                 audit.value = await request(`/team/audit?project=${props.project.id}`)
@@ -816,10 +818,7 @@ async function createReview() {
             kind: choices.value.find((d) => d.id === reviewForm.value.source)?.kind || 'draft',
             count: reviewForm.value.count || undefined,
             template: JSON.parse(templateJson.value),
-            reviewers: reviewersText.value
-                .split(',')
-                .map((s) => s.trim())
-                .filter(Boolean),
+            reviewers: selectedReviewers.value,
             request_id: uuid()
         })
         await openRaw(r.id)
@@ -958,6 +957,7 @@ async function createExport() {
         notice.value = '快照已固定，可在下方下载。'
     })
 }
+async function expireExport(id){if(!window.confirm('只清理此导出的临时文件，发布版本和原始材料保留。继续？'))return;await action(async()=>{await request(`/api/v1/team-data/exports/${id}/expire`,{});exports.value=await request('/api/v1/team-data/exports')})}
 async function invite() {
     await action(async () => {
         const r = await request('/team/invitations', { name: accountName.value })
@@ -978,6 +978,7 @@ async function resetUser(u) {
         inviteToken.value = r.invitation
     })
 }
+async function adminEnter(id){if(!window.confirm('以系统管理员身份进入此项目，操作会记录在审计中。继续？'))return;await action(async()=>{await request(`/team/admin/projects/${id}/enter`,{});window.location.reload()})}
 async function newProject() {
     await action(async () => {
         await request('/team/projects', { name: projectName.value })
@@ -1018,6 +1019,7 @@ watch(
     (value) => {
         if (value) {
             tab.value = value.tab || 'reviews'
+            if(value.tab==='sources')expanded.value=value.source||''
             reviewForm.value.source = value.source || ''
             exportForm.value.source = value.source || ''
             refresh()
@@ -1031,11 +1033,13 @@ const beforeLeave = (e) => {
         e.returnValue = ''
     }
 }
+const workspaceLeave=e=>{if(!discard())e.preventDefault()}
 onMounted(() => {
+    window.addEventListener('dataflow-before-workspace-change',workspaceLeave)
     window.addEventListener('beforeunload', beforeLeave)
     refresh()
 })
-onBeforeUnmount(() => window.removeEventListener('beforeunload', beforeLeave))
+onBeforeUnmount(() => {window.removeEventListener('beforeunload', beforeLeave);window.removeEventListener('dataflow-before-workspace-change',workspaceLeave)})
 </script>
 <style scoped>
 .workspace {
@@ -1361,3 +1365,7 @@ button:disabled {
     }
 }
 </style>
+
+<style scoped>.context-frame{width:100%;height:280px;border:1px solid var(--team-border);border-radius:6px;background:white;margin:10px 0}select[multiple]{min-height:90px}</style>
+
+<style scoped>.table-wrap table{min-width:760px}.table-wrap th,.table-wrap td button{white-space:nowrap}</style>

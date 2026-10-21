@@ -38,7 +38,7 @@ class TeamStore:
             c.executescript('''
             CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY, name TEXT UNIQUE NOT NULL,
               password TEXT NOT NULL, admin INTEGER NOT NULL DEFAULT 0, enabled INTEGER NOT NULL DEFAULT 1,
-              preferences TEXT NOT NULL DEFAULT '{}');
+              preferences TEXT NOT NULL DEFAULT '{"language":"cn","theme":"light"}');
             CREATE TABLE IF NOT EXISTS projects(id TEXT PRIMARY KEY, name TEXT NOT NULL, root TEXT UNIQUE NOT NULL);
             CREATE TABLE IF NOT EXISTS members(project TEXT REFERENCES projects(id), user TEXT REFERENCES users(id),
               roles TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1, PRIMARY KEY(project,user));
@@ -75,11 +75,16 @@ class TeamStore:
 
     def initialize(self, name, password, legacy_root):
         hashed = password_hash(password)
+        preferences={'language':'cn','theme':'light'}
+        legacy_preferences=Path(legacy_root)/'data/user_preferences.json'
+        if legacy_preferences.is_file():
+            saved=json.loads(legacy_preferences.read_text('utf-8'))
+            preferences.update({k:saved[k] for k in ('language','theme') if k in saved})
         with self.tx() as c:
             if c.execute('SELECT 1 FROM users').fetchone():
                 raise LibraryError('管理员已初始化', 409)
             uid = 'u_' + secrets.token_hex(12)
-            c.execute('INSERT INTO users(id,name,password,admin) VALUES(?,?,?,1)', (uid, name, hashed))
+            c.execute('INSERT INTO users(id,name,password,admin,preferences) VALUES(?,?,?,1,?)', (uid, name, hashed, json.dumps(preferences)))
             c.execute('INSERT INTO projects VALUES(?,?,?)', ('default', '历史导入 · 默认项目', str(Path(legacy_root).resolve())))
             c.execute('INSERT INTO members(project,user,roles) VALUES(?,?,?)', ('default', uid, 'manage,develop,review'))
             self.audit(c, uid, 'default', 'migration-v1', 'legacy-import')
@@ -112,12 +117,12 @@ class TeamStore:
 
     def projects(self, uid):
         with self.tx() as c:
-            return [dict(r, roles=r['roles'].split(',')) for r in c.execute('SELECT p.id,p.name,m.roles,m.version FROM projects p JOIN members m ON m.project=p.id WHERE m.user=?', (uid,))]
+            return [dict(r, roles=r['roles'].split(',')) for r in c.execute('SELECT p.id,p.name,m.roles,m.version FROM projects p JOIN members m ON m.project=p.id WHERE m.user=?', (uid,)) if r['roles']]
 
     def access(self, uid, project):
         with self.tx() as c:
             r = c.execute('SELECT p.*,m.roles FROM projects p JOIN members m ON p.id=m.project WHERE p.id=? AND m.user=?', (project, uid)).fetchone()
-            if not r:
+            if not r or not r['roles']:
                 raise LibraryError('资源不存在', 404)
             return dict(r, roles=r['roles'].split(','))
 
@@ -129,6 +134,7 @@ class TeamStore:
             if reset:
                 if not c.execute('SELECT 1 FROM users WHERE id=?', (uid,)).fetchone():
                     raise LibraryError('账号不存在', 404)
+                c.execute("UPDATE users SET password='unusable' WHERE id=?", (uid,))
                 c.execute('DELETE FROM sessions WHERE user=?', (uid,))
                 c.execute('DELETE FROM invitations WHERE user=?', (uid,))
             else:
@@ -136,7 +142,7 @@ class TeamStore:
                     raise LibraryError('账号名无效')
                 if c.execute('SELECT 1 FROM users WHERE name=?', (name,)).fetchone():
                     raise LibraryError('账号名已存在',409)
-                c.execute('INSERT INTO users(id,name,password,admin) VALUES(?,?,?,?)', (uid,name,'unusable',int(admin)))
+                c.execute('INSERT INTO users(id,name,password,admin,preferences) VALUES(?,?,?,?,?)', (uid,name,'unusable',int(admin),json.dumps({'language':'cn','theme':'light'})))
             token = secrets.token_urlsafe(32)
             c.execute('INSERT INTO invitations VALUES(?,?,?)', (digest(token),uid,time.time()+max(1,min(ttl,86400))))
             self.audit(c, actor['id'], None, 'reset' if reset else 'invite', uid)
@@ -174,7 +180,7 @@ class TeamStore:
         with self.tx() as c:
             target=c.execute('SELECT * FROM users WHERE id=?',(uid,)).fetchone()
             if not target:raise LibraryError('账号不存在',404)
-            if not enabled and target['admin'] and target['enabled'] and c.execute('SELECT count(*) FROM users WHERE admin=1 AND enabled=1').fetchone()[0]<=1:
+            if not enabled and target['admin'] and target['enabled'] and target['password']!='unusable' and c.execute("SELECT count(*) FROM users WHERE admin=1 AND enabled=1 AND password LIKE '%:%'").fetchone()[0]<=1:
                 raise LibraryError('不能禁用最后一个管理员',409)
             c.execute('UPDATE users SET enabled=? WHERE id=?',(int(enabled),uid))
             c.execute('DELETE FROM sessions WHERE user=?',(uid,))

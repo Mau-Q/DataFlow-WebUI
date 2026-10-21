@@ -1,6 +1,6 @@
 <template>
   <section class="lifecycle">
-    <h3>整理与发布</h3><p v-if="error" role="alert" class="error">{{ error }}</p><p v-if="notice" role="status">{{ notice }}</p>
+    <draft-review-status :draft="draft" /><h3>整理与发布</h3><p v-if="error" role="alert" class="error">{{ error }}</p><p v-if="notice" role="status">{{ notice }}</p>
     <details><summary>编辑或删除当前页样本</summary><label>样本<select :value="index" @change="selectRow"><option v-for="(id,i) in draft.sample_ids || []" :key="id" :value="i">样本 {{ draft.offset+i+1 }} · {{ id.slice(0,16) }}</option></select></label>
       <template v-if="draft.rows?.[index]"><template v-if="draft.training_type === 'dpo'"><label v-for="key in ['prompt','chosen','rejected']" :key="key">{{ fieldLabel(key) }}<textarea v-model="edited[key]" rows="3" /></label></template><template v-else-if="!edited.messages"><label v-for="key in ['instruction','input','output']" :key="key">{{ fieldLabel(key) }}<textarea v-model="edited[key]" rows="3" /></label></template>
       <label v-else>对话样本<textarea v-model="messageJson" rows="10" /></label><details><summary>来源任务与样本标识</summary><pre>{{ draft.sample_ids?.[index] }}
@@ -14,9 +14,11 @@
 </template>
 <script>
 import axios from 'axios'
+import DraftReviewStatus from '@/components/manage/team/DraftReviewStatus.vue'
 import { useUnsavedChanges, confirmDiscard, confirmAction } from '@/components/manage/forms/unsaved'
 import { publishChange } from '@/components/manage/forms/changes'
 export default{
+ components:{DraftReviewStatus},
  setup(){useUnsavedChanges(vm=>vm.dirty,vm=>vm.loadRow())},
  props:{draft:{type:Object,required:true}},emits:['updated','forked','dirty-change'],
  data:()=>({baseline:'',baselineMessage:'',index:0,edited:{},messageJson:'',mapping:{instruction:'instruction',input:'input',output:'output'},releases:[],busy:false,error:'',notice:''}),

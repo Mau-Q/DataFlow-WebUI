@@ -10,11 +10,8 @@ from app.api.v1.errors import ApiError
 
 
 def _is_protocol_path(request: Request) -> bool:
-    """MCP (and other non-/api/v1) transport paths speak their own wire
-    protocol (e.g. JSON-RPC 2.0 over SSE). They must NOT be wrapped in the
-    WebUI ApiResponse envelope, otherwise clients like Cursor reject the
-    response with a JSON-RPC schema validation error."""
-    return request.url.path.startswith("/mcp")
+    # Product transports use the REST envelope. The LAN gateway restores HTTP error status.
+    return False
 
 
 def install_exception_handlers(app: FastAPI):

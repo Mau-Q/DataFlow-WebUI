@@ -1,9 +1,7 @@
 fastapi[standard]
-# fastapi-mcp 0.4.0 still calls the MCP v1 Server(name, description) API.
-# MCP 2.x made description keyword-only, which raises a TypeError at startup.
-fastapi-mcp==0.4.0
-mcp>=1.12,<2
 uvicorn[standard]
+# Private project Unix-socket transport used by the LAN gateway.
+httpx>=0.27,<1
 pydantic_settings
 pandas
 loguru

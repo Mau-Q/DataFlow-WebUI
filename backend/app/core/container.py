@@ -57,6 +57,10 @@ class AppContainer:
         self.user_prompt_registry = UserPromptRegistry()
         from app.services.data_library import DataLibrary
         self.data_library = DataLibrary()
+        import os
+        if os.environ.get('DATAFLOW_TEAM_WORKER'):
+            from app.services.data_exports import DataExports
+            DataExports(self.data_library).recover_interrupted()
         from app.services.model_training import ModelTraining
         from pathlib import Path
         import os

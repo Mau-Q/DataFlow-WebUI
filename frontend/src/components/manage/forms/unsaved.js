@@ -23,7 +23,9 @@ export function useUnsavedChanges(dirty, discard = () => {}) {
     const vm = getCurrentInstance().proxy
     let active = true, removeGuard
     const unload = event => { if (active && dirty(vm)) { event.preventDefault(); event.returnValue = '' } }
+    const workspaceChange = event => { if(active && dirty(vm)){if(!window.confirm('有未保存的修改。放弃修改并继续？'))event.preventDefault();else discard(vm)} }
     onMounted(() => {
+        window.addEventListener('dataflow-before-workspace-change', workspaceChange)
         window.addEventListener('beforeunload', unload)
         removeGuard = vm.$router.beforeEach(async () => {
             if (!active || !dirty(vm)) return true
@@ -34,5 +36,5 @@ export function useUnsavedChanges(dirty, discard = () => {}) {
     })
     onActivated(() => { active = true })
     onDeactivated(() => { active = false })
-    onBeforeUnmount(() => { removeGuard?.(); window.removeEventListener('beforeunload', unload) })
+    onBeforeUnmount(() => { removeGuard?.(); window.removeEventListener('dataflow-before-workspace-change', workspaceChange); window.removeEventListener('beforeunload', unload) })
 }

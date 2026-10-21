@@ -1,6 +1,6 @@
 <template>
     <router-link v-if="isMM" :to="{path:'/m/multimodal',query:{config:mmRecord?.id}}" class="wizard-return">图片、服务与输出设置 · MM 未启用运行</router-link>
-    <div class="df-default-container" :class="[{ dark: theme === 'dark', 'show-pipeline': show.pipeline, 'show-chat': show.chat }]">
+    <div class="df-default-container" :class="[{ dark: theme === 'dark', 'show-pipeline': show.pipeline }]">
         <pipeline v-model="show.pipeline" v-model:loading="lock.loading" v-model:pipeline="currentPipeline"
             :before-change="confirmCanvasChange" :flow-id="flowId" class="df-pipeline-container" @confirm-dataset="confirmDataset($event, true)"
             @select-pipeline="selectPipelineCallback"></pipeline>
@@ -85,28 +85,9 @@
                         :title="local('Delete')" style="width: 30px; height: 30px" @click="resetFlow">
                         <i class="ms-Icon ms-Icon--Delete"></i>
                     </fv-button>
-                    <fv-button
-                        :theme="show.chat ? 'dark' : theme"
-                        :background="show.chat ? 'rgba(69, 98, 213, 1)' : ''"
-                        :foreground="show.chat ? 'rgba(255, 255, 255, 1)' : ''"
-                        border-radius="6" :title="local('AI Assistant')"
-                        style="width: 30px; height: 30px" @click="show.chat = !show.chat">
-                        <i class="ms-Icon ms-Icon--Robot"></i>
-                    </fv-button>
+
                 </div>
             </div>
-        </div>
-        <!-- AI Assistant Chat Panel -->
-        <!-- 使用 v-show 而非 v-if：保持组件挂载状态，隐藏/显示时不销毁，对话历史不丢失 -->
-        <div v-show="show.chat" class="df-chat-container" :style="{ width: chatWidth + 'px' }">
-            <!-- 左边缘拖拽手柄：按住左右拖动改变聊天面板宽度 -->
-            <div
-                class="df-chat-resizer"
-                :class="{ dragging: isResizingChat }"
-                title="拖动调整宽度"
-                @mousedown.prevent="startChatResize"
-            ></div>
-            <chatPanel></chatPanel>
         </div>
         <page-loading :model-value="!lock.loading" title="Loading..."></page-loading>
         <datasetPanel v-model="show.dataset" :title="local('原始数据集')" @confirm="confirmDataset"></datasetPanel>
@@ -169,7 +150,6 @@ import currentPipelineBlock from '@/components/manage/mainFlow/tools/currentPipe
 import execResultPanel from '@/components/manage/mainFlow/panels/execResultPanel/index.vue'
 import runConfirmPanel from '@/components/manage/mainFlow/panels/runConfirmPanel.vue'
 import taskPanel from '@/components/manage/mainFlow/panels/taskPanel.vue'
-import chatPanel from '@/components/manage/chatPanel/index.vue'
 
 import databaseIcon from '@/assets/flow/database.svg'
 import pipelineIcon from '@/assets/flow/pipeline.svg'
@@ -179,19 +159,6 @@ import saveIcon from '@/assets/flow/save.svg'
 
 import axios from '@/axios/config'
 import http from 'axios'
-
-// 聊天面板宽度持久化（跨刷新记住用户拖拽后的宽度）
-const CHAT_WIDTH_KEY = 'df_chat_width'
-const CHAT_WIDTH_DEFAULT = 320
-const CHAT_WIDTH_MIN = 280
-const CHAT_WIDTH_MAX = 900
-function getStoredChatWidth() {
-    try {
-        const v = parseInt(localStorage.getItem(CHAT_WIDTH_KEY), 10)
-        if (!isNaN(v)) return Math.min(CHAT_WIDTH_MAX, Math.max(CHAT_WIDTH_MIN, v))
-    } catch (e) { /* ignore */ }
-    return CHAT_WIDTH_DEFAULT
-}
 
 export default {
     setup(){
@@ -210,8 +177,7 @@ export default {
         currentPipelineBlock,
         execResultPanel,
         taskPanel,
-        runConfirmPanel,
-        chatPanel
+        runConfirmPanel
     },
     data() {
         return {
@@ -299,7 +265,6 @@ export default {
                 execResult: false,
                 taskPanel: false,
                 runConfirm: false,
-                chat: false
             },
             lock: {
                 serving: true,
@@ -307,9 +272,6 @@ export default {
                 loading: true
             },
             // 聊天面板宽度（可拖拽调整，跨刷新持久化）
-            chatWidth: getStoredChatWidth(),
-            isResizingChat: false,
-            _chatResizeState: null,
         }
     },
     watch: {
@@ -337,55 +299,7 @@ export default {
                 this.useEdgeSync.autoConnectAllRunEdges(this.flowId, this.$Guid)
             }
         },
-        agentSyncPayload(payload) {
-            if (!payload) return
-            // 让现有 renderPipeline 把 pipeline.config 完整渲染出来——和从侧边栏
-            // 点选 pipeline 的路径完全一致，这样节点类型 / 参数 / 样式 / 边 handle
-            // 都能正确生成；后端 sync_pipeline 里的 nodes/edges 字段已废弃（仅兼容）。
-            const pipeline = payload.pipeline || null
-            if (!pipeline || !pipeline.config) {
-                // 实在没有 config 才退回原始的手动添加逻辑
-                const flow = useVueFlow(this.flowId)
-                flow.$reset()
-                if (payload.nodes && payload.nodes.length > 0) flow.addNodes(payload.nodes)
-                if (payload.edges && payload.edges.length > 0) flow.addEdges(payload.edges)
-                return
-            }
 
-            // 先刷新数据集/算子/pipeline 列表，保证 renderPipeline 查得到
-            const confirmDatasetCall = (_, dataset) => {
-                this.confirmDataset(dataset, true)
-            }
-            const doRender = async () => {
-                await usePipelineOperation().renderPipeline(
-                    pipeline.config,
-                    this.flowId,
-                    this.datasets,
-                    this.flatFormatedOperators,
-                    this,
-                    this.$nextTick,
-                    confirmDatasetCall,
-                    this.$Guid
-                )
-                // Backend-created pipelines are saved records, just like a
-                // sidebar selection. Keep Save/Run and history bound to its ID.
-                this.currentPipeline = pipeline
-                await this.$nextTick()
-                useVueFlow(this.flowId).fitView({ padding: 0.12 })
-            }
-
-            // 依赖项可能还没加载（尤其是首次打开 + Agent 立刻创建）。
-            // datasets / pipelines 每次都刷新一下，因为 Agent 可能刚刚通过
-            // register_dataset / create_pipeline 新增了条目。
-            const prep = [this.getDatasets(), this.getPipelines()]
-            if (!this.flatFormatedOperators || !this.flatFormatedOperators.length) {
-                prep.push(this.getOperators('zh'))
-            }
-
-            Promise.all(prep).then(doRender).catch((err) => {
-                console.error('[agentSyncPayload] renderPipeline failed:', err)
-            })
-        }
     },
     computed: {
         canvasFingerprint(){
@@ -411,7 +325,6 @@ export default {
             'groupOperators',
             'tasks',
             'execution',
-            'agentSyncPayload',
             'pipelines',
             'operatorStyleDict'
         ]),
@@ -460,8 +373,6 @@ export default {
     },
     beforeUnmount() {
         // 兜底清理拖拽监听，避免组件销毁后仍挂在 window 上
-        window.removeEventListener('mousemove', this.onChatResize)
-        window.removeEventListener('mouseup', this.stopChatResize)
     },
     methods: {
         async confirmCanvasChange(){if(!this.canvasDirty)return true;if(!await confirmDiscard(this))return false;this.canvasBaseline='';this.canvasEdited=false;return true},
@@ -1171,38 +1082,7 @@ export default {
                 }
             })
         },
-        // ── 聊天面板拖拽调整宽度 ──────────────────────────────
-        startChatResize(event) {
-            this.isResizingChat = true
-            // 面板在右侧：手柄在左边缘，向左拖 => 变宽，所以用起始 X - 当前 X。
-            this._chatResizeState = {
-                startX: event.clientX,
-                startWidth: this.chatWidth,
-            }
-            window.addEventListener('mousemove', this.onChatResize)
-            window.addEventListener('mouseup', this.stopChatResize)
-            // 拖拽时禁止选中文字、统一光标
-            document.body.style.userSelect = 'none'
-            document.body.style.cursor = 'col-resize'
-        },
-        onChatResize(event) {
-            if (!this._chatResizeState) return
-            const delta = this._chatResizeState.startX - event.clientX
-            let next = this._chatResizeState.startWidth + delta
-            next = Math.min(CHAT_WIDTH_MAX, Math.max(CHAT_WIDTH_MIN, next))
-            this.chatWidth = next
-        },
-        stopChatResize() {
-            this.isResizingChat = false
-            this._chatResizeState = null
-            window.removeEventListener('mousemove', this.onChatResize)
-            window.removeEventListener('mouseup', this.stopChatResize)
-            document.body.style.userSelect = ''
-            document.body.style.cursor = ''
-            try {
-                localStorage.setItem(CHAT_WIDTH_KEY, String(this.chatWidth))
-            } catch (e) { /* ignore */ }
-        }
+
     }
 }
 </script>
@@ -1264,53 +1144,6 @@ export default {
             flex: 1;
             min-height: 0;
             height: 0;
-        }
-    }
-
-    .df-chat-container {
-        position: relative;
-        width: 320px;
-        height: 100%;
-        flex-shrink: 0;
-        border-radius: 15px;
-        overflow: hidden;
-        box-shadow: -1px 0px 4px rgba(0, 0, 0, 0.08);
-        margin-left: 10px;
-
-        .df-chat-resizer {
-            position: absolute;
-            left: 0px;
-            top: 0px;
-            width: 8px;
-            height: 100%;
-            cursor: col-resize;
-            z-index: 5;
-            /* 手柄本身透明，hover / 拖拽时高亮一条竖线 */
-            background: transparent;
-            transition: background 0.15s;
-
-            &::after {
-                content: '';
-                position: absolute;
-                left: 3px;
-                top: 50%;
-                transform: translateY(-50%);
-                width: 2px;
-                height: 40px;
-                border-radius: 2px;
-                background: rgba(120, 120, 120, 0.25);
-                transition: background 0.15s;
-            }
-
-            &:hover::after,
-            &.dragging::after {
-                background: rgba(69, 98, 213, 0.8);
-            }
-
-            &:hover,
-            &.dragging {
-                background: rgba(69, 98, 213, 0.06);
-            }
         }
     }
 

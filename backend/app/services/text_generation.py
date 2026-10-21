@@ -46,6 +46,7 @@ class TextGeneration:
                     param['value'] = None
         options = config.setdefault('execution_options', {})
         options.pop('input_snapshot', None)
+        options.pop('source_identity', None)
         options.pop('serving_snapshots', None)
         retries = options.get('additional_retries', 0)
         if type(retries) is not int or not 0 <= retries <= 5:
@@ -217,7 +218,15 @@ class TextGeneration:
         if collection_target is not None:
             options['collection_target'] = collection_target
         freeze_collection_target(config, self.c.data_library)
+        from app.services.source_progress import content_identity, dataset_id
+        source_id=dataset_id(config)
+        source_record=self.c.dataset_registry.get(source_id)
+        before=content_identity(dict(source_record,id=source_id)) if source_record and not options.get('input_snapshot') else None
         options['input_snapshot'] = self._freeze_input(config)
+        if before is not None:
+            after=content_identity(dict(source_record,id=source_id))
+            if before!=after:raise LibraryError('固定输入期间原始内容变化，请重试',409)
+            options['source_identity']=before
         options.update(capture_responses=True, training_output=True, max_attempts=options.get('additional_retries', 0)+1,
                        serving_snapshots=check['serving_snapshots'])
         # Resolve resources and all runtime conditions BEFORE writing queued.

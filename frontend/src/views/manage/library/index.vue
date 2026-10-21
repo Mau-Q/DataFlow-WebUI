@@ -9,14 +9,14 @@
         <section v-if="!detailId && (records.length || loading)" class="dataset-catalog">
             <dataset-filters v-model="filters" :mode="mode" :theme="theme" :count="filtered.length" :total="records.length" />
             <div class="table-scroll"><table class="dataset-table">
-                <thead><tr><th scope="col">数据集名称</th><th scope="col">{{ isSources ? '数据形式' : '数据类型' }}</th><th scope="col">{{ isSources ? '数量' : '样本数' }}</th><th v-if="!isSources" scope="col">发布版本</th><th scope="col">更新时间</th><th scope="col"><span class="sr-only">操作</span></th></tr></thead>
+                <thead><tr><th scope="col">数据集名称</th><th scope="col">{{ isSources ? '数据形式' : '数据类型' }}</th><th scope="col">{{ isSources ? '数量' : '样本数' }}</th><th v-if="isSources && isTeam" scope="col">生成情况</th><th v-if="!isSources" scope="col">发布版本</th><th scope="col">更新时间</th><th scope="col"><span class="sr-only">操作</span></th></tr></thead>
                 <tbody><tr v-for="item in filtered" :key="item.id">
                     <td><router-link :to="detailLocation(item.id)" @click="rememberListPosition"><span class="record-icon" aria-hidden="true">{{ isSources ? '▤' : '◫' }}</span>{{ item.name }}</router-link></td>
                     <td>{{ isSources ? sourceType(item) : `${modalityLabel(item.modality)} ${(item.training_type || 'sft').toUpperCase()}` }}</td>
                     <td>{{ isSources ? sourceCount(item) : `${(item.row_count || 0).toLocaleString('zh-CN')} 条` }}</td>
-                    <td v-if="!isSources">{{ releaseLabel(item) }}</td>
+                    <td v-if="isSources && isTeam"><button class="progress-button" @click="teamOpen('sources',item.id)">{{ progressLabel(item.id) }}</button></td><td v-if="!isSources">{{ releaseLabel(item) }}</td>
                     <td class="time-cell" :title="timeTitle(item)">{{ formatTime(item.updated_at) }}</td>
-                    <td class="open-cell"><router-link :to="detailLocation(item.id)" :aria-label="`查看 ${item.name}`" @click="rememberListPosition">查看 →</router-link></td>
+                    <td class="open-cell"><router-link :to="detailLocation(item.id)" :aria-label="`查看 ${item.name}`" @click="rememberListPosition">查看 →</router-link><template v-if="isTeam && !isSources"><button @click="teamOpen('reviews',item.id)">人工评测</button><button @click="teamOpen('exports',item.id)">导出</button></template></td>
                 </tr></tbody>
             </table></div>
             <p v-if="!filtered.length" class="empty-small">{{ loading ? '正在加载…' : '没有匹配的数据集' }}</p>
@@ -24,7 +24,7 @@
         <div v-else-if="detailId" class="dataset-detail">
             <section class="detail" v-if="selected" :aria-busy="loading">
                 <p v-if="loading" class="help" role="status">正在刷新数据集…</p>
-                <div class="detail-heading"><div><h2>{{ selected.name }}</h2><p>{{ isSources ? `${sourceType(selected)} · ${sourceCount(selected)}` : `${modalityLabel(selected.modality)} · ${(selected.training_type || 'sft').toUpperCase()} · ${selected.row_count} 条` }}</p></div><button v-if="!isSources" @click="openImport">导入数据</button></div>
+                <div class="detail-heading"><div><h2>{{ selected.name }}</h2><p>{{ isSources ? `${sourceType(selected)} · ${sourceCount(selected)}` : `${modalityLabel(selected.modality)} · ${(selected.training_type || 'sft').toUpperCase()} · ${selected.row_count} 条` }}</p></div><div class="toolbar"><button v-if="isTeam" @click="teamOpen(isSources?'sources':'reviews',selected.id)">{{ isSources?'生成情况':'人工评测' }}</button><button v-if="isTeam && !isSources" @click="teamOpen('exports',selected.id)">导出</button><button v-if="!isSources" @click="openImport">导入数据</button></div></div>
                 <template v-if="isSources && hasSourceFiles">
                     <div class="source-layout">
                         <div class="file-list"><button v-for="(row, i) in sourceRows" :key="i" :class="{ active: sourceIndex === i }" @click="selectSource(i)"><span>{{ offset + i + 1 }}</span><strong :title="row.source_name || row.source">{{ sourceName(row) }}</strong></button></div>
@@ -141,6 +141,7 @@ import NativeSelect from '@/components/manage/forms/NativeSelect.vue'
 import {publishChange, subscribeChanges} from '@/components/manage/forms/changes'
 import { mapState } from 'pinia'
 import { useTheme } from '@/stores/theme'
+import { team } from '@/components/manage/team/client'
 import DatasetLifecycle from '@/components/manage/library/DatasetLifecycle.vue'
 import SourceDatasetImport from '@/components/manage/library/SourceDatasetImport.vue'
 import { sourceType, sourceCount, recordTime, formatTime, releaseLabel } from './catalog.js'
@@ -149,8 +150,9 @@ export default {
     setup(){useUnsavedChanges(vm=>vm.dialogDirty || vm.metadataDirty,vm=>{vm.fileMetadata=null;vm.finishCloseDialog()})},
     components: { DatasetFilters, BasePanel, NativeText, NativeSelect, SourceDatasetImport, DatasetLifecycle },
     props: { mode: { type: String, required: true } },
-    data: () => ({ sourceBusy:false, sampleDirty:false, syncPending:false, stopChanges:null, mediaVersion:0, reloadVersion:0, mediaLoading:false, selectedTrainingFile:null, trainingName:'', records: [], materials: [], selected: null, sourceRows: [], sourceIndex: 0, offset: 0, filters: defaultFilters(), savedFilters: {}, search: '', busy: false, loading: false, error: '', notice: '', dialogError: '', showCreate: false, showImport: false, mediaBindings: '{}', mediaRefs: [], mediaChoices: {}, draftForm: { name: '', modality: 'text', training_type: 'sft', description: '' }, loadVersion: 0, pendingReload: false, fileMetadata: null, metadataBaseline:'', materialDetails: null, memberRows: [], memberLoading: false, memberError: '', memberVersion: 0, listPositions: {}, listSearches: {}, importAfterLoad: false }),
+    data: () => ({ sourceProgress:{}, sourceBusy:false, sampleDirty:false, syncPending:false, stopChanges:null, mediaVersion:0, reloadVersion:0, mediaLoading:false, selectedTrainingFile:null, trainingName:'', records: [], materials: [], selected: null, sourceRows: [], sourceIndex: 0, offset: 0, filters: defaultFilters(), savedFilters: {}, search: '', busy: false, loading: false, error: '', notice: '', dialogError: '', showCreate: false, showImport: false, mediaBindings: '{}', mediaRefs: [], mediaChoices: {}, draftForm: { name: '', modality: 'text', training_type: 'sft', description: '' }, loadVersion: 0, pendingReload: false, fileMetadata: null, metadataBaseline:'', materialDetails: null, memberRows: [], memberLoading: false, memberError: '', memberVersion: 0, listPositions: {}, listSearches: {}, importAfterLoad: false }),
     computed: {
+        isTeam(){return team.enabled},
         dialogVisible: {get(){return this.showCreate || this.showImport},set(v){if(!v)this.finishCloseDialog()}},
         metadataDirty(){return !!this.fileMetadata && this.metadataBaseline!==JSON.stringify(this.fileMetadata)},
         dialogDirty(){if(!this.dialogVisible)return false;if(this.isSources)return !!(this.$refs.sourceImport?.name || this.$refs.sourceImport?.count);return this.showCreate?!!this.draftForm.name.trim() || !!this.draftForm.description.trim() || this.draftForm.modality!=='text' || this.draftForm.training_type!=='sft':!!this.selectedTrainingFile},
@@ -174,6 +176,8 @@ export default {
     beforeUnmount(){this.stopChanges?.()},
     activated() { if (!this.loading && !this.busy) this.reload() },
     methods: {
+        teamOpen(tab,source){window.dispatchEvent(new CustomEvent('dataflow-team-open',{detail:{tab,source}}))},
+        progressLabel(id){const s=this.sourceProgress[id];if(!s)return '来源待确认';const labels=[];if(s.datasets.length)labels.push(`已生成 ${s.datasets.length} 个数据集`);if(s.active.length)labels.push(`生成中 ${s.active.length}`);if(s.pending.length)labels.push(`待收集 ${s.pending.length}`);if(s.releases.length)labels.push(`已发布 ${s.releases.length}`);if(s.zero_samples.length)labels.push('无有效样本');if(s.old_content.length)labels.push('旧内容结果');return labels.join(' · ')||'未生成'},
         async selectSource(index){if(index===this.sourceIndex)return;if(this.metadataDirty && !await confirmDiscard(this))return;this.sourceIndex=index},
         sampleEditingChanged(dirty){this.sampleDirty=dirty;if(!dirty && this.syncPending && !this.busy && !this.dialogVisible){this.syncPending=false;this.reload()}},
         detailLocation(id) { return { path: this.isSources ? '/m/materials' : '/m/training-datasets', query: { dataset: id } } },
@@ -205,7 +209,7 @@ export default {
         materialUrl(id) { return `/api/v1/library/materials/${id}/file` },
         async request(method, path, data) { const r = await axios({ method, url: `/api/v1${path}`, data }); if (!r.data.success) throw new Error(r.data.message); return r.data.data },
         async action(fn, {keepNotice=false}={}) { if (this.busy) return; this.busy = true; this.error = ''; if(!keepNotice)this.notice = ''; try { await fn() } catch (e) { if (this.showCreate || this.showImport) this.dialogError = e.response?.data?.message || e.message; else this.error = e.response?.data?.message || e.message } finally { this.busy = false; if (this.pendingReload || (this.syncPending && !this.dialogVisible && !this.sampleDirty)) { this.pendingReload = false;this.syncPending=false; this.reload() } } },
-        async loadLists() { const mode = this.mode; const records = await this.request('get', this.isSources ? '/datasets/?visible_only=true' : '/library/drafts?visible_only=true'); if (mode === this.mode) this.records = records },
+        async loadLists() { const mode = this.mode; const records = await this.request('get', this.isSources ? '/datasets/?visible_only=true' : '/library/drafts?visible_only=true'); if (mode === this.mode) this.records = records; if(team.enabled && this.isSources){let offset=0;const items=[];while(true){const r=await axios.get(`/api/v1/team-data/sources?offset=${offset}&limit=200`);items.push(...r.data.items);offset+=200;if(offset>=r.data.total)break}this.sourceProgress=Object.fromEntries(items.map(s=>[s.id,s]))} },
         async reload() { if((this.sampleDirty || this.metadataDirty) && !await confirmDiscard(this))return; if(this.busy){this.pendingReload=true;return}const reloadVersion=++this.reloadVersion;this.loading = true; await this.action(async () => { await this.loadLists(); const id = this.detailId; if (id) await this.loadSelected(id); else this.selected = null }, {keepNotice:true}); if(reloadVersion===this.reloadVersion)this.loading = false; if (this.importAfterLoad && this.selected) { this.importAfterLoad = false; this.openImport() } if (!this.detailId) this.$nextTick(() => { if (this.$refs.libraryPane) this.$refs.libraryPane.scrollTop = this.listPositions[this.mode] || 0 }) },
         async loadSelected(id) {
             const version = ++this.loadVersion
@@ -354,3 +358,5 @@ button { font: inherit; cursor: pointer; border: 1px solid #d9dfeb; border-radiu
 .dark .dataset-table tr:hover td { background:#343c4b; }
 @container library (max-width:800px) { .dataset-table th,.dataset-table td { padding:14px 12px; } .dataset-table td:first-child { width:36%; min-width:180px; } .list-toolbar { padding:14px 12px; } .sample-heading { gap:10px; padding:14px; } }
 </style>
+
+<style scoped>.progress-button{font-size:12px;text-align:left;max-width:330px;line-height:1.5}.open-cell button{margin-left:10px;font-size:12px;padding:5px 9px}</style>

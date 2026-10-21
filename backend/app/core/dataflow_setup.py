@@ -39,6 +39,28 @@ def setup_dataflow_core() -> None:
             f"Restore {', '.join(_REQUIRED_CORE_DIRS)} or move the incomplete directory aside."
         )
 
+    import os
+    if os.environ.get('DATAFLOW_TEAM_WORKER'):
+        # Copy only installed, credential-free templates. No interactive CLI or downloads.
+        import shutil
+        import tempfile
+        from dataflow.cli_funcs.paths import DataFlowPath
+        stage = Path(tempfile.mkdtemp(prefix='.core-', dir=core_dir.parent))
+        try:
+            for source, destination in ((DataFlowPath.get_dataflow_pipelines_dir(), stage),
+                                        (DataFlowPath.get_dataflow_example_dir(), stage / 'example_data'),
+                                        (DataFlowPath.get_dataflow_playground_dir(), stage)):
+                shutil.copytree(source, destination, dirs_exist_ok=True,
+                                ignore=shutil.ignore_patterns('.DS_Store', '__pycache__', '*.pyc'))
+            if not dataflow_core_ready(stage):
+                raise RuntimeError('Installed DataFlow templates are incomplete')
+            core_dir.rmdir()  # Only the empty destination established above may be replaced.
+            stage.replace(core_dir)
+        finally:
+            if stage.exists():
+                shutil.rmtree(stage)
+        return
+
     logger.info(f"Initializing DataFlow core directory at {core_dir}")
     try:
         subprocess.run(
