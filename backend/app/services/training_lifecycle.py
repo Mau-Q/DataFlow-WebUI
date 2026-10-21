@@ -48,6 +48,8 @@ class TrainingLifecycle:
         return media
 
     def edit(self, draft_id, sample_id, row=None, delete=False, expected_updated_at=None):
+        from app.services.data_reviews import DataReviews
+        revisions = DataReviews(self.lib)
         with self.lib._writing():
             self.lib._path('drafts', draft_id)
             summaries = self.lib.db.draft_summaries(draft_id)
@@ -67,6 +69,10 @@ class TrainingLifecycle:
                 raise LibraryError('样本不存在', 404)
             index = ids.index(sample_id)
             with self.lib.db.transaction() as con:
+                old_payload = con.execute('SELECT payload FROM samples WHERE draft_id=? AND sample_id=?', (draft_id, sample_id)).fetchone()[0]
+                old_revision = revisions.remember(con, sample_id, json.loads(old_payload))
+                if not delete:
+                    revisions.remember(con, sample_id, row, old_revision, '普通草稿编辑')
                 if delete:
                     con.execute('DELETE FROM samples WHERE draft_id=? AND position=?', (draft_id, index))
                     positions = con.execute('SELECT position FROM samples WHERE draft_id=? AND position>? ORDER BY position',
@@ -200,6 +206,8 @@ class TrainingLifecycle:
             manifest = dict(id=rid, draft_id=draft_id, version=version, created_at=_now(), name=rec['name'],
                             modality=rec['modality'], training_type=rec['training_type'], row_count=len(rows),
                             sample_ids=ids, sample_sources=rec['sample_sources'], data_sha256=_hash(data),
+                            review_references=rec.get('review_references', {}),
+                            sample_revisions={sid: _hash(_json_bytes(row)) for sid, row in zip(ids, rows)},
                             media={ref: {'material_id': mat['id'], 'path': paths[ref], 'sha256': mat['sha256']} for ref, (_, mat) in media.items()},
                             formats=['jsonl', 'package'] + (['alpaca'] if alpaca is not None else []))
             buffer = io.BytesIO()

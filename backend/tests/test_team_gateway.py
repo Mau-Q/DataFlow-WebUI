@@ -46,7 +46,7 @@ def test_gateway_isolation_revocation_and_versions(tmp_path):
             assert reader.get(path).status_code==403
         assert reader.post('/api/v1/generation/drafts/x/publish',json={}).status_code==403
         assert owner.post('/api/v1/agent/start',json={}).status_code==403
-        assert owner.get('/mcp').status_code in (404,405)
+        assert owner.get('/mcp').status_code==403
         assert owner.get('/data/datasets.sqlite3').status_code==404
         owner.headers['If-Match']='0'
         assert owner.put('/api/v1/pipelines/x',json={}).status_code==200

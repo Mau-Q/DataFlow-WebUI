@@ -12,7 +12,7 @@ import tempfile
 import shutil
 from urllib.parse import urlsplit
 import httpx
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, WebSocket
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from app.services.data_library import LibraryError
@@ -79,6 +79,8 @@ def policy(path, method, roles):
     """Fail closed. Review-only users have no access to legacy business routes."""
     if path.startswith('/api/v1/team-data/'):
         if '/reviews' in path and method=='GET':return
+        if path.endswith('/reopen') and set(roles)&{'manage','develop'}:return
+        if path.endswith('/release') and set(roles)&{'manage','develop'}:return
         if any(path.endswith('/'+s) for s in ('claim','release','save','submit','revise','reopen')):
             if 'review' in roles:return
         elif set(roles)&{'manage','develop'}:return
@@ -258,6 +260,9 @@ def create_gateway(state=None, workers=None, secure=None):
                 elif isinstance(value,list):
                     for v in value:check_paths(v)
             check_paths(payload)
+        if request.url.path=='/api/v1/team-data/reviews' and request.method=='POST':
+            for reviewer in payload.get('reviewers',[]):
+                if 'review' not in store.access(reviewer,pid)['roles']:raise LibraryError('评测成员未获当前项目评测权限',400)
         headers={k:v for k,v in request.headers.items() if k.lower() in {'content-type','accept','if-match'}}
         headers.update({'x-team-user':user['id'],'x-team-roles':','.join(project['roles'])})
         # Serialize gateway writes per project; workers retain their own file/DB locks.
@@ -275,17 +280,32 @@ def create_gateway(state=None, workers=None, secure=None):
                 version+=1
                 with store.tx() as c:c.execute("INSERT INTO versions VALUES(?,'*',?) ON CONFLICT(project,object) DO UPDATE SET version=excluded.version",(pid,version))
         output=response.content
+        # Scrub actual configured key values even when legacy errors embed them in text.
+        known=[]
+        try:
+            import yaml
+            configured=yaml.safe_load((Path(project['root'])/'data/serving_registry.yaml').read_text('utf-8')) or {}
+            for serving in configured.values():
+                for param in serving.get('params',[]):
+                    if param.get('name') in {'api_key','password','secret','access_token'}:
+                        known.extend(v for v in (param.get('value'),param.get('default_value')) if isinstance(v,str) and len(v)>=8)
+        except (OSError,ValueError,AttributeError):pass
         response_headers={k:v for k,v in response.headers.items() if k.lower() in {'content-type','content-disposition','etag','x-resource-version'}}
         response_headers['X-Resource-Version']=str(version)
         if 'application/json' in response.headers.get('content-type',''):
             try:output=json.dumps(clean_secrets(response.json()),ensure_ascii=False).encode()
             except ValueError:pass
+            for secret in known:output=output.replace(secret.encode(),b'****')
         if request.method not in {'GET','HEAD'}:
             with store.tx() as c:store.audit(c,user['id'],pid,request.method,request.url.path,str(response.status_code))
         return Response(output,status_code=response.status_code,headers=response_headers)
 
+    @app.api_route('/mcp{rest:path}',methods=['GET','POST','DELETE'])
+    async def no_mcp(rest:str):
+        raise LibraryError('团队模式未开放 MCP',403)
+
     @app.websocket('/{rest:path}')
-    async def no_websocket(websocket,rest):
+    async def no_websocket(websocket: WebSocket,rest):
         await websocket.close(code=1008)
 
     if DIST.exists():app.mount('/',StaticFiles(directory=DIST,html=True),name='ui')

@@ -34,6 +34,7 @@ def freeze_source(config,registry,library):
     rid=dataset_id(config)
     record=registry.get(rid) if rid else None
     if not record:return None
+    record=dict(record,id=rid)
     snapshot=content_identity(record)
     if snapshot is None:raise LibraryError('输入文件不可用',409)
     options=config.setdefault('execution_options',{})
