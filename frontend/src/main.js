@@ -2,6 +2,8 @@ import { createApp } from 'vue'
 import { createPinia } from 'pinia'
 
 import App from './App.vue'
+import TeamShell from './components/manage/team/TeamShell.vue'
+import { h } from 'vue'
 import router from './router'
 
 import VueFluent from "@creatorsn/vfluent3";
@@ -11,7 +13,7 @@ import apiPlugin from '@/axios'
 
 import { installInteractions } from '@/components/general/interactions'
 
-const app = createApp(App)
+const app = createApp({render:()=>h(TeamShell,null,{default:()=>h(App)})})
 installInteractions(app)
 app.use(VueFluent);
 

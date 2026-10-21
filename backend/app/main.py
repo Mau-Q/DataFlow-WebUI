@@ -46,7 +46,9 @@ def create_app() -> FastAPI:
     install_exception_handlers(app)
 
     # 挂载 MCP Server（必须在 StaticFiles catch-all 之前注册，否则 /mcp 请求被静态文件拦截）
-    create_mcp_server(app)
+
+    if not os.environ.get("DATAFLOW_TEAM_WORKER"):
+        create_mcp_server(app)
 
     if not INDEX_FILE.exists():
         logger.warning("Warning: UI index file not found, please build the frontend first")

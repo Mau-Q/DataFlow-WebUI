@@ -1,6 +1,8 @@
 import axios from 'axios'
+import { installTeamTransport } from '@/components/manage/team/client'
 
 let ax = axios.create()
+installTeamTransport(ax)
 
 // config here
 // 所有生成的 API 方法里 URL 形如 '/api/v1/...'，因此 baseURL 保持为空，
@@ -14,8 +16,8 @@ if (import.meta.env.MODE == 'production') {
 ax.interceptors.request.use(
     (config) => {
         if (
-            config.headers['Content-Type'].includes('x-www-form-urlencoded') ||
-            config.headers['Content-Type'].includes('multipart/form-data')
+            String(config.headers['Content-Type'] || '').includes('x-www-form-urlencoded') ||
+            String(config.headers['Content-Type'] || '').includes('multipart/form-data')
         ) {
             let formData = new FormData()
             for (let item in config.data) {

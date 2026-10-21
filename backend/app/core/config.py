@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     ]
     
     # 获取项目根目录
-    BASE_DIR: str = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    BASE_DIR: str = os.environ.get("DATAFLOW_WORKSPACE_DIR") or os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     
     DATA_REGISTRY: str = os.path.join(BASE_DIR, "data", "data_registry.yaml") #
     TASK_REGISTRY: str = os.path.join(BASE_DIR, "data", "task_registry.json")
