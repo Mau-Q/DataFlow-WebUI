@@ -1,9 +1,9 @@
 # DataFlow WebUI — Project Rules
 
-> **Deployment assumption**: this project is a **single-user, local-first** tool.
-> Each developer/user runs both backend and frontend on their own machine.
-> There is **no authentication, no registration, no multi-tenant concern**.
-> Do NOT add login pages, JWT/session infrastructure, or per-user ACL.
+> **Deployment assumption**: local-first with an explicitly authorized LAN team mode.
+> LAN mode requires host-only administrator initialization, revocable sessions, project isolation,
+> and restricted review permissions. No public registration, telemetry or Internet exposure.
+> See the integration spec `docs/lan-collaboration-data-review-spec.md` in the parent repository.
 
 ## WebUI Change Policy
 
@@ -32,8 +32,7 @@ endpoints, and new services are all permitted when they serve the goal of
 
 ### Still prohibited
 
-- **Authentication / registration / multi-user features.** Single-user local
-  tool only.
+- **Public registration or public deployment.** LAN accounts are administrator managed.
 - **External telemetry / analytics uploads.** No outbound reporting.
 - **Breaking changes to `OPERATOR_REGISTRY` / `PROMPT_REGISTRY` semantics** —
   always extend, never redefine, so upstream DataFlow stays compatible.
@@ -42,8 +41,8 @@ endpoints, and new services are all permitted when they serve the goal of
 
 Before a change, ask:
 
-1. Does it make DataFlow-WebUI more useful as a single-user local tool? → OK
-2. Does it introduce a login page, account system, or remote telemetry? → **NO**
+1. Does it make DataFlow-WebUI more useful for local or authorized LAN use? → OK
+2. Does it introduce public registration or remote telemetry? → **NO**
 3. Does it silently mutate DataFlow core-registry semantics? → **NO**
 4. Everything else → proceed, and keep changes minimal + consistent with
    existing patterns (`core/container.py`, `api/v1/envelope.py`, etc.).
