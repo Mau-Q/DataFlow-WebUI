@@ -296,12 +296,11 @@ class PipelineRegistry:
             with open(self.path, "r", encoding="utf-8") as f:
                 try:
                     content = json.load(f)
-                    if not content.get("pipelines"):
-                        need_init_flag = True
-                    elif len(content.get("pipelines")) == 0:
-                        need_init_flag = True
-                except Exception:
-                    need_init_flag = True
+                except json.JSONDecodeError as exc:
+                    raise ValueError(f'Pipeline registry is corrupt; original file preserved: {self.path}') from exc
+                if not isinstance(content, dict) or (content and not isinstance(content.get('pipelines'), dict)):
+                    raise ValueError(f'Invalid pipeline registry structure; original file preserved: {self.path}')
+                need_init_flag = not content.get('pipelines')
 
         if need_init_flag:
             os.makedirs(os.path.dirname(self.path), exist_ok=True)

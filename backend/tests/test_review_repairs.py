@@ -345,3 +345,20 @@ def test_successful_agent_turn_preserves_detached_output_background_child(tmp_pa
         if pid_file.exists():
             try: os.kill(int(pid_file.read_text()),signal.SIGKILL)
             except ProcessLookupError: pass
+
+
+@pytest.mark.parametrize('content', ['{"pipelines":', '{"pipelines":[]}', '{"pipelines":"invalid"}', '[]'])
+def test_pipeline_initialization_preserves_corrupt_registry_evidence(tmp_path, monkeypatch, content):
+    path=tmp_path/'pipelines.json';path.write_text(content)
+    monkeypatch.setattr(settings,'DATAFLOW_CORE_DIR',str(tmp_path/'unavailable-core'))
+    with pytest.raises(ValueError,match='registry'):
+        PipelineRegistry(str(path))
+    assert path.read_text()==content
+
+
+def test_serving_write_refuses_invalid_registry_shape_without_replacing_it(tmp_path):
+    path=tmp_path/'serving.yaml';path.write_text('[]\n')
+    registry=ServingRegistry(str(path))
+    with pytest.raises(ValueError,match='registry'):
+        registry._set('new','APILLMServing_request',[])
+    assert path.read_text()=='[]\n'

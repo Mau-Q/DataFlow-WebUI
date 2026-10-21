@@ -38,6 +38,8 @@ class ServingRegistry:
     def _get_all(self):
         with open(self.path, 'r', encoding='utf-8') as f:
             data = yaml.safe_load(f)
+        if data is not None and not isinstance(data, dict):
+            raise ValueError(f"Invalid serving registry structure; original file preserved: {self.path}")
         return data or {}
     
     def _get(self, id: str) -> Dict[str, Any] | None:
