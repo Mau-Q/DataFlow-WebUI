@@ -12,6 +12,7 @@ import httpx
 from app.services.data_library import LibraryError
 
 BACKEND = Path(__file__).resolve().parents[2]
+STARTUP_TIMEOUT = 180
 
 
 class Workers:
@@ -49,7 +50,9 @@ class Workers:
                 self.endpoints[project_id] = endpoint, token
                 try:
                     async with httpx.AsyncClient(trust_env=False, timeout=1) as probe:
-                        deadline = time.monotonic() + 60
+                        # Cold Windows installs can spend over a minute loading
+                        # native CPU libraries. Keep a finite readiness deadline.
+                        deadline = time.monotonic() + STARTUP_TIMEOUT
                         while time.monotonic() < deadline:
                             if process.poll() is not None:
                                 raise LibraryError('项目服务启动失败，请检查工作进程日志', 503)
@@ -73,7 +76,7 @@ class Workers:
                     raise
             endpoint, token = self.endpoints[project_id]
         return httpx.AsyncClient(base_url=endpoint, headers={'X-Worker-Token': token},
-                                 trust_env=False, timeout=120)
+                                 trust_env=False, timeout=STARTUP_TIMEOUT + 30)
 
     async def close(self):
         for process in self.processes.values():

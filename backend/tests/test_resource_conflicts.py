@@ -30,6 +30,22 @@ def test_stale_save_rejected_without_modifying_new_content(resource):
     assert registry.update(original['id'],name='old client without precondition')['name']=='old client without precondition'
 
 
+def test_revision_advances_when_clock_does_not(resource, monkeypatch):
+    from datetime import datetime, timedelta
+    from app.services import resource_store
+    _, registry, original = resource
+    before = datetime.fromisoformat(original['updated_at'])
+    class FrozenClock(datetime):
+        @classmethod
+        def now(cls, tz):
+            return before - timedelta(seconds=1)
+    monkeypatch.setattr(resource_store, 'datetime', FrozenClock)
+    current = registry.update(original['id'], name='new', expected_updated_at=original['updated_at'])
+    assert datetime.fromisoformat(current['updated_at']) > before
+    with pytest.raises(ResourceConflictError):
+        registry.update(original['id'], name='stale', expected_updated_at=original['updated_at'])
+
+
 def test_simultaneous_editors_only_one_revision_wins(resource):
     _,registry,original=resource
     def save(i):

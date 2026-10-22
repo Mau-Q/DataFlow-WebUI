@@ -2,6 +2,21 @@ param([switch]$DirectoriesOnly)
 $ErrorActionPreference = "Stop"
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 Add-Type -AssemblyName System.Windows.Forms
+function Show-OwnedDialog($Dialog) {
+    # A background worker has no foreground window. Give the native dialog a
+    # topmost owner so it cannot disappear behind the browser after the menu closes.
+    $owner = New-Object System.Windows.Forms.Form
+    $owner.ShowInTaskbar = $false
+    $owner.StartPosition = 'CenterScreen'
+    $owner.Size = New-Object System.Drawing.Size(1, 1)
+    $owner.Opacity = 0
+    $owner.TopMost = $true
+    try {
+        $owner.Show()
+        $owner.Activate()
+        return $Dialog.ShowDialog($owner)
+    } finally { $owner.Dispose() }
+}
 $paths = @()
 $folder = $DirectoriesOnly.IsPresent
 if (-not $DirectoriesOnly) {
@@ -28,14 +43,14 @@ if ($folder) {
     $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
     $dialog.Description = "Choose a local folder"
     try {
-        if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { $paths = @($dialog.SelectedPath) }
+        if ((Show-OwnedDialog $dialog) -eq [System.Windows.Forms.DialogResult]::OK) { $paths = @($dialog.SelectedPath) }
     } finally { $dialog.Dispose() }
 } else {
     $dialog = New-Object System.Windows.Forms.OpenFileDialog
     $dialog.Title = "Choose local source files"
     $dialog.Multiselect = $true
     try {
-        if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { $paths = @($dialog.FileNames) }
+        if ((Show-OwnedDialog $dialog) -eq [System.Windows.Forms.DialogResult]::OK) { $paths = @($dialog.FileNames) }
     } finally { $dialog.Dispose() }
 }
 ConvertTo-Json -InputObject @($paths) -Compress

@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from app.core.config import settings
-from app.services.resource_store import ResourceStore, ResourceConflictError
+from app.services.resource_store import ResourceStore, ResourceConflictError, next_updated_at
 
 BACKEND_DIR = Path(__file__).parent.parent.parent
 PROMPTS_DIR = BACKEND_DIR / settings.RESOURCE_DIR / "prompts"
@@ -77,7 +77,7 @@ class UserPromptRegistry:
                 if fields.get(key) is not None:
                     rec[key] = fields[key]
             self._validate(rec)
-            rec['updated_at'] = datetime.now(timezone.utc).isoformat()
+            rec['updated_at'] = next_updated_at(rec.get('updated_at'))
         return rec
 
     def delete(self, tpl_id):

@@ -46,6 +46,7 @@ AGENTS.md
 .dataflow-install-receipt
 .backend.pid
 .backend.log
+.backend.error.log
 
 # Project-scoped agent MCP config written by `install.sh configure-agent`:
 # .mcp.json and .cursor/mcp.json are tracked. Codex MCP config is never written

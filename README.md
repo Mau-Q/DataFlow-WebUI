@@ -9,6 +9,12 @@
 - 规格与验收：父仓库 `docs/lan-collaboration-data-review-spec.md`、`docs/lan-implementation.md`。
 - 后端：`backend/README.md`；前端构建：`cd frontend && npm run build`。
 
+本机开发推荐使用 [Finetune-DataFlow 集成仓库](https://github.com/Mau-Q/Finetune-DataFlow) 的固定子模块与安装脚本。每位开发者独立运行自己的实例，Windows 使用根目录 `.venv`，执行 `scripts/setup-windows.ps1` 后运行 `scripts/webui-windows.ps1 -Action Foreground`，地址为 `http://127.0.0.1:8001/`。macOS 使用集成仓库 `scripts/setup.sh` / `scripts/webui.sh`。
+
+本机入口明确开启开发自动登录，以独立的“本地开发者”进入“默认工作区”；普通登录使用 Windows `-RequireLogin` 或集成仓库 `scripts/dev.sh --require-login`。身份、权限、CSRF 与数据归属仍由网关管理。只有本机开发模式使用原生文件选择器，LAN 保留浏览器上传与主机路径限制。完整 Windows 安装、无模型流程及实机边界见集成仓库 `docs/windows-development.md` 和 `docs/windows-acceptance.md`。
+
+前端热更新：在 `frontend` 运行 `npm ci`、`npm run dev`；Vite 的 `/team`、`/api` 默认代理到本机 `8001`。Windows 使用 Node.js 22/npm；运行后端测试前设置 `$env:PYTHONUTF8='1'`，避免系统默认编码影响中文夹具。共享资源修订时间在持锁保存时单调递增，防止粗粒度系统时钟使旧编辑覆盖保护失效。
+
 下方为上游 Harness 的历史说明，保留开发背景。其中 Agent/MCP 产品运行方式已经失效，不适用于本 fork 当前部署。
 
 <details>

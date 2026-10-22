@@ -67,6 +67,7 @@ def test_upload_failure_never_starts(tmp_path):
     assert r['phase']=='unknown' and START not in Transport.calls
 
 
+@pytest.mark.skipif(sys.platform == 'win32', reason='Remote Linux runner uses fcntl, process groups and ps; Windows host transport is tested separately')
 def test_local_runner_stops_child_group_and_rejects_identity(tmp_path):
     """Real local subprocess group, synthetic child; no training dependencies or GPU."""
     import hashlib

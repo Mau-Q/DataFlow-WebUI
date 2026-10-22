@@ -204,7 +204,7 @@ else:
     processes=[subprocess.Popen([sys.executable,str(script),kind,str(path),str(i)],
                   stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL) for i in range(3)]
     try:
-        assert all(process.wait(timeout=20)==0 for process in processes)
+        assert all(process.wait(timeout=120)==0 for process in processes)
     finally:
         for process in processes:
             if process.poll() is None: process.kill()

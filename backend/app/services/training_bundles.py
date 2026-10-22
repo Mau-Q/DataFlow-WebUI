@@ -100,7 +100,9 @@ def export_bundle(service, key, options=None):
                 if b.get('sha256') and b['sha256']!=h:raise TrainingError('外部文件引用哈希不匹配')
                 compiled['checks']['warnings'].append('外部文件引用只核验内容哈希，样本重叠与预处理索引未扫描')
                 execution_ref=b.get('execution_ref') or str(path.resolve())
-                if not Path(execution_ref).is_absolute():raise TrainingError('执行引用必须为绝对路径')
+                # This path is consumed by the Linux training host, not this desktop.
+                from pathlib import PurePosixPath
+                if not PurePosixPath(execution_ref).is_absolute() or '\\' in execution_ref:raise TrainingError('执行引用必须为 Linux 绝对路径')
                 refs.append(dict(b,ref=execution_ref,sha256=h));info[name]['file_name']=execution_ref;continue
             content=safe_read(path)
             if path.suffix.lower() not in ['.jsonl','.json']:raise TrainingError('仅支持 JSONL/JSON 数据文件')

@@ -91,7 +91,12 @@ def test_zip_and_symlink_guards(tmp_path):
     with zipfile.ZipFile(out,'w') as z:z.writestr('../escape','no')
     with pytest.raises(TrainingError,match='不安全'):safe_members(out.getvalue())
     from app.services.training_bundles import safe_read
-    (tmp_path/'file').write_text('x');(tmp_path/'link').symlink_to(tmp_path/'file')
+    (tmp_path/'file').write_text('x')
+    try:
+        (tmp_path/'link').symlink_to(tmp_path/'file')
+    except OSError as exc:
+        if getattr(exc, 'winerror', None) != 1314: raise
+        pytest.skip('Creating a real symlink requires Windows Developer Mode or elevated privileges')
     with pytest.raises(TrainingError,match='普通文件'):safe_read(tmp_path/'link')
 
 from app.services.training_results import import_result,run_detail,add_evaluation,compare
@@ -240,3 +245,7 @@ def test_explicit_external_reference_is_hashed_without_copy(tmp_path,monkeypatch
     assert b['manifest']['external_references'][0]['sha256']==digest(data.read_bytes())
     assert b['manifest']['external_references'][0]['ref']=='/remote/data/large.jsonl'
     assert 'data/dataset_0.jsonl' not in b['manifest']['files']
+    for remote in (r'C:\data\input.jsonl', r'/remote\input.jsonl', 'relative/input.jsonl'):
+        invalid=s.save_plan(TrainingPlan(model='/remote/model',data=[{'kind':'file','ref':str(data),'mode':'reference','execution_ref':remote}]).model_dump())
+        with pytest.raises(TrainingError,match='Linux 绝对路径'):
+            bundles.export_bundle(s,invalid['id'])

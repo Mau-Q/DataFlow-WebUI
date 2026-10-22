@@ -152,6 +152,7 @@ onMounted(async () => {
         }
         team.enabled = true
         development.value = status.development === true
+        team.development = development.value
         initialized.value = status.initialized
         if (initialized.value) {
             try { await load(); return }

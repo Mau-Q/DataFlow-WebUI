@@ -8,7 +8,7 @@ from referencing import Registry, Resource
 from referencing.jsonschema import DRAFT7, DRAFT201909, DRAFT202012
 from referencing.exceptions import NoSuchResource, Unresolvable
 from app.core.config import settings
-from app.services.resource_store import ResourceStore, ResourceConflictError
+from app.services.resource_store import ResourceStore, ResourceConflictError, next_updated_at
 
 BACKEND_DIR = Path(__file__).parent.parent.parent
 SCHEMAS_DIR = BACKEND_DIR / settings.RESOURCE_DIR / "schemas"
@@ -98,7 +98,7 @@ class JsonSchemaManager:
             if not rec['name'].strip():
                 raise ValueError('Schema 名称不能为空')
             validate_schema(rec['schema'], rec.get('example', ''))
-            rec['updated_at'] = datetime.now(timezone.utc).isoformat()
+            rec['updated_at'] = next_updated_at(rec.get('updated_at'))
         return rec
 
     def delete(self, schema_id):

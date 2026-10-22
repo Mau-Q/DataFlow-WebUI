@@ -6,7 +6,23 @@ import tempfile
 import threading
 from contextlib import contextmanager
 from pathlib import Path
+from datetime import datetime, timezone, timedelta
 from app.services.platform_lock import exclusive_lock
+
+
+def next_updated_at(previous):
+    """Advance revision timestamps even on coarse or backward-moving clocks.
+
+    Call while holding the resource write lock so optimistic edit preconditions
+    cannot reuse a previous revision within one Windows clock tick.
+    """
+    now = datetime.now(timezone.utc)
+    if previous:
+        before = datetime.fromisoformat(previous)
+        if before.tzinfo is None:
+            before = before.replace(tzinfo=timezone.utc)
+        now = max(now, before + timedelta(microseconds=1))
+    return now.isoformat()
 
 
 class ResourceStore:

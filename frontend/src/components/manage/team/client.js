@@ -1,5 +1,5 @@
 import axios from 'axios'
-export const team = { enabled: false, viewer: '', csrf: '', project: '', version: 0 }
+export const team = { enabled: false, development: false, viewer: '', csrf: '', project: '', version: 0 }
 export function installTeamTransport(client) {
     client.interceptors.request.use((config) => {
         if (team.enabled && String(config.url).startsWith('/api/')) {

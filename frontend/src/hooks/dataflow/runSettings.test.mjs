@@ -64,7 +64,7 @@ test('inspector follows live replacement and reopens same node',()=>{
  h.selectOperator({node:{id:'db',type:'database-node'}});assert(!h.showInspector.value)
 })
 
-const nodeSource=readFileSync(new URL('../../components/manage/mainFlow/nodes/operatorNode/index.vue',import.meta.url),'utf8')
+const nodeSource=readFileSync(new URL('../../components/manage/mainFlow/nodes/operatorNode/index.vue',import.meta.url),'utf8').replace(/\r\n/g, '\n')
 const loader=nodeSource.slice(nodeSource.indexOf('let detailRequest ='),nodeSource.indexOf('watch(\n    () => dataflow.executionStep'))
 const {reactive,ref,watch,nextTick}=await import('vue')
 test('parameter loading updates cannot trigger an endless request loop',async()=>{

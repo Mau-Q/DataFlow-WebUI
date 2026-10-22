@@ -46,7 +46,7 @@ export default {
             finally { this.choosing = false }
         },
         async pick() {
-            if (team.enabled) { this.$refs.files.click(); return }
+            if (team.enabled && !team.development) { this.$refs.files.click(); return }
             if (this.busy || this.choosing) return
             this.error = ''; this.choosing = true
             try {
