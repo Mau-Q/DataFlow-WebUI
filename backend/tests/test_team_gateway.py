@@ -96,3 +96,18 @@ def test_nested_credentials_embedded_logs_and_legacy_http_status(tmp_path):
         assert secret not in r.text and '****' in r.text
         workers.error=True
         assert client.get('/api/v1/library/drafts/missing').status_code==404
+
+
+def test_development_keeps_native_local_paths_and_csrf(tmp_path):
+    app = create_gateway(tmp_path/'state', FakeWorkers(), secure=False,
+                         development=True, workspace=tmp_path/'workspace')
+    with TestClient(app, base_url='http://127.0.0.1', client=('127.0.0.1', 1)) as client:
+        client.headers['Origin'] = 'http://127.0.0.1'
+        result = client.post('/team/dev-login').json()
+        client.headers.update({'X-CSRF-Token': result['csrf'], 'If-Match': '0'})
+        # Local output directories may live outside the backend workspace.
+        response = client.post('/api/v1/library/materials/register',
+                               json={'path': str(tmp_path/'external source.txt')})
+        assert response.status_code == 200, response.text
+        client.headers['X-CSRF-Token'] = 'wrong'
+        assert client.post('/api/v1/library/inputs/choose-local').status_code == 403

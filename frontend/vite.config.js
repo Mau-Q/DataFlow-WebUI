@@ -3,6 +3,8 @@ import { fileURLToPath, URL } from 'node:url'
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 
+const backend = new URL(process.env.DATAFLOW_DEV_BACKEND || 'http://127.0.0.1:8001').origin
+
 // https://vitejs.dev/config/
 export default defineConfig({
     base: './',
@@ -22,18 +24,20 @@ export default defineConfig({
         }
     },
     server: {
-        proxy: {
-            // 后端 FastAPI 路由本身就挂在 /api/v1/... 下，这里**不要**重写路径
-            '/api': {
-                target: 'http://127.0.0.1:8000/',
-                changeOrigin: true,
-                ws: true  // 让 /api/v1/agent/ws 也走这个代理
-            },
-            // MCP SSE（FastAPI-MCP 挂在 /mcp）
-            '/mcp': {
-                target: 'http://127.0.0.1:8000/',
-                changeOrigin: true
+        host: '127.0.0.1',
+        strictPort: true,
+        proxy: Object.fromEntries(['/api', '/team'].map(prefix => [prefix, {
+            target: backend,
+            changeOrigin: true,
+            configure(proxy) {
+                proxy.on('proxyReq', (outgoing, incoming) => {
+                    // Preserve the gateway's same-origin check across the local
+                    // Vite proxy; foreign origins must still be rejected.
+                    if (incoming.headers.origin === `http://${incoming.headers.host}`) {
+                        outgoing.setHeader('origin', backend)
+                    }
+                })
             }
-        }
+        }]))
     }
 })

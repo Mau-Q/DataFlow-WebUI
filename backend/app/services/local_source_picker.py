@@ -1,4 +1,4 @@
-"""Local desktop selection: one macOS chooser accepts files and directories."""
+"""Native desktop source selection with platform-specific adapters."""
 from contextlib import ExitStack
 import json
 import os
@@ -36,7 +36,7 @@ JSON.stringify(paths);
 
 
 def pick_paths(*, directories_only=False):
-    if sys.platform != 'darwin':
+    if sys.platform not in {'darwin', 'win32'}:
         raise LibraryError('此系统请手动填写目录绝对路径' if directories_only else '此系统可直接拖入文件或文件夹，或使用浏览器选择文件', 501)
     if not _CHOOSER.acquire(blocking=False):
         raise LibraryError('系统选择窗口已经打开，请先完成当前选择', 409)
@@ -44,13 +44,19 @@ def pick_paths(*, directories_only=False):
         script = _SCRIPT
         if directories_only:
             script = script.replace('canChooseFiles = true', 'canChooseFiles = false').replace('allowsMultipleSelection = true', 'allowsMultipleSelection = false').replace('选择文件或文件夹', '选择结果保存目录')
-        result = subprocess.run(['osascript', '-l', 'JavaScript', '-e', script],
-                                capture_output=True, text=True, timeout=180, check=True)
+        command = ['osascript', '-l', 'JavaScript', '-e', script]
+        if sys.platform == 'win32':
+            command = ['powershell.exe', '-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass',
+                       '-File', str(Path(__file__).with_name('desktop_picker.ps1'))]
+            if directories_only:
+                command.append('-DirectoriesOnly')
+        result = subprocess.run(command, capture_output=True, text=True, encoding='utf-8',
+                                timeout=180, check=True)
         paths = json.loads(result.stdout)
         if not isinstance(paths, list) or any(not isinstance(p, str) for p in paths):
             raise ValueError('Invalid picker result')
         return paths
-    except (subprocess.SubprocessError, ValueError) as exc:
+    except (OSError, subprocess.SubprocessError, ValueError) as exc:
         raise LibraryError('无法完成系统文件选择，请重试或直接拖入文件/文件夹') from exc
     finally:
         _CHOOSER.release()

@@ -1,4 +1,4 @@
-"""Same-origin LAN gateway. Legacy project backends are private Unix-socket workers."""
+"""Same-origin gateway for authenticated LAN and opt-in local development."""
 import asyncio
 from contextlib import asynccontextmanager
 import json
@@ -6,65 +6,17 @@ import re
 import os
 from pathlib import Path
 import secrets
-import subprocess
-import sys
-import time
-import tempfile
-import shutil
-from urllib.parse import urlsplit
-import httpx
 from fastapi import FastAPI, Request, WebSocket
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from app.services.data_library import LibraryError
 from app.services.team_store import TeamStore, digest, password_hash, verify
+from app.services.project_workers import Workers
+from app.services.development_access import require_local
 
 BACKEND = Path(__file__).resolve().parents[1]
 DIST = BACKEND.parent / 'frontend/dist'
 
-
-class Workers:
-    def __init__(self, state):
-        self.state = Path(state)
-        self.runtime = Path(tempfile.mkdtemp(prefix='df-lan-'))
-        self.runtime.chmod(0o700)
-        self.processes = {}
-        self.locks = {}
-
-    async def client(self, project):
-        pid = project['id']
-        async with self.locks.setdefault(pid, asyncio.Lock()):
-            socket = self.runtime / (pid + '.sock')
-            process = self.processes.get(pid)
-            if process is None or process.poll() is not None:
-                socket.unlink(missing_ok=True)
-                env = os.environ.copy()
-                env['DATAFLOW_WORKSPACE_DIR'] = project['root']
-                env['DATAFLOW_TEAM_WORKER'] = '1'
-                env['DATAFLOW_PROJECT_ID'] = pid
-                env['DATAFLOW_DATASET_BACKUP_DIR'] = str(Path(project['root'])/'backups/datasets')
-                env['DATAFLOW_TRAINING_DIR'] = str(Path(project['root'])/'data/model_training')
-                log = (self.state / (pid + '.worker.log')).open('ab')
-                try:
-                    process = subprocess.Popen([sys.executable,'-m','uvicorn','app.main:app','--uds',str(socket),'--no-access-log'],cwd=BACKEND,env=env,stdout=log,stderr=log)
-                finally:
-                    log.close()
-                self.processes[pid] = process
-                for _ in range(300):
-                    if process.poll() is not None:
-                        raise LibraryError('项目服务启动失败，请在主机检查工作进程日志',503)
-                    if socket.exists():break
-                    await asyncio.sleep(.1)
-                else:raise LibraryError('项目服务启动超时',503)
-        return httpx.AsyncClient(transport=httpx.AsyncHTTPTransport(uds=str(socket)),base_url='http://project',timeout=120)
-
-    async def close(self):
-        for process in self.processes.values():
-            if process.poll() is None:process.terminate()
-        for process in self.processes.values():
-            try:await asyncio.to_thread(process.wait,10)
-            except subprocess.TimeoutExpired:process.kill()
-        shutil.rmtree(self.runtime)
 
 
 def clean_secrets(obj):
@@ -76,7 +28,7 @@ def clean_secrets(obj):
     return obj
 
 
-def policy(path, method, roles):
+def policy(path, method, roles, *, local=False):
     """Fail closed. Adding a route requires updating the audited LAN inventory."""
     inventory=json.loads((BACKEND/'app/team_routes.json').read_text('utf-8'))
     def matches(route):
@@ -95,6 +47,8 @@ def policy(path, method, roles):
     route = path.removeprefix('/api/v1/').split('/')[0]
     if route not in {'library','datasets','operators','tasks','pipelines','prompts','serving','text2sql_database','text2sql_database_manager','json_schemas','generation','multimodal','training'}:
         raise LibraryError('团队模式未开放此入口',403)
+    if local:
+        return
     if any(part in path for part in ('choose-local','import-local','list_dir','/result-storage/choose','/materials/register','/results/import')) or (route=='datasets' and method=='POST' and path.rstrip('/')=='/api/v1/datasets'):
         raise LibraryError('请使用上传，团队模式不开放任意主机路径',403)
     if route in {'text2sql_database','text2sql_database_manager'}:
@@ -103,7 +57,9 @@ def policy(path, method, roles):
         if 'manage' not in roles:raise LibraryError('需要项目管理权限',403)
 
 
-def create_gateway(state=None, workers=None, secure=None):
+def create_gateway(state=None, workers=None, secure=None, development=None, workspace=None):
+    development = development if development is not None else os.environ.get("DATAFLOW_DEV_AUTO_LOGIN") == "1"
+    workspace = Path(workspace or os.environ.get('DATAFLOW_WORKSPACE_DIR') or BACKEND).resolve()
     store=TeamStore(state or os.environ.get('DATAFLOW_TEAM_DIR',BACKEND/'data/collaboration'))
     workers=workers or Workers(store.root)
     secure=secure if secure is not None else os.environ.get('DATAFLOW_COOKIE_SECURE','1')=='1'
@@ -122,6 +78,11 @@ def create_gateway(state=None, workers=None, secure=None):
 
     @app.middleware('http')
     async def security(request,call_next):
+        if development:
+            try:
+                require_local(request)
+            except LibraryError as exc:
+                return JSONResponse({'detail':str(exc)},status_code=exc.status)
         # Mutations require an explicit same-origin Origin even on login/accept.
         if request.method not in {'GET','HEAD','OPTIONS'}:
             origin=request.headers.get('origin','')
@@ -137,6 +98,8 @@ def create_gateway(state=None, workers=None, secure=None):
 
     def actor(request,write=True):
         user=store.identity(request.cookies.get('df_session'))
+        if not development and user['id'] == 'local-development':
+            raise LibraryError('开发会话不可用于普通登录模式', 401)
         if write and request.method not in {'GET','HEAD'} and not secrets.compare_digest(request.headers.get('x-csrf-token',''),user['csrf']):
             raise LibraryError('会话校验失败，请刷新',403)
         return user
@@ -150,7 +113,17 @@ def create_gateway(state=None, workers=None, secure=None):
     @app.get('/team/status')
     def status():
         with store.tx() as c:initialized=bool(c.execute('SELECT 1 FROM users').fetchone())
-        return {'mode':'lan','initialized':initialized}
+        return {'mode':'lan','initialized':initialized,'development':development}
+
+    @app.post('/team/dev-login')
+    async def development_login(request:Request):
+        if not development:
+            raise LibraryError('开发自动登录未启用', 404)
+        require_local(request)
+        token, csrf = store.development_login(workspace)
+        response = JSONResponse({'csrf':csrf})
+        response.set_cookie('df_session',token,httponly=True,secure=secure,samesite='strict',max_age=43200)
+        return response
 
     @app.post('/team/login')
     async def login(request:Request):
@@ -279,7 +252,7 @@ def create_gateway(state=None, workers=None, secure=None):
         user=actor(request);pid=request.headers.get('x-project-id') or user['project']
         if not pid:raise LibraryError('请选择项目',400)
         project=store.access(user['id'],pid)
-        policy(request.url.path,request.method,project['roles'])
+        policy(request.url.path,request.method,project['roles'],local=development)
         body=await request.body()
         # Host paths may only be referenced if they are managed by this project.
         if body and 'application/json' in request.headers.get('content-type',''):
@@ -295,7 +268,8 @@ def create_gateway(state=None, workers=None, secure=None):
                         check_paths(v)
                 elif isinstance(value,list):
                     for v in value:check_paths(v)
-            check_paths(payload)
+            if not development:
+                check_paths(payload)
         if request.url.path=='/api/v1/team-data/reviews' and request.method=='POST':
             for reviewer in payload.get('reviewers',[]):
                 if 'review' not in store.access(reviewer,pid)['roles']:raise LibraryError('评测成员未获当前项目评测权限',400)

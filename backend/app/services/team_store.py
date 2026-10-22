@@ -90,6 +90,27 @@ class TeamStore:
             self.audit(c, uid, 'default', 'migration-v1', 'legacy-import')
             return uid
 
+    def development_login(self, workspace):
+        """Idempotently create a dedicated local identity, preserving real accounts."""
+        uid = 'local-development'
+        root = str(Path(workspace).resolve())
+        with self.tx() as c:
+            c.execute("INSERT OR IGNORE INTO users(id,name,password,admin) VALUES(?,?,'unusable',1)",
+                      (uid, '本地开发者'))
+            user = c.execute('SELECT enabled FROM users WHERE id=?', (uid,)).fetchone()
+            if not user or not user['enabled']:
+                raise LibraryError('本地开发账号已禁用', 403)
+            existing = c.execute("SELECT root FROM projects WHERE id='default'").fetchone()
+            if existing and Path(existing['root']).resolve() != Path(root):
+                raise LibraryError('默认工作区指向其他目录，请检查开发配置', 409)
+            c.execute("INSERT OR IGNORE INTO projects VALUES('default','默认工作区',?)", (root,))
+            c.execute("INSERT OR IGNORE INTO members(project,user,roles) VALUES('default',?,'manage,develop,review')", (uid,))
+            token, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(24)
+            c.execute('DELETE FROM sessions WHERE expires<?', (time.time(),))
+            c.execute("INSERT INTO sessions VALUES(?,?,?,?,'default')", (digest(token), uid, csrf, time.time()+43200))
+            self.audit(c, uid, 'default', 'development-login')
+            return token, csrf
+
     def login(self, name, password, address):
         key = digest(address + ':' + str(name))
         with self.tx() as c:

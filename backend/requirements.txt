@@ -1,6 +1,6 @@
 fastapi[standard]
 uvicorn[standard]
-# Private project Unix-socket transport used by the LAN gateway.
+# Authenticated loopback transport used by the local/LAN gateway.
 httpx>=0.27,<1
 pydantic_settings
 pandas

@@ -3,11 +3,12 @@
     <section v-else-if="!ready" class="team-login">
         <div class="login-card">
             <div class="brand">DataFlow</div>
-            <h1>{{ initialized ? '登录团队工作区' : '初始化团队工作区' }}</h1>
-            <p v-if="!initialized">
+            <h1>{{ development ? '本地开发工作区' : initialized ? '登录团队工作区' : '初始化团队工作区' }}</h1>
+            <button v-if="development" class="primary" :disabled="busy" @click="enterDevelopment">进入本地工作区</button>
+            <p v-if="!initialized && !development">
                 请在部署主机运行管理员初始化命令，然后刷新页面。账号由管理员创建或邀请。
             </p>
-            <form v-else @submit.prevent="login">
+            <form v-if="initialized" @submit.prevent="login">
                 <label>账号<input v-model="name" autocomplete="username" required /></label
                 ><label
                     >密码<input
@@ -50,10 +51,12 @@
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount, provide } from 'vue'
 import { team, request } from './client'
+import { shouldAutoLogin, markLoggedOut, clearLoggedOut } from './developmentSession.js'
 import { useTheme } from '@/stores/theme'
 import TeamWorkspace from './TeamWorkspace.vue'
 const theme = useTheme(),
     local = ref(false),
+    development = ref(false),
     ready = ref(false),
     initialized = ref(false),
     user = ref({ projects: [] }),
@@ -102,6 +105,7 @@ async function login() {
         const r = await request('/team/login', { name: name.value, password: password.value })
         team.csrf = r.csrf
         password.value = ''
+        clearLoggedOut(sessionStorage)
         await load()
         if (!team.project && user.value.projects.length) {
             await request('/team/project', { project: user.value.projects[0].id })
@@ -121,11 +125,21 @@ async function logout() {
     if(!canLeave())return
     await action(async () => {
         await request('/team/logout', {})
+        markLoggedOut(sessionStorage)
         window.location.reload()
     })
 }
+async function enterDevelopment() {
+    await action(async () => {
+        const result = await request('/team/dev-login', {})
+        team.csrf = result.csrf
+        clearLoggedOut(sessionStorage)
+        initialized.value = true
+        await load()
+    })
+}
 onMounted(async () => {
-    try {
+    await action(async () => {
         const r = await fetch('/team/status')
         if (!r.ok) {
             local.value = true
@@ -137,11 +151,19 @@ onMounted(async () => {
             return
         }
         team.enabled = true
+        development.value = status.development === true
         initialized.value = status.initialized
-        if (initialized.value) await load()
-    } catch (e) {
-        error.value = e.message
-    }
+        if (initialized.value) {
+            try { await load(); return }
+            catch (e) { if (e.status !== 401) throw e }
+        }
+        if (shouldAutoLogin(status, sessionStorage)) {
+            const result = await request('/team/dev-login', {})
+            team.csrf = result.csrf
+            initialized.value = true
+            await load()
+        }
+    })
 })
 </script>
 <style>

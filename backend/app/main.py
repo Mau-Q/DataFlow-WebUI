@@ -28,6 +28,12 @@ def create_app() -> FastAPI:
     setup_dataflow_core()
     container.init()
     app = FastAPI(title="DataFlow Backend", version="1.0.0")
+    worker_token = os.environ.get('DATAFLOW_WORKER_TOKEN')
+    if os.environ.get('DATAFLOW_TEAM_WORKER') and not worker_token:
+        raise RuntimeError('Private project worker requires DATAFLOW_WORKER_TOKEN')
+    if worker_token:
+        from app.services.worker_auth import install_worker_auth
+        install_worker_auth(app, worker_token)
     app.state.dataset_backups = backups
     app.router.add_event_handler('startup', backups.start)
     app.router.add_event_handler('shutdown', backups.stop)

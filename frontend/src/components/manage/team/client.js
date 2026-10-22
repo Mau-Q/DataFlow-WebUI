@@ -28,6 +28,10 @@ export async function request(path, body, method = body === undefined ? 'GET' : 
         body: body === undefined ? undefined : JSON.stringify(body)
     })
     const data = await response.json()
-    if (!response.ok) throw new Error(data.detail || data.message || '操作失败')
+    if (!response.ok) {
+        const error = new Error(data.detail || data.message || '操作失败')
+        error.status = response.status
+        throw error
+    }
     return data.data ?? data
 }
